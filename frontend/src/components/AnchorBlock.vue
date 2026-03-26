@@ -5,7 +5,7 @@ import { usePlanStore } from '../stores/plan'
 
 const props = defineProps<{ anchorId: string; anchorName: string; time: string; color: string }>()
 const store = usePlanStore()
-const anchorPlan = computed(() => store.plan?.anchors[props.anchorId])
+const anchorPlan = computed(() => store.plan?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
 
 async function onUpdate(tasks: string[]) {
   await store.updateAnchorTasks(props.anchorId, tasks, anchorPlan.value?.notes ?? '')
@@ -13,7 +13,7 @@ async function onUpdate(tasks: string[]) {
 </script>
 
 <template>
-  <div class="flex rounded-xl overflow-hidden" v-if="anchorPlan">
+  <div class="flex rounded-xl overflow-hidden">
     <div class="flex flex-col justify-center px-4 py-3 min-w-[110px] text-white"
          :style="{ background: color }">
       <span class="text-xs opacity-75">{{ time }}</span>

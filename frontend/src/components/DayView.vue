@@ -24,7 +24,7 @@ onMounted(() => { store.fetchPlan(); store.connectWebSocket() })
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6 max-w-2xl mx-auto">
+  <div class="min-h-screen bg-gray-900 text-white p-6">
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-bold">Tether</h1>
@@ -42,7 +42,7 @@ onMounted(() => { store.fetchPlan(); store.connectWebSocket() })
       <div v-if="store.loading" class="text-white/40">Loading...</div>
       <div v-else class="flex flex-col gap-2">
         <template v-for="(meta, id) in ANCHOR_META" :key="id">
-          <AnchorBlock v-if="store.plan?.anchors[id]"
+          <AnchorBlock
             :anchor-id="id" :anchor-name="meta.name"
             :time="meta.time" :color="meta.color" />
         </template>

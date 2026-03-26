@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from db.queries import get_plan, upsert_tasks
+from db.queries import get_plan, upsert_plan, upsert_tasks
 from api.ws import manager
 import api.config as cfg
 
@@ -13,6 +13,7 @@ async def get_plan_route(date: str):
 
 @router.put("/plan/{date}/anchors/{anchor_id}")
 async def put_anchor_tasks(date: str, anchor_id: str, body: dict):
+    upsert_plan(cfg.DB_PATH, date)
     upsert_tasks(cfg.DB_PATH, date, anchor_id,
                  tasks=body.get("tasks", []), notes=body.get("notes", ""))
     await manager.broadcast({"type": "plan_updated", "date": date, "anchor_id": anchor_id})
