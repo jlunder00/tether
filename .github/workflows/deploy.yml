@@ -47,3 +47,12 @@ jobs:
         run: |
           source .venv/bin/activate
           python -c "from bot.anchor_trigger import load_anchors; print('[ok] imports work')"
+
+      - name: Build Vue frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Restart API service
+        run: sudo systemctl restart tether-api
