@@ -23,7 +23,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["bot", "db"]
+packages = ["bot", "db", "api", "api.routes"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
