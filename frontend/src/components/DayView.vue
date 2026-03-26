@@ -42,7 +42,7 @@ onMounted(() => { store.fetchPlan(); store.connectWebSocket() })
       <div v-if="store.loading" class="text-white/40">Loading...</div>
       <div v-else class="flex flex-col gap-2">
         <template v-for="(meta, id) in ANCHOR_META" :key="id">
-          <AnchorBlock v-if="store.plan?.anchors[id]"
+          <AnchorBlock
             :anchor-id="id" :anchor-name="meta.name"
             :time="meta.time" :color="meta.color" />
         </template>
