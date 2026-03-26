@@ -1,0 +1,86 @@
+# ~/.tether-config/anchors.yaml
+
+anchors:
+  - id: launch_pad
+    name: "Launch Pad"
+    time: "07:00"
+    duration_minutes: 60
+    flexibility: locked
+    strictness: 3
+    color: "#5b8dee"
+
+  - id: grind_am
+    name: "The Grind"
+    time: "08:00"
+    duration_minutes: 120
+    flexibility: locked
+    strictness: 4
+    color: "#e05c5c"
+
+  - id: rest_am
+    name: "Rest / Reset"
+    time: "10:00"
+    duration_minutes: 30
+    flexibility: flexible
+    strictness: 2
+    color: "#4caf8c"
+
+  - id: deep_work
+    name: "Deep Work"
+    time: "10:30"
+    duration_minutes: 120
+    flexibility: locked
+    strictness: 3
+    color: "#7c6af7"
+
+  - id: rest_lunch
+    name: "Rest / Reset"
+    time: "12:30"
+    duration_minutes: 60
+    flexibility: flexible
+    strictness: 2
+    color: "#4caf8c"
+
+  - id: grind_pm
+    name: "The Grind"
+    time: "13:30"
+    duration_minutes: 90
+    flexibility: locked
+    strictness: 4
+    color: "#e05c5c"
+
+  - id: flex_time
+    name: "Flex Time"
+    time: "15:00"
+    duration_minutes: 60
+    flexibility: skippable
+    strictness: 1
+    color: "#e8a838"
+    unlock_requires:
+      - grind_am
+      - grind_pm
+
+  - id: wind_down_work
+    name: "Wind Down"
+    time: "16:00"
+    duration_minutes: 45
+    flexibility: locked
+    strictness: 3
+    color: "#888888"
+
+  - id: leisure
+    name: "Rest / Leisure"
+    time: "17:00"
+    duration_minutes: 240
+    flexibility: flexible
+    strictness: 1
+    color: "#4caf8c"
+
+  - id: wind_down_evening
+    name: "Wind Down"
+    time: "21:00"
+    duration_minutes: 90
+    flexibility: locked
+    strictness: 4
+    color: "#3a3a5c"
+    includes_planning: true

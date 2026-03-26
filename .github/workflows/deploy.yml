@@ -1,0 +1,49 @@
+name: Deploy to Pi
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted   # Pi registered as self-hosted runner
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ${{ github.workspace }}
+          git pull origin main
+
+      - name: Install Python dependencies
+        run: |
+          source .venv/bin/activate
+          pip install -q -e .
+
+      - name: Write Telegram secrets to config
+        run: |
+          python3 - <<'EOF'
+          import yaml, os
+          from pathlib import Path
+
+          config_path = Path.home() / ".tether-config" / "config.yaml"
+          if config_path.exists():
+              with open(config_path) as f:
+                  config = yaml.safe_load(f) or {}
+          else:
+              config = {}
+
+          config.setdefault("telegram", {})
+          config["telegram"]["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
+          config["telegram"]["chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
+
+          with open(config_path, "w") as f:
+              yaml.dump(config, f)
+          print("Config updated.")
+          EOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Verify bot can run
+        run: |
+          source .venv/bin/activate
+          python -c "from bot.anchor_trigger import load_anchors; print('[ok] imports work')"
