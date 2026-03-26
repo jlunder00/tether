@@ -1,0 +1,21 @@
+# ~/.tether-config/config.yaml
+# Copy this file to ~/.tether-config/config.yaml and fill in your values.
+
+telegram:
+  bot_token: "YOUR_BOT_TOKEN_HERE"   # From BotFather
+  chat_id: "YOUR_CHAT_ID_HERE"       # Your Telegram user/chat ID
+
+schedule:
+  wake_time: "07:00"
+  sleep_target: "22:30"
+
+planning_block:
+  time: "21:00"
+  locked: true
+  reschedule_if_missed: true
+  reschedule_interval_minutes: 30
+
+follow_up:
+  enabled: true
+  interval_minutes: 15
+  max_attempts: 4

@@ -1,0 +1,54 @@
+# ~/.tether-config/plan.yaml
+# Update daily.
+
+date: "2026-03-25"
+
+anchors:
+  launch_pad:
+    tasks:
+      - "Breakfast + coffee"
+      - "Dishes, wipe kitchen surfaces"
+    notes: ""
+
+  grind_am:
+    tasks:
+      - "Apply to 3 jobs on LinkedIn"
+      - "Follow up on Monday's application to Stripe"
+    notes: "Focus: ML engineer / applied scientist roles"
+
+  deep_work:
+    tasks:
+      - "Thesis: finish writing section 3.2"
+    notes: ""
+
+  rest_lunch:
+    tasks:
+      - "Cook and eat lunch"
+      - "Quick tidy"
+    notes: ""
+
+  grind_pm:
+    tasks:
+      - "2 Leetcode mediums"
+      - "Update resume with Intellipat role details"
+    notes: ""
+
+  flex_time:
+    tasks:
+      - "5D Multiverse: branch window UI (hard stop at 4pm)"
+    notes: ""
+
+  wind_down_work:
+    tasks:
+      - "Send Intellipat status update"
+      - "Close all work tabs"
+    notes: ""
+
+  wind_down_evening:
+    tasks:
+      - "Plan tomorrow's anchor tasks"
+      - "Log what got done today"
+    notes: ""
+
+acknowledgements: {}
+check_in_log: []
