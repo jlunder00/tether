@@ -24,7 +24,7 @@ onMounted(() => { store.fetchPlan(); store.connectWebSocket() })
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6 max-w-2xl mx-auto">
+  <div class="min-h-screen bg-gray-900 text-white p-6">
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-bold">Tether</h1>
