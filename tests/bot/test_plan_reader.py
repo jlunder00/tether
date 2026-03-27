@@ -67,19 +67,21 @@ def test_load_context_returns_empty_string_if_missing(tmp_path):
     assert context == ""
 
 
+from datetime import date as date_type
 from db.schema import init_db
 from db.queries import upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
 
 
 @pytest.fixture
 def db_config_dir(tmp_path):
+    today = str(date_type.today())
     db_path = tmp_path / "tether.db"
     init_db(db_path)
     upsert_anchor(db_path, {"id": "grind_am", "name": "The Grind", "time": "08:00",
                              "duration_minutes": 120, "flexibility": "locked",
                              "strictness": 4, "color": "#e05c5c", "position": 0})
-    upsert_plan(db_path, "2026-03-26")
-    upsert_tasks(db_path, "2026-03-26", "grind_am",
+    upsert_plan(db_path, today)
+    upsert_tasks(db_path, today, "grind_am",
                  tasks=["Apply to 3 jobs", "Follow up"], notes="ML roles")
     upsert_context_entry(db_path, "Job Applications", "Priority 1.")
     return tmp_path
