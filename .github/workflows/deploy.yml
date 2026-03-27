@@ -10,11 +10,12 @@ jobs:
     steps:
       - name: Pull latest code
         run: |
-          cd ${{ github.workspace }}
+          cd /home/toast/tether
           git pull origin main
 
       - name: Install Python dependencies
         run: |
+          cd /home/toast/tether
           source .venv/bin/activate
           pip install -q -e .
 
@@ -45,12 +46,13 @@ jobs:
 
       - name: Verify bot can run
         run: |
+          cd /home/toast/tether
           source .venv/bin/activate
           python -c "from bot.anchor_trigger import load_anchors; print('[ok] imports work')"
 
       - name: Build Vue frontend
         run: |
-          cd frontend
+          cd /home/toast/tether/frontend
           npm ci
           npm run build
 
