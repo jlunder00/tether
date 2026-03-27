@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "tether": {
-      "command": "/home/toast/tether/.venv/bin/python",
-      "args": ["-m", "tether_mcp.server"],
-      "cwd": "/home/toast/tether",
-      "env": {
-        "TETHER_DB_PATH": "/home/toast/.tether-config/tether.db"
-      }
+      "type": "sse",
+      "url": "http://raspberrypi:5001/sse"
     }
   }
 }
