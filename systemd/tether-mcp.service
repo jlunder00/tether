@@ -1,0 +1,14 @@
+[Unit]
+Description=Tether MCP SSE Server
+After=network.target
+
+[Service]
+Type=simple
+User=toast
+WorkingDirectory=/home/toast/tether
+ExecStart=/home/toast/tether/.venv/bin/python -m tether_mcp.server --sse
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

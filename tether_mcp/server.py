@@ -113,4 +113,13 @@ def get_current_anchor() -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sse", action="store_true", help="Run as SSE server (for network access)")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5001)
+    args = parser.parse_args()
+    if args.sse:
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        mcp.run()
