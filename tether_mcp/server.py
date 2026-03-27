@@ -15,7 +15,7 @@ from db.queries import (
     upsert_tasks,
 )
 
-mcp = FastMCP("tether", port=5001)
+mcp = FastMCP("tether", host="0.0.0.0", port=5001)
 
 
 def _db() -> Path:
