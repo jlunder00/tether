@@ -21,6 +21,8 @@ jobs:
 
       - name: Write Telegram secrets to config
         run: |
+          cd /home/toast/tether
+          source .venv/bin/activate
           python3 - <<'EOF'
           import yaml, os
           from pathlib import Path
