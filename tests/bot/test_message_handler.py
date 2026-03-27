@@ -1,9 +1,10 @@
+import json
 import pytest
 from datetime import date
 from unittest.mock import patch
 from pathlib import Path
 from db.schema import init_db
-from db.queries import upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
+from db.queries import get_anchors, upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
 
 TODAY = str(date.today())
 
@@ -23,11 +24,41 @@ def db_path(tmp_path):
 
 def test_handle_message_calls_claude_and_returns_text(db_path):
     from bot.message_handler import handle_message
-    with patch("bot.message_handler.call_claude", return_value="Focus on job apps.") as mock_claude:
+    response = json.dumps({"message": "Focus on job apps.", "mutations": []})
+    with patch("bot.message_handler.call_claude", return_value=response) as mock_claude:
         with patch("bot.message_handler.DB_PATH", db_path):
             result = handle_message("Hello, what should I do?")
     mock_claude.assert_called_once()
     assert result == "Focus on job apps."
+
+
+def test_parse_claude_response_valid_json():
+    from bot.message_handler import parse_claude_response
+    raw = json.dumps({"message": "Got it.", "mutations": [{"op": "update_context", "subject": "X", "body": "Y"}]})
+    message, mutations = parse_claude_response(raw)
+    assert message == "Got it."
+    assert mutations == [{"op": "update_context", "subject": "X", "body": "Y"}]
+
+
+def test_parse_claude_response_plain_text_fallback():
+    from bot.message_handler import parse_claude_response
+    message, mutations = parse_claude_response("Just a plain reply.")
+    assert message == "Just a plain reply."
+    assert mutations == []
+
+
+def test_handle_message_applies_anchor_mutation(db_path):
+    from bot.message_handler import handle_message
+    response = json.dumps({
+        "message": "Moved grind block to 9am.",
+        "mutations": [{"op": "update_anchor", "anchor_id": "grind_am", "time": "09:00"}],
+    })
+    with patch("bot.message_handler.call_claude", return_value=response):
+        with patch("bot.message_handler.DB_PATH", db_path):
+            result = handle_message("Move my grind block to 9am")
+    assert result == "Moved grind block to 9am."
+    anchors = {a["id"]: a for a in get_anchors(db_path)}
+    assert anchors["grind_am"]["time"] == "09:00"
 
 
 def test_handle_check_in_inserts_db_row(db_path):

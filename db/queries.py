@@ -95,6 +95,21 @@ def delete_context_entry(db_path: Path, subject: str) -> None:
         conn.execute("DELETE FROM context_entries WHERE subject=?", (subject,))
 
 
+def patch_anchor(db_path: Path, anchor_id: str, **fields) -> None:
+    """Update only the provided fields on an existing anchor."""
+    allowed = {"name", "time", "duration_minutes", "flexibility", "strictness", "color"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    with get_db(db_path) as conn:
+        row = conn.execute("SELECT * FROM anchors WHERE id=?", (anchor_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Anchor {anchor_id!r} not found")
+        anchor = dict(row)
+    anchor.update(updates)
+    upsert_anchor(db_path, anchor)
+
+
 def insert_check_in(db_path: Path, date: str, anchor_id: str,
                     accomplished: str, current_status: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
