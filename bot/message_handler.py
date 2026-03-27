@@ -1,5 +1,7 @@
 from __future__ import annotations
+import json
 import logging
+import re
 import subprocess
 import time
 from datetime import date as date_type
@@ -20,6 +22,7 @@ from db.queries import (
     get_context_entries,
     get_plan,
     insert_check_in,
+    patch_anchor,
     upsert_context_entry,
     upsert_plan,
     upsert_tasks,
@@ -43,6 +46,46 @@ def load_config() -> dict:
 def call_claude(prompt: str) -> str:
     result = subprocess.run(["claude", "-p", prompt], capture_output=True, text=True, check=True)
     return result.stdout.strip()
+
+
+def parse_claude_response(raw: str) -> tuple[str, list[dict]]:
+    """Extract message and mutations from Claude's JSON response.
+    Falls back to treating raw output as the message with no mutations."""
+    try:
+        data = json.loads(raw.strip())
+        return data.get("message", raw), data.get("mutations", [])
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    match = re.search(r'\{.*\}', raw, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            return data.get("message", raw), data.get("mutations", [])
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return raw, []
+
+
+def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
+    for m in mutations:
+        op = m.get("op")
+        try:
+            if op == "update_anchor":
+                fields = {k: v for k, v in m.items() if k not in ("op", "anchor_id")}
+                patch_anchor(db_path, m["anchor_id"], **fields)
+            elif op == "update_plan_tasks":
+                date = m.get("date", today)
+                upsert_plan(db_path, date)
+                upsert_tasks(db_path, date, m["anchor_id"], m["tasks"], notes="")
+            elif op == "update_context":
+                upsert_context_entry(db_path, m["subject"], m["body"])
+            elif op == "insert_check_in":
+                insert_check_in(db_path, today, m["anchor_id"],
+                                m["accomplished"], m["current_status"])
+            else:
+                logger.warning("Unknown mutation op: %s", op)
+        except Exception as e:
+            logger.error("Failed to apply mutation %s: %s", m, e)
 
 
 def _build_prompt(user_message: str, db_path: Path) -> str:
@@ -89,8 +132,10 @@ def handle_message(text: str) -> str:
         upsert_plan(db_path, today)
         upsert_tasks(db_path, today, anchor_id, tasks, notes="")
 
-    prompt = _build_prompt(text, db_path)
-    return call_claude(prompt)
+    raw = call_claude(_build_prompt(text, db_path))
+    message, mutations = parse_claude_response(raw)
+    apply_mutations(mutations, db_path, today)
+    return message
 
 
 def _send_telegram(token: str, chat_id: str, text: str) -> None:
