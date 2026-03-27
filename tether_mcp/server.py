@@ -84,7 +84,7 @@ def list_context_entries() -> list[dict]:
 
 @mcp.tool()
 def update_context_entry(subject: str, body: str) -> dict:
-    """Create or update a context entry by subject."""
+    """Create or update a context entry by subject. IMPORTANT: always call list_context_entries first and match against existing subjects before writing. Reuse an existing subject rather than creating a near-duplicate (e.g. 'Job Applications' not 'Job Search'). Only create a new subject if nothing existing is a reasonable match."""
     return _update_context_entry(subject, body)
 
 
