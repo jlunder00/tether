@@ -38,6 +38,7 @@ export const usePlanStore = defineStore('plan', () => {
       if (msg.type === 'plan_updated') fetchPlan()
     }
     ws.onclose = () => setTimeout(connectWebSocket, 3000)
+    return ws
   }
 
   return { plan, loading, today, fetchPlan, updateAnchorTasks, connectWebSocket }

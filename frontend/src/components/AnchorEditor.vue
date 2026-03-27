@@ -1,0 +1,60 @@
+<script setup lang="ts">
+import { ref, watch } from 'vue'
+import type { Anchor } from '../stores/anchors'
+
+const props = defineProps<{ anchor: Anchor }>()
+const emit = defineEmits<{ save: [anchor: Anchor] }>()
+
+const draft = ref({ ...props.anchor })
+const saving = ref(false)
+
+watch(() => props.anchor, (a) => { draft.value = { ...a } }, { deep: true })
+
+async function save() {
+  saving.value = true
+  await emit('save', { ...draft.value })
+  saving.value = false
+}
+</script>
+
+<template>
+  <div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col gap-3">
+    <div class="flex items-center gap-3">
+      <div class="w-3 h-3 rounded-full flex-shrink-0" :style="{ background: draft.color }" />
+      <input v-model="draft.name"
+             class="bg-transparent font-semibold text-white flex-1 outline-none border-b border-white/20 pb-0.5" />
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 text-sm">
+      <label class="flex flex-col gap-1 text-white/50">
+        Time
+        <input v-model="draft.time" type="time"
+               class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
+      </label>
+      <label class="flex flex-col gap-1 text-white/50">
+        Duration (min)
+        <input v-model.number="draft.duration_minutes" type="number" min="5" step="5"
+               class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
+      </label>
+      <label class="flex flex-col gap-1 text-white/50">
+        Flexibility
+        <select v-model="draft.flexibility"
+                class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none">
+          <option value="locked">Locked</option>
+          <option value="flexible">Flexible</option>
+          <option value="skippable">Skippable</option>
+        </select>
+      </label>
+      <label class="flex flex-col gap-1 text-white/50">
+        Color
+        <input v-model="draft.color" type="color"
+               class="bg-white/10 rounded-lg h-9 w-full cursor-pointer" />
+      </label>
+    </div>
+
+    <button @click="save" :disabled="saving"
+            class="self-end px-4 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm disabled:opacity-50">
+      {{ saving ? 'Saving…' : 'Save' }}
+    </button>
+  </div>
+</template>
