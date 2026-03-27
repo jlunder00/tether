@@ -6,16 +6,16 @@ on:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install dependencies
-        run: |
-          source .venv/bin/activate
-          pip install -q -e ".[dev]"
+        run: pip install -q -e ".[dev]"
 
       - name: Run tests
-        run: |
-          source .venv/bin/activate
-          pytest -v
+        run: pytest -v
