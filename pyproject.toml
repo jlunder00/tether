@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "python-multipart>=0.0.9",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +24,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["bot", "db", "api", "api.routes"]
+packages = ["bot", "db", "api", "api.routes", "tether_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
