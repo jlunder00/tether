@@ -1,0 +1,14 @@
+[Unit]
+Description=Tether Telegram Bot
+After=network.target tether-api.service
+
+[Service]
+Type=simple
+User=toast
+WorkingDirectory=/home/toast/tether
+ExecStart=/home/toast/tether/.venv/bin/python -m bot.message_handler
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

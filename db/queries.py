@@ -93,3 +93,14 @@ def get_context_entries(db_path: Path) -> list[dict]:
 def delete_context_entry(db_path: Path, subject: str) -> None:
     with get_db(db_path) as conn:
         conn.execute("DELETE FROM context_entries WHERE subject=?", (subject,))
+
+
+def insert_check_in(db_path: Path, date: str, anchor_id: str,
+                    accomplished: str, current_status: str) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO check_ins (plan_date, anchor_id, type, timestamp, accomplished, current_status)"
+            " VALUES (?, ?, 'user_checkin', ?, ?, ?)",
+            (date, anchor_id, now, accomplished, current_status),
+        )
