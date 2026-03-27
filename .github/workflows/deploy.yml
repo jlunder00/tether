@@ -56,3 +56,6 @@ jobs:
 
       - name: Restart API service
         run: sudo systemctl restart tether-api
+
+      - name: Restart bot service
+        run: sudo systemctl restart tether-bot
