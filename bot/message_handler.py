@@ -39,13 +39,15 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
 
+MAX_ORCHESTRATION_ROUNDS = 3
+
 
 def load_config() -> dict:
     with open(_CONFIG_PATH) as f:
         return yaml.safe_load(f)
 
 
-def call_claude(prompt: str, timeout: int = 120) -> str:
+def call_claude(prompt: str, timeout: int = 180) -> str:
     try:
         result = subprocess.run(
             ["claude", "-p", prompt],
@@ -54,12 +56,17 @@ def call_claude(prompt: str, timeout: int = 120) -> str:
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
-        raise RuntimeError("Claude took too long to respond (>120s). Try a simpler request.")
+        raise RuntimeError(f"Claude timed out after {timeout}s. Try a simpler request.")
+
+
+def _parse_json(raw: str) -> dict:
+    """Parse JSON from Claude output, stripping markdown fences."""
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+    return json.loads(cleaned)
 
 
 def parse_claude_response(raw: str) -> tuple[str, list[dict]]:
-    """Extract message and mutations from Claude's JSON response.
-    Falls back to treating raw output as the message with no mutations."""
+    """Extract message and mutations. Falls back to treating raw as message."""
     try:
         data = json.loads(raw.strip())
         return data.get("message", raw), data.get("mutations", [])
@@ -88,6 +95,20 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
                 upsert_tasks(db_path, date, m["anchor_id"], m["tasks"], notes="")
             elif op == "update_context":
                 upsert_context_entry(db_path, m["subject"], m["body"])
+            elif op == "append_context":
+                entries = get_context_entries(db_path)
+                entry = next((e for e in entries if e["subject"] == m["subject"]), None)
+                current = entry["body"] if entry else ""
+                upsert_context_entry(db_path, m["subject"],
+                                     current.rstrip() + "\n\n" + m["content"])
+            elif op == "patch_context":
+                entries = get_context_entries(db_path)
+                entry = next((e for e in entries if e["subject"] == m["subject"]), None)
+                if entry:
+                    new_body = entry["body"].replace(m["old"], m["new"], 1)
+                    upsert_context_entry(db_path, m["subject"], new_body)
+                else:
+                    logger.warning("patch_context: subject %r not found", m["subject"])
             elif op == "insert_check_in":
                 insert_check_in(db_path, today, m["anchor_id"],
                                 m["accomplished"], m["current_status"])
@@ -97,14 +118,13 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
             logger.error("Failed to apply mutation %s: %s", m, e)
 
 
+# ---------------------------------------------------------------------------
+# Phase 0: think_and_plan
+# ---------------------------------------------------------------------------
+
 def think_and_plan(user_message: str, anchors: list[dict],
                    all_subjects: list[str], db_path: Path) -> dict:
-    """Phase 0/1: reads today's plan + subjects, reasons about intent, produces ack + dispatch plan.
-
-    Returns dict with keys:
-        ack: str | None  -- message to send immediately (None for chat-only)
-        dispatches: list[dict]  -- [{action, anchor_id?, date?, subjects[], instructions, prefetch_date?}]
-    """
+    """Read today's plan + context subjects, reason about intent, produce ack + dispatches."""
     today = str(date_type.today())
     plan = get_plan(db_path, today)
     current_anchor_obj = get_current_anchor(anchors)
@@ -122,9 +142,8 @@ def think_and_plan(user_message: str, anchors: list[dict],
         user_message=user_message,
     )
     try:
-        raw = call_claude(prompt, timeout=45)
-        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
-        data = json.loads(cleaned)
+        raw = call_claude(prompt, timeout=60)
+        data = _parse_json(raw)
         return {
             "ack": data.get("ack"),
             "dispatches": data.get("dispatches", [{"action": "chat", "subjects": [], "instructions": ""}]),
@@ -134,14 +153,17 @@ def think_and_plan(user_message: str, anchors: list[dict],
         return {"ack": None, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}
 
 
-def _build_dispatch_prompt(user_message: str, db_path: Path,
-                           dispatch: dict, ack: str | None) -> str:
+# ---------------------------------------------------------------------------
+# Phase 1: dispatch execution (subagents)
+# ---------------------------------------------------------------------------
+
+def _build_dispatch_prompt(user_message: str, db_path: Path, dispatch: dict) -> str:
     today = str(date_type.today())
     anchors = get_anchors(db_path)
-    current_anchor = get_current_anchor(anchors)
+    anchor_summary = "\n".join(
+        f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors
+    )
 
-    # Load the plan for this dispatch's target date, or today by default.
-    # If the thinker flagged a prefetch_date (e.g. Sunday), load that instead.
     plan_date = dispatch.get("prefetch_date") or dispatch.get("date") or today
     plan = get_plan(db_path, plan_date)
 
@@ -154,7 +176,6 @@ def _build_dispatch_prompt(user_message: str, db_path: Path,
 
     context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
 
-    # Build dispatch_focus from thinker's instructions if present, else derive from action
     instructions = dispatch.get("instructions", "")
     action = dispatch.get("action", "chat")
     anchor_id = dispatch.get("anchor_id")
@@ -168,20 +189,178 @@ def _build_dispatch_prompt(user_message: str, db_path: Path,
     elif action == "update_anchor" and anchor_id:
         dispatch_focus = f"Modify the anchor definition for '{anchor_id}'."
     else:
-        dispatch_focus = None
+        dispatch_focus = "Answer the user's question."
 
-    template = _jinja.get_template("message_handler.md")
+    template = _jinja.get_template("dispatch_handler.md")
     return template.render(
         date=plan_date,
-        current_anchor=current_anchor,
+        anchors=anchor_summary,
         plan=plan,
         context=context_text,
-        check_in_log=plan.get("check_in_log", []),
         user_message=user_message,
-        ack=ack,
         dispatch_focus=dispatch_focus,
     )
 
+
+def _execute_dispatch(dispatch: dict, user_message: str, db_path: Path) -> dict:
+    """Run one subagent dispatch. Returns {report, mutations}."""
+    today = str(date_type.today())
+    try:
+        prompt = _build_dispatch_prompt(user_message, db_path, dispatch)
+        raw = call_claude(prompt, timeout=180)
+        data = _parse_json(raw)
+        report = data.get("report", "")
+        mutations = data.get("mutations", [])
+        apply_mutations(mutations, db_path, today)
+        return {"report": report, "mutations": mutations}
+    except RuntimeError as e:
+        return {"report": f"FAILED: {e}", "mutations": []}
+    except Exception as e:
+        logger.error("_execute_dispatch error: %s", e)
+        return {"report": f"FAILED: {e}", "mutations": []}
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: evaluate completion
+# ---------------------------------------------------------------------------
+
+def _evaluate_completion(user_message: str, original_dispatches: list[dict],
+                         all_reports: list[str], db_path: Path) -> dict:
+    """Check if the original request was fulfilled. Returns {complete, remaining_dispatches}."""
+    today = str(date_type.today())
+    anchors = get_anchors(db_path)
+    anchor_summary = "\n".join(
+        f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors
+    )
+    plan = get_plan(db_path, today)
+    template = _jinja.get_template("orchestrator_evaluate.md")
+    prompt = template.render(
+        date=today,
+        user_message=user_message,
+        original_dispatches=json.dumps(original_dispatches, indent=2),
+        all_reports=all_reports,
+        plan=plan,
+        anchors=anchor_summary,
+    )
+    try:
+        raw = call_claude(prompt, timeout=45)
+        data = _parse_json(raw)
+        return {
+            "complete": data.get("complete", True),
+            "remaining_dispatches": data.get("remaining_dispatches", []),
+            "assessment": data.get("assessment", ""),
+        }
+    except Exception as e:
+        logger.warning("_evaluate_completion failed (%s), assuming complete", e)
+        return {"complete": True, "remaining_dispatches": [], "assessment": ""}
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: memory consolidation
+# ---------------------------------------------------------------------------
+
+def _consolidate_memory(user_message: str, all_reports: list[str],
+                        db_path: Path) -> list[str]:
+    """Ask orchestrator if any context entries should be updated. Executes memory dispatches.
+    Returns list of memory reports."""
+    today = str(date_type.today())
+    top_entries = get_context_entries(db_path, top_level_only=True)
+    context_summary = "\n\n".join(
+        f"**{e['subject']}**: {e['body'][:300]}{'...' if len(e['body']) > 300 else ''}"
+        for e in top_entries
+    )
+    template = _jinja.get_template("orchestrator_memory.md")
+    prompt = template.render(
+        date=today,
+        user_message=user_message,
+        reports=all_reports,
+        context_summary=context_summary,
+    )
+    try:
+        raw = call_claude(prompt, timeout=45)
+        data = _parse_json(raw)
+        memory_dispatches = data.get("memory_dispatches", [])
+        if not memory_dispatches:
+            return []
+        reports = []
+        for dispatch in memory_dispatches:
+            result = _execute_dispatch(dispatch, user_message, db_path)
+            reports.append(result["report"])
+        return reports
+    except Exception as e:
+        logger.warning("_consolidate_memory failed (%s), skipping", e)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: final response
+# ---------------------------------------------------------------------------
+
+def _build_final_response(user_message: str, all_reports: list[str],
+                          memory_reports: list[str], db_path: Path) -> str:
+    today = str(date_type.today())
+    anchors = get_anchors(db_path)
+    current_anchor = get_current_anchor(anchors)
+    plan = get_plan(db_path, today)
+    context_entries = get_context_entries(db_path, top_level_only=True)
+    context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
+    template = _jinja.get_template("orchestrator_response.md")
+    prompt = template.render(
+        date=today,
+        current_anchor=current_anchor,
+        user_message=user_message,
+        subagent_reports=all_reports,
+        memory_reports=memory_reports,
+        plan=plan,
+        context=context_text,
+        check_in_log=plan.get("check_in_log", []),
+    )
+    try:
+        raw = call_claude(prompt, timeout=60)
+        message, mutations = parse_claude_response(raw)
+        return message
+    except RuntimeError as e:
+        return str(e)
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator: ties all phases together
+# ---------------------------------------------------------------------------
+
+def _orchestrate(user_message: str, dispatches: list[dict], ack: str | None,
+                 db_path: Path, send_fn: Callable[[str], None]) -> None:
+    today = str(date_type.today())
+    original_dispatches = dispatches
+    all_reports: list[str] = []
+
+    has_mutations = any(d.get("action") != "chat" for d in dispatches)
+    if ack and has_mutations:
+        send_fn(ack)
+
+    # Primary dispatch loop with evaluation retry
+    for round_num in range(MAX_ORCHESTRATION_ROUNDS):
+        for dispatch in dispatches:
+            result = _execute_dispatch(dispatch, user_message, db_path)
+            all_reports.append(result["report"])
+
+        eval_result = _evaluate_completion(user_message, original_dispatches, all_reports, db_path)
+        if eval_result["complete"] or round_num == MAX_ORCHESTRATION_ROUNDS - 1:
+            break
+        dispatches = eval_result["remaining_dispatches"]
+        if not dispatches:
+            break
+
+    # Memory consolidation (optional, runs regardless of primary success)
+    memory_reports = _consolidate_memory(user_message, all_reports, db_path)
+
+    # Single final user-facing response
+    final = _build_final_response(user_message, all_reports, memory_reports, db_path)
+    send_fn(final)
+
+
+# ---------------------------------------------------------------------------
+# Slash-command path (deterministic, single Claude call)
+# ---------------------------------------------------------------------------
 
 def _build_slash_prompt(user_message: str, db_path: Path) -> str:
     today = str(date_type.today())
@@ -203,6 +382,10 @@ def _build_slash_prompt(user_message: str, db_path: Path) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
     today = str(date_type.today())
     db_path = DB_PATH
@@ -212,7 +395,7 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
 
-    # Slash commands: deterministic DB writes, then single Claude call for the reply
+    # Slash commands: deterministic DB writes then single Claude reply
     if text.startswith("/check-in"):
         accomplished, status = parse_check_in(text)
         insert_check_in(db_path, today, current_anchor["id"], accomplished, status)
@@ -239,28 +422,15 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
             send_fn(str(e))
         return
 
-    # Free-text: think-and-plan phase (reads today's plan, produces ack + dispatch instructions)
+    # Free text: full orchestrator pipeline
     all_subjects = [e["subject"] for e in get_context_entries(db_path)]
     result = think_and_plan(text, anchors, all_subjects, db_path)
-    ack = result["ack"]
-    dispatches = result["dispatches"]
+    _orchestrate(text, result["dispatches"], result["ack"], db_path, send_fn)
 
-    has_mutations = any(d.get("action") != "chat" for d in dispatches)
-    if ack and has_mutations:
-        send_fn(ack)
 
-    for dispatch in dispatches:
-        try:
-            prompt = _build_dispatch_prompt(text, db_path, dispatch, ack)
-            raw = call_claude(prompt)
-            message, mutations = parse_claude_response(raw)
-            apply_mutations(mutations, db_path, today)
-            if message:
-                send_fn(message)
-        except RuntimeError as e:
-            send_fn(str(e))
-            return
-
+# ---------------------------------------------------------------------------
+# Telegram polling
+# ---------------------------------------------------------------------------
 
 def _send_telegram(token: str, chat_id: str, text: str) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -268,7 +438,6 @@ def _send_telegram(token: str, chat_id: str, text: str) -> None:
 
 
 def _notify_api() -> None:
-    """Ping the local API to broadcast a WebSocket update after bot mutations."""
     try:
         requests.post("http://localhost:8000/api/notify", timeout=2)
     except Exception:
