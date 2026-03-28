@@ -1,9 +1,14 @@
 from fastapi import APIRouter
-from db.queries import get_plan, upsert_plan, upsert_tasks
+from db.queries import get_plan, upsert_plan, upsert_tasks, list_plan_dates
 from api.ws import manager
 import api.config as cfg
 
 router = APIRouter()
+
+
+@router.get("/plans")
+async def list_plans():
+    return list_plan_dates(cfg.DB_PATH)
 
 
 @router.get("/plan/{date}")

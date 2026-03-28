@@ -130,6 +130,12 @@ def rename_context_subject(db_path: Path, old_subject: str, new_subject: str) ->
             )
 
 
+def list_plan_dates(db_path: Path) -> list[str]:
+    with get_db(db_path) as conn:
+        rows = conn.execute("SELECT date FROM plans ORDER BY date DESC").fetchall()
+        return [r["date"] for r in rows]
+
+
 def patch_anchor(db_path: Path, anchor_id: str, **fields) -> None:
     """Update only the provided fields on an existing anchor."""
     allowed = {"name", "time", "duration_minutes", "flexibility", "strictness", "color"}
