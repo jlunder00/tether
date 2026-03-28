@@ -6,6 +6,7 @@ from db.queries import (
     upsert_plan, get_plan,
     upsert_tasks,
     upsert_context_entry, get_context_entries, delete_context_entry,
+    rename_context_subject,
 )
 
 
@@ -76,3 +77,57 @@ def test_context_entry_crud(db_path):
     delete_context_entry(db_path, "Job Applications")
     entries = get_context_entries(db_path)
     assert not any(e["subject"] == "Job Applications" for e in entries)
+
+
+@pytest.fixture
+def hierarchical_db(db_path):
+    upsert_context_entry(db_path, "Intellipat", "Top level.")
+    upsert_context_entry(db_path, "Intellipat/Backend", "Backend sub.")
+    upsert_context_entry(db_path, "Intellipat/Frontend", "Frontend sub.")
+    upsert_context_entry(db_path, "General", "General context.")
+    return db_path
+
+
+def test_get_context_entries_top_level_only(hierarchical_db):
+    entries = get_context_entries(hierarchical_db, top_level_only=True)
+    subjects = {e["subject"] for e in entries}
+    assert subjects == {"Intellipat", "General"}
+
+
+def test_get_context_entries_prefix(hierarchical_db):
+    entries = get_context_entries(hierarchical_db, prefix="Intellipat")
+    subjects = {e["subject"] for e in entries}
+    assert subjects == {"Intellipat", "Intellipat/Backend", "Intellipat/Frontend"}
+
+
+def test_get_context_entries_prefix_no_cross_match(hierarchical_db):
+    entries = get_context_entries(hierarchical_db, prefix="General")
+    subjects = {e["subject"] for e in entries}
+    assert subjects == {"General"}
+
+
+def test_delete_context_entry_cascades(hierarchical_db):
+    delete_context_entry(hierarchical_db, "Intellipat")
+    entries = get_context_entries(hierarchical_db)
+    subjects = {e["subject"] for e in entries}
+    assert "Intellipat" not in subjects
+    assert "Intellipat/Backend" not in subjects
+    assert "Intellipat/Frontend" not in subjects
+    assert "General" in subjects
+
+
+def test_rename_context_subject_cascades(hierarchical_db):
+    rename_context_subject(hierarchical_db, "Intellipat", "IntelliPat")
+    entries = get_context_entries(hierarchical_db)
+    subjects = {e["subject"] for e in entries}
+    assert "Intellipat" not in subjects
+    assert "Intellipat/Backend" not in subjects
+    assert {"IntelliPat", "IntelliPat/Backend", "IntelliPat/Frontend", "General"} == subjects
+
+
+def test_rename_context_subject_no_children(hierarchical_db):
+    rename_context_subject(hierarchical_db, "General", "Overview")
+    entries = get_context_entries(hierarchical_db)
+    subjects = {e["subject"] for e in entries}
+    assert "General" not in subjects
+    assert "Overview" in subjects

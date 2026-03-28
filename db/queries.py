@@ -82,17 +82,52 @@ def upsert_context_entry(db_path: Path, subject: str, body: str) -> None:
         """, (subject, body, now))
 
 
-def get_context_entries(db_path: Path) -> list[dict]:
+def get_context_entries(db_path: Path, prefix: str | None = None,
+                        top_level_only: bool = False) -> list[dict]:
     with get_db(db_path) as conn:
-        rows = conn.execute(
-            "SELECT subject, body, updated_at FROM context_entries ORDER BY subject"
-        ).fetchall()
+        if prefix:
+            rows = conn.execute(
+                "SELECT subject, body, updated_at FROM context_entries"
+                " WHERE subject = ? OR subject LIKE ? ORDER BY subject",
+                (prefix, prefix + "/%")
+            ).fetchall()
+        elif top_level_only:
+            rows = conn.execute(
+                "SELECT subject, body, updated_at FROM context_entries"
+                " WHERE subject NOT LIKE '%/%' ORDER BY subject"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT subject, body, updated_at FROM context_entries ORDER BY subject"
+            ).fetchall()
         return [dict(r) for r in rows]
 
 
 def delete_context_entry(db_path: Path, subject: str) -> None:
     with get_db(db_path) as conn:
-        conn.execute("DELETE FROM context_entries WHERE subject=?", (subject,))
+        conn.execute(
+            "DELETE FROM context_entries WHERE subject = ? OR subject LIKE ?",
+            (subject, subject + "/%")
+        )
+
+
+def rename_context_subject(db_path: Path, old_subject: str, new_subject: str) -> None:
+    """Rename a subject and cascade to all children."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE context_entries SET subject = ? WHERE subject = ?",
+            (new_subject, old_subject)
+        )
+        children = conn.execute(
+            "SELECT subject FROM context_entries WHERE subject LIKE ?",
+            (old_subject + "/%",)
+        ).fetchall()
+        for row in children:
+            new_child = new_subject + row["subject"][len(old_subject):]
+            conn.execute(
+                "UPDATE context_entries SET subject = ? WHERE subject = ?",
+                (new_child, row["subject"])
+            )
 
 
 def patch_anchor(db_path: Path, anchor_id: str, **fields) -> None:

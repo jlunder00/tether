@@ -21,6 +21,17 @@ Tasks:
 - [{{ entry.timestamp }}] {{ entry.anchor_id }}: accomplished={{ entry.accomplished }} | status={{ entry.current_status }}
 {% endfor %}{% else %}No check-ins yet today.{% endif %}
 
+{% if ack %}
+## Already Sent to User
+{{ ack }}
+(You already confirmed this intent — follow through on exactly what was promised.)
+{% endif %}
+{% if dispatch_focus %}
+## Your Focus for This Call
+{{ dispatch_focus }}
+(Respond only to this aspect. Other parts of the request are handled separately.)
+{% endif %}
+
 ## User's Message
 {{ user_message }}
 

@@ -45,8 +45,22 @@ def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict
 
 # --- Internal functions (testable directly) ---
 
-def _list_context_entries() -> list[dict]:
-    return get_context_entries(_db())
+def _list_context_entries(prefix: str = "") -> list[dict]:
+    if prefix:
+        return get_context_entries(_db(), prefix=prefix)
+    entries = get_context_entries(_db(), top_level_only=True)
+    all_subjects = {e["subject"] for e in get_context_entries(_db())}
+    for e in entries:
+        e["has_children"] = any(s.startswith(e["subject"] + "/") for s in all_subjects)
+    return entries
+
+
+def _get_context_entry(subject: str) -> dict:
+    entries = get_context_entries(_db())
+    match = next((e for e in entries if e["subject"] == subject), None)
+    if not match:
+        raise ValueError(f"No context entry found for subject: {subject!r}")
+    return match
 
 
 def _update_context_entry(subject: str, body: str) -> dict:
@@ -77,9 +91,16 @@ def _get_current_anchor() -> dict:
 # --- MCP tool wrappers ---
 
 @mcp.tool()
-def list_context_entries() -> list[dict]:
-    """List all context entries (subject + body) from the Tether DB."""
-    return _list_context_entries()
+def list_context_entries(prefix: str = "") -> list[dict]:
+    """List context entries. No prefix: returns top-level only with has_children flag.
+    Pass prefix (e.g. 'Intellipat') to get full subtree including all children."""
+    return _list_context_entries(prefix)
+
+
+@mcp.tool()
+def get_context_entry(subject: str) -> dict:
+    """Get a single context entry by exact subject path (e.g. 'Intellipat/Backend')."""
+    return _get_context_entry(subject)
 
 
 @mcp.tool()
