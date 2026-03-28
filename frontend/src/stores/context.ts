@@ -25,5 +25,14 @@ export const useContextStore = defineStore('context', () => {
     await fetchEntries()
   }
 
-  return { entries, fetchEntries, saveEntry, deleteEntry }
+  async function renameEntry(oldSubject: string, newSubject: string) {
+    await fetch(`/api/context/${encodeURIComponent(oldSubject)}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_subject: newSubject }),
+    })
+    await fetchEntries()
+  }
+
+  return { entries, fetchEntries, saveEntry, deleteEntry, renameEntry }
 })

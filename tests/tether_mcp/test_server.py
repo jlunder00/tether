@@ -19,6 +19,9 @@ def db_path(tmp_path):
     upsert_tasks(path, "2026-03-26", "grind_am", tasks=["Apply to 3 jobs"], notes="ML roles")
     upsert_context_entry(path, "Job Applications", "ML engineer roles.")
     upsert_context_entry(path, "5D Multiverse", "Game engine — flex time only.")
+    upsert_context_entry(path, "Intellipat", "Patent startup.")
+    upsert_context_entry(path, "Intellipat/Backend", "Backend services.")
+    upsert_context_entry(path, "Intellipat/Frontend", "React frontend.")
     return path
 
 
@@ -29,12 +32,43 @@ def set_db_env(db_path):
     del os.environ["TETHER_DB_PATH"]
 
 
-def test_list_context_entries_returns_subjects():
+def test_list_context_entries_top_level_only_by_default():
     from tether_mcp.server import _list_context_entries
     entries = _list_context_entries()
     subjects = [e["subject"] for e in entries]
     assert "Job Applications" in subjects
     assert "5D Multiverse" in subjects
+    assert "Intellipat" in subjects
+    assert "Intellipat/Backend" not in subjects
+
+
+def test_list_context_entries_has_children_flag():
+    from tether_mcp.server import _list_context_entries
+    entries = _list_context_entries()
+    intellipat = next(e for e in entries if e["subject"] == "Intellipat")
+    job_apps = next(e for e in entries if e["subject"] == "Job Applications")
+    assert intellipat["has_children"] is True
+    assert job_apps["has_children"] is False
+
+
+def test_list_context_entries_with_prefix():
+    from tether_mcp.server import _list_context_entries
+    entries = _list_context_entries(prefix="Intellipat")
+    subjects = {e["subject"] for e in entries}
+    assert subjects == {"Intellipat", "Intellipat/Backend", "Intellipat/Frontend"}
+
+
+def test_get_context_entry_exact():
+    from tether_mcp.server import _get_context_entry
+    entry = _get_context_entry("Intellipat/Backend")
+    assert entry["subject"] == "Intellipat/Backend"
+    assert entry["body"] == "Backend services."
+
+
+def test_get_context_entry_not_found_raises():
+    from tether_mcp.server import _get_context_entry
+    with pytest.raises(ValueError, match="No context entry found"):
+        _get_context_entry("Nonexistent")
 
 
 def test_update_context_entry_persists(db_path):

@@ -6,6 +6,7 @@ import subprocess
 import time
 from datetime import date as date_type
 from pathlib import Path
+from typing import Callable
 
 import requests
 import yaml
@@ -43,9 +44,16 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def call_claude(prompt: str) -> str:
-    result = subprocess.run(["claude", "-p", prompt], capture_output=True, text=True, check=True)
-    return result.stdout.strip()
+def call_claude(prompt: str, timeout: int = 120) -> str:
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt],
+            capture_output=True, text=True, check=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Claude took too long to respond (>120s). Try a simpler request.")
 
 
 def parse_claude_response(raw: str) -> tuple[str, list[dict]]:
@@ -88,16 +96,64 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
             logger.error("Failed to apply mutation %s: %s", m, e)
 
 
-def _build_prompt(user_message: str, db_path: Path) -> str:
-    today = str(date_type.today())
-    init_db(db_path)
-    upsert_plan(db_path, today)
+def classify_and_ack(user_message: str, anchors: list[dict],
+                     all_subjects: list[str]) -> dict:
+    """Phase 1: fast call to classify intent and generate an ack if needed.
 
+    Returns dict with keys:
+        ack: str | None  -- message to send immediately (None for chat-only)
+        dispatches: list[dict]  -- [{action, anchor_id?, subjects: []}]
+    """
+    anchor_summary = "\n".join(
+        f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors
+    )
+    subjects_summary = "\n".join(f"- {s}" for s in all_subjects)
+    template = _jinja.get_template("ack_classifier.md")
+    prompt = template.render(
+        anchors=anchor_summary,
+        subjects=subjects_summary,
+        user_message=user_message,
+    )
+    try:
+        raw = call_claude(prompt, timeout=30)
+        cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
+        data = json.loads(cleaned)
+        return {
+            "ack": data.get("ack"),
+            "dispatches": data.get("dispatches", [{"action": "chat", "subjects": []}]),
+        }
+    except Exception as e:
+        logger.warning("classify_and_ack failed (%s), falling back to single chat call", e)
+        return {"ack": None, "dispatches": [{"action": "chat", "subjects": []}]}
+
+
+def _build_dispatch_prompt(user_message: str, db_path: Path,
+                           dispatch: dict, ack: str | None) -> str:
+    today = str(date_type.today())
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
     plan = get_plan(db_path, today)
-    context_entries = get_context_entries(db_path)
+
+    relevant_subjects = dispatch.get("subjects") or []
+    if relevant_subjects:
+        all_entries = get_context_entries(db_path)
+        context_entries = [e for e in all_entries if e["subject"] in relevant_subjects]
+    else:
+        context_entries = get_context_entries(db_path, top_level_only=True)
+
     context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
+
+    action = dispatch.get("action", "chat")
+    anchor_id = dispatch.get("anchor_id")
+    if action == "update_plan" and anchor_id:
+        anchor_name = next((a["name"] for a in anchors if a["id"] == anchor_id), anchor_id)
+        dispatch_focus = f"Update the task list for the '{anchor_name}' block ({anchor_id})."
+    elif action == "update_context" and relevant_subjects:
+        dispatch_focus = f"Update context entry: {', '.join(relevant_subjects)}."
+    elif action == "update_anchor" and anchor_id:
+        dispatch_focus = f"Modify the anchor definition for '{anchor_id}'."
+    else:
+        dispatch_focus = None
 
     template = _jinja.get_template("message_handler.md")
     return template.render(
@@ -107,15 +163,41 @@ def _build_prompt(user_message: str, db_path: Path) -> str:
         context=context_text,
         check_in_log=plan.get("check_in_log", []),
         user_message=user_message,
+        ack=ack,
+        dispatch_focus=dispatch_focus,
     )
 
 
-def handle_message(text: str) -> str:
+def _build_slash_prompt(user_message: str, db_path: Path) -> str:
+    today = str(date_type.today())
+    anchors = get_anchors(db_path)
+    current_anchor = get_current_anchor(anchors)
+    plan = get_plan(db_path, today)
+    context_entries = get_context_entries(db_path, top_level_only=True)
+    context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
+    template = _jinja.get_template("message_handler.md")
+    return template.render(
+        date=today,
+        current_anchor=current_anchor,
+        plan=plan,
+        context=context_text,
+        check_in_log=plan.get("check_in_log", []),
+        user_message=user_message,
+        ack=None,
+        dispatch_focus=None,
+    )
+
+
+def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
     today = str(date_type.today())
     db_path = DB_PATH
+    init_db(db_path)
+    upsert_plan(db_path, today)
+
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
 
+    # Slash commands: deterministic DB writes, then single Claude call for the reply
     if text.startswith("/check-in"):
         accomplished, status = parse_check_in(text)
         insert_check_in(db_path, today, current_anchor["id"], accomplished, status)
@@ -132,10 +214,37 @@ def handle_message(text: str) -> str:
         upsert_plan(db_path, today)
         upsert_tasks(db_path, today, anchor_id, tasks, notes="")
 
-    raw = call_claude(_build_prompt(text, db_path))
-    message, mutations = parse_claude_response(raw)
-    apply_mutations(mutations, db_path, today)
-    return message
+    if text.startswith("/"):
+        try:
+            raw = call_claude(_build_slash_prompt(text, db_path))
+            message, mutations = parse_claude_response(raw)
+            apply_mutations(mutations, db_path, today)
+            send_fn(message)
+        except RuntimeError as e:
+            send_fn(str(e))
+        return
+
+    # Free-text: two-phase dispatch
+    all_subjects = [e["subject"] for e in get_context_entries(db_path)]
+    result = classify_and_ack(text, anchors, all_subjects)
+    ack = result["ack"]
+    dispatches = result["dispatches"]
+
+    has_mutations = any(d.get("action") != "chat" for d in dispatches)
+    if ack and has_mutations:
+        send_fn(ack)
+
+    for dispatch in dispatches:
+        try:
+            prompt = _build_dispatch_prompt(text, db_path, dispatch, ack)
+            raw = call_claude(prompt)
+            message, mutations = parse_claude_response(raw)
+            apply_mutations(mutations, db_path, today)
+            if message:
+                send_fn(message)
+        except RuntimeError as e:
+            send_fn(str(e))
+            return
 
 
 def _send_telegram(token: str, chat_id: str, text: str) -> None:
@@ -161,8 +270,8 @@ def run_polling(token: str, chat_id: str) -> None:
                 if not text:
                     continue
                 try:
-                    reply = handle_message(text)
-                    _send_telegram(token, chat_id, reply)
+                    send = lambda m: _send_telegram(token, chat_id, m)
+                    handle_message(text, send)
                 except Exception as e:
                     logger.error("Error handling message: %s", e)
                     _send_telegram(token, chat_id, f"[Tether error: {e}]")
