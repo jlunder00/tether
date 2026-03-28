@@ -133,7 +133,7 @@ onMounted(() => store.fetchEntries())
                        class="flex-1 bg-transparent border-b border-white/40 text-sm outline-none" />
               </template>
               <h4 v-else class="font-medium text-sm truncate">
-                {{ child.subject.split('/').at(-1) }}
+                {{ child.subject.split('/').slice(-1)[0] }}
               </h4>
               <div class="flex gap-2 shrink-0">
                 <button @click="startEdit(child.subject, child.body)"
