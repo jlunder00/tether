@@ -97,35 +97,41 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
             logger.error("Failed to apply mutation %s: %s", m, e)
 
 
-def classify_and_ack(user_message: str, anchors: list[dict],
-                     all_subjects: list[str]) -> dict:
-    """Phase 1: fast call to classify intent and generate an ack if needed.
+def think_and_plan(user_message: str, anchors: list[dict],
+                   all_subjects: list[str], db_path: Path) -> dict:
+    """Phase 0/1: reads today's plan + subjects, reasons about intent, produces ack + dispatch plan.
 
     Returns dict with keys:
         ack: str | None  -- message to send immediately (None for chat-only)
-        dispatches: list[dict]  -- [{action, anchor_id?, subjects: []}]
+        dispatches: list[dict]  -- [{action, anchor_id?, date?, subjects[], instructions, prefetch_date?}]
     """
+    today = str(date_type.today())
+    plan = get_plan(db_path, today)
+    current_anchor_obj = get_current_anchor(anchors)
     anchor_summary = "\n".join(
         f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors
     )
     subjects_summary = "\n".join(f"- {s}" for s in all_subjects)
-    template = _jinja.get_template("ack_classifier.md")
+    template = _jinja.get_template("think_and_plan.md")
     prompt = template.render(
+        date=today,
+        current_anchor=current_anchor_obj,
         anchors=anchor_summary,
+        plan=plan,
         subjects=subjects_summary,
         user_message=user_message,
     )
     try:
-        raw = call_claude(prompt, timeout=30)
+        raw = call_claude(prompt, timeout=45)
         cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
         data = json.loads(cleaned)
         return {
             "ack": data.get("ack"),
-            "dispatches": data.get("dispatches", [{"action": "chat", "subjects": []}]),
+            "dispatches": data.get("dispatches", [{"action": "chat", "subjects": [], "instructions": ""}]),
         }
     except Exception as e:
-        logger.warning("classify_and_ack failed (%s), falling back to single chat call", e)
-        return {"ack": None, "dispatches": [{"action": "chat", "subjects": []}]}
+        logger.warning("think_and_plan failed (%s), falling back to single chat call", e)
+        return {"ack": None, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}
 
 
 def _build_dispatch_prompt(user_message: str, db_path: Path,
@@ -133,7 +139,11 @@ def _build_dispatch_prompt(user_message: str, db_path: Path,
     today = str(date_type.today())
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
-    plan = get_plan(db_path, today)
+
+    # Load the plan for this dispatch's target date, or today by default.
+    # If the thinker flagged a prefetch_date (e.g. Sunday), load that instead.
+    plan_date = dispatch.get("prefetch_date") or dispatch.get("date") or today
+    plan = get_plan(db_path, plan_date)
 
     relevant_subjects = dispatch.get("subjects") or []
     if relevant_subjects:
@@ -144,9 +154,13 @@ def _build_dispatch_prompt(user_message: str, db_path: Path,
 
     context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
 
+    # Build dispatch_focus from thinker's instructions if present, else derive from action
+    instructions = dispatch.get("instructions", "")
     action = dispatch.get("action", "chat")
     anchor_id = dispatch.get("anchor_id")
-    if action == "update_plan" and anchor_id:
+    if instructions:
+        dispatch_focus = instructions
+    elif action == "update_plan" and anchor_id:
         anchor_name = next((a["name"] for a in anchors if a["id"] == anchor_id), anchor_id)
         dispatch_focus = f"Update the task list for the '{anchor_name}' block ({anchor_id})."
     elif action == "update_context" and relevant_subjects:
@@ -158,7 +172,7 @@ def _build_dispatch_prompt(user_message: str, db_path: Path,
 
     template = _jinja.get_template("message_handler.md")
     return template.render(
-        date=today,
+        date=plan_date,
         current_anchor=current_anchor,
         plan=plan,
         context=context_text,
@@ -225,9 +239,9 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
             send_fn(str(e))
         return
 
-    # Free-text: two-phase dispatch
+    # Free-text: think-and-plan phase (reads today's plan, produces ack + dispatch instructions)
     all_subjects = [e["subject"] for e in get_context_entries(db_path)]
-    result = classify_and_ack(text, anchors, all_subjects)
+    result = think_and_plan(text, anchors, all_subjects, db_path)
     ack = result["ack"]
     dispatches = result["dispatches"]
 
