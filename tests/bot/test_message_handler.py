@@ -48,39 +48,56 @@ def test_call_claude_raises_on_timeout():
             call_claude("some prompt")
 
 
-# --- classify_and_ack ---
+# --- think_and_plan ---
 
-def test_classify_and_ack_returns_dispatches():
-    from bot.message_handler import classify_and_ack
+def test_think_and_plan_returns_dispatches(db_path):
+    from bot.message_handler import think_and_plan
     response = json.dumps({
         "ack": "Got it, updating grind block.",
-        "dispatches": [{"action": "update_plan", "anchor_id": "grind_am", "subjects": ["Job Applications"]}],
+        "dispatches": [{"action": "update_plan", "anchor_id": "grind_am",
+                        "subjects": ["Job Applications"], "instructions": "Set tasks to X, Y."}],
     })
     with patch("bot.message_handler.call_claude", return_value=response):
-        result = classify_and_ack("Update my grind tasks",
-                                  [{"id": "grind_am", "name": "Grind", "time": "08:00"}],
-                                  ["Job Applications"])
+        result = think_and_plan("Update my grind tasks",
+                                [{"id": "grind_am", "name": "Grind", "time": "08:00"}],
+                                ["Job Applications"], db_path)
     assert result["ack"] == "Got it, updating grind block."
     assert result["dispatches"][0]["action"] == "update_plan"
 
 
-def test_classify_and_ack_chat_only_null_ack():
-    from bot.message_handler import classify_and_ack
+def test_think_and_plan_chat_only_null_ack(db_path):
+    from bot.message_handler import think_and_plan
     response = json.dumps({
         "ack": None,
-        "dispatches": [{"action": "chat", "subjects": ["Job Applications"]}],
+        "dispatches": [{"action": "chat", "subjects": ["Job Applications"], "instructions": ""}],
     })
+    anchors = [{"id": "grind_am", "name": "Grind", "time": "08:00"}]
     with patch("bot.message_handler.call_claude", return_value=response):
-        result = classify_and_ack("What should I do now?", [], ["Job Applications"])
+        result = think_and_plan("What should I do now?", anchors, ["Job Applications"], db_path)
     assert result["ack"] is None
 
 
-def test_classify_and_ack_fallback_on_invalid_json():
-    from bot.message_handler import classify_and_ack
+def test_think_and_plan_fallback_on_invalid_json(db_path):
+    from bot.message_handler import think_and_plan
+    anchors = [{"id": "grind_am", "name": "Grind", "time": "08:00"}]
     with patch("bot.message_handler.call_claude", return_value="not json at all"):
-        result = classify_and_ack("whatever", [], [])
+        result = think_and_plan("whatever", anchors, [], db_path)
     assert result["ack"] is None
-    assert result["dispatches"] == [{"action": "chat", "subjects": []}]
+    assert result["dispatches"] == [{"action": "chat", "subjects": [], "instructions": ""}]
+
+
+def test_think_and_plan_includes_plan_in_prompt(db_path):
+    """Verify today's tasks are passed to the thinker so it can reason about them."""
+    from bot.message_handler import think_and_plan
+    captured = []
+    def capture_prompt(prompt, **kw):
+        captured.append(prompt)
+        return json.dumps({"ack": None, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]})
+    with patch("bot.message_handler.call_claude", side_effect=capture_prompt):
+        think_and_plan("Move my tasks to Sunday",
+                       [{"id": "grind_am", "name": "Grind", "time": "08:00"}],
+                       ["Job Applications"], db_path)
+    assert "Apply to 3 jobs" in captured[0]  # today's task from fixture is in the prompt
 
 
 # --- handle_message: two-phase free text ---
