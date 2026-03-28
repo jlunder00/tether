@@ -62,8 +62,26 @@ If the user asks you to change their schedule or data, include the operations in
 - `{"op": "update_anchor", "anchor_id": "...", "time": "HH:MM"}` — change an anchor's start time
 - `{"op": "update_anchor", "anchor_id": "...", "duration_minutes": 90}` — change duration
 - `{"op": "update_anchor", "anchor_id": "...", "name": "...", "color": "#rrggbb", "flexibility": "locked|flexible|soft"}` — change other fields
-- `{"op": "update_plan_tasks", "anchor_id": "...", "tasks": ["task 1", "task 2"]}` — replace today's tasks for an anchor
+- `{"op": "update_plan_tasks", "anchor_id": "...", "date": "YYYY-MM-DD", "tasks": ["task 1", "task 2"]}` — replace tasks for an anchor on a specific date (omit `date` for today)
 - `{"op": "update_context", "subject": "...", "body": "..."}` — upsert a context entry
 - `{"op": "insert_check_in", "anchor_id": "...", "accomplished": "...", "current_status": "..."}` — log a check-in
 
 Only include mutations when the user explicitly asks for a change. For normal conversation, return `"mutations": []`.
+
+## Task writing rules — IMPORTANT
+
+When writing `update_plan_tasks` mutations, follow these rules strictly:
+
+1. **Short imperative titles only.** Each task is ≤8 words. No descriptions, no parentheticals, no explanations inline.
+   - GOOD: `"Message Jacob Kranz — Meta RE"`
+   - BAD: `"Meta RE Monetization AI: message Jacob Kranz (FAIR, GU/De Palma connection) before applying cold"`
+
+2. **Reuse exact wording for recurring tasks.** If the same task appears across multiple days or was already in the plan, use the identical text — do not paraphrase.
+   - GOOD: `"Leetcode: one medium problem"` (same every day)
+   - BAD: `"Pick a LeetCode medium and solve it"`, `"Complete one medium LeetCode problem"`
+
+3. **No context baked into tasks.** Details about WHY a task matters belong in context entries, not task text. The task is the action; the context entry holds the background.
+
+4. **4–6 tasks per anchor maximum.** More than 6 tasks in a block means you're over-planning. Cut to the most important ones.
+
+5. **To wipe all tasks for an anchor, send `"tasks": []`.** This is valid and expected when the user asks to clear or redo a block.

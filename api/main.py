@@ -19,6 +19,12 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(anchor_routes.router, prefix="/api")
     app.include_router(context_routes.router, prefix="/api")
 
+    @app.post("/api/notify")
+    async def notify():
+        await manager.broadcast({"type": "plan_updated"})
+        await manager.broadcast({"type": "context_updated"})
+        return {"ok": True}
+
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await manager.connect(websocket)
