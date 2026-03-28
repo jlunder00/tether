@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 DB_PATH = Path.home() / ".tether-config" / "tether.db"
 _CONFIG_PATH = Path.home() / ".tether-config" / "config.yaml"
+_OFFSET_PATH = Path.home() / ".tether-config" / "telegram_offset"
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
@@ -252,9 +253,31 @@ def _send_telegram(token: str, chat_id: str, text: str) -> None:
     requests.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
 
 
+def _notify_api() -> None:
+    """Ping the local API to broadcast a WebSocket update after bot mutations."""
+    try:
+        requests.post("http://localhost:8000/api/notify", timeout=2)
+    except Exception:
+        pass
+
+
+def _load_offset() -> int:
+    try:
+        return int(_OFFSET_PATH.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _save_offset(offset: int) -> None:
+    try:
+        _OFFSET_PATH.write_text(str(offset))
+    except Exception as e:
+        logger.warning("Failed to save offset: %s", e)
+
+
 def run_polling(token: str, chat_id: str) -> None:
-    offset = 0
-    logger.info("Tether bot polling started")
+    offset = _load_offset()
+    logger.info("Tether bot polling started (offset=%d)", offset)
     while True:
         try:
             resp = requests.get(
@@ -265,6 +288,7 @@ def run_polling(token: str, chat_id: str) -> None:
             data = resp.json()
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
+                _save_offset(offset)
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 if not text:
@@ -272,6 +296,7 @@ def run_polling(token: str, chat_id: str) -> None:
                 try:
                     send = lambda m: _send_telegram(token, chat_id, m)
                     handle_message(text, send)
+                    _notify_api()
                 except Exception as e:
                     logger.error("Error handling message: %s", e)
                     _send_telegram(token, chat_id, f"[Tether error: {e}]")
