@@ -80,6 +80,55 @@ def test_update_context_entry_persists(db_path):
     assert match["body"] == "Updated body."
 
 
+def test_append_context_entry(db_path):
+    from tether_mcp.server import _append_context_entry
+    from db.queries import get_context_entries
+    _append_context_entry("Job Applications", "New line added.")
+    entries = get_context_entries(db_path)
+    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
+    assert "ML engineer roles." in body
+    assert "New line added." in body
+
+
+def test_append_context_entry_creates_if_missing(db_path):
+    from tether_mcp.server import _append_context_entry
+    from db.queries import get_context_entries
+    _append_context_entry("Brand New", "First content.")
+    entries = get_context_entries(db_path)
+    assert any(e["subject"] == "Brand New" for e in entries)
+
+
+def test_patch_context_entry(db_path):
+    from tether_mcp.server import _patch_context_entry
+    from db.queries import get_context_entries
+    _patch_context_entry("Job Applications", "ML engineer roles.", "ML + AI roles.")
+    entries = get_context_entries(db_path)
+    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
+    assert "ML + AI roles." in body
+    assert "ML engineer roles." not in body
+
+
+def test_patch_context_entry_remove(db_path):
+    from tether_mcp.server import _patch_context_entry
+    from db.queries import get_context_entries
+    _patch_context_entry("Job Applications", "ML engineer roles.", "")
+    entries = get_context_entries(db_path)
+    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
+    assert "ML engineer roles." not in body
+
+
+def test_patch_context_entry_not_found_raises():
+    from tether_mcp.server import _patch_context_entry
+    with pytest.raises(ValueError, match="No context entry found"):
+        _patch_context_entry("Nonexistent", "x", "y")
+
+
+def test_patch_context_entry_text_not_found_raises(db_path):
+    from tether_mcp.server import _patch_context_entry
+    with pytest.raises(ValueError, match="Text not found"):
+        _patch_context_entry("Job Applications", "this text does not exist", "y")
+
+
 def test_get_today_plan_returns_anchors():
     from tether_mcp.server import _get_today_plan
     plan = _get_today_plan("2026-03-26")

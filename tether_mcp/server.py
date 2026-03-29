@@ -68,6 +68,25 @@ def _update_context_entry(subject: str, body: str) -> dict:
     return {"ok": True}
 
 
+def _append_context_entry(subject: str, content: str) -> dict:
+    entries = get_context_entries(_db())
+    entry = next((e for e in entries if e["subject"] == subject), None)
+    current = entry["body"] if entry else ""
+    upsert_context_entry(_db(), subject, current.rstrip() + "\n\n" + content)
+    return {"ok": True}
+
+
+def _patch_context_entry(subject: str, old: str, new: str) -> dict:
+    entries = get_context_entries(_db())
+    entry = next((e for e in entries if e["subject"] == subject), None)
+    if not entry:
+        raise ValueError(f"No context entry found for subject: {subject!r}")
+    if old not in entry["body"]:
+        raise ValueError(f"Text not found in {subject!r}: {old[:60]!r}")
+    upsert_context_entry(_db(), subject, entry["body"].replace(old, new, 1))
+    return {"ok": True}
+
+
 def _get_today_plan(date: str | None = None) -> dict:
     d = date or str(date_type.today())
     return get_plan(_db(), d)
@@ -105,8 +124,20 @@ def get_context_entry(subject: str) -> dict:
 
 @mcp.tool()
 def update_context_entry(subject: str, body: str) -> dict:
-    """Create or update a context entry by subject. IMPORTANT: always call list_context_entries first and match against existing subjects before writing. Reuse an existing subject rather than creating a near-duplicate (e.g. 'Job Applications' not 'Job Search'). Only create a new subject if nothing existing is a reasonable match."""
+    """Full rewrite of a context entry. Use only for large structural changes. For adding or correcting small sections, prefer append_context_entry or patch_context_entry instead. IMPORTANT: always call list_context_entries first and match against existing subjects."""
     return _update_context_entry(subject, body)
+
+
+@mcp.tool()
+def append_context_entry(subject: str, content: str) -> dict:
+    """Append new content to the end of an existing context entry. Creates the entry if it doesn't exist. Preferred over update_context_entry for adding new information."""
+    return _append_context_entry(subject, content)
+
+
+@mcp.tool()
+def patch_context_entry(subject: str, old: str, new: str) -> dict:
+    """Find-and-replace within a context entry body. Pass the exact text to replace as `old` and the replacement as `new`. Set new='' to delete a section. Raises if `old` is not found."""
+    return _patch_context_entry(subject, old, new)
 
 
 @mcp.tool()
