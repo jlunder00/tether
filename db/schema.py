@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS conversation_history (
     body TEXT NOT NULL,
     ts   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS staging_mutations (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    description TEXT NOT NULL,
+    params_json TEXT NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS orchestrator_conversation (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    round_num   INTEGER NOT NULL,
+    ts          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
