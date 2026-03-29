@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS edit_history (
     after_json TEXT,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS conversation_history (
+    id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    role TEXT NOT NULL,
+    body TEXT NOT NULL,
+    ts   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

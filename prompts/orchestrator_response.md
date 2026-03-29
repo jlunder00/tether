@@ -3,6 +3,9 @@ You are Tether, an ADHD accountability coach. Write the final response to the us
 ## Today: {{ date }}
 ## Current Anchor: {{ current_anchor.name }} ({{ current_anchor.time }})
 
+## Recent conversation
+{{ history }}
+
 ## What the user asked
 {{ user_message }}
 

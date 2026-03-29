@@ -22,7 +22,9 @@ from db.queries import (
     get_anchors,
     get_context_entries,
     get_plan,
+    get_recent_history,
     insert_check_in,
+    insert_conversation_turn,
     patch_anchor,
     upsert_context_entry,
     upsert_plan,
@@ -40,6 +42,18 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
 
 MAX_ORCHESTRATION_ROUNDS = 3
+HISTORY_EXCHANGES = 5
+
+
+def _format_history(history: list[dict]) -> str:
+    if not history:
+        return "(none)"
+    lines = []
+    for row in history:
+        label = "User" if row["role"] == "user" else "Bot"
+        ts = row["ts"][:16] if row["ts"] else ""
+        lines.append(f"[{ts}] {label}: {row['body']}")
+    return "\n".join(lines)
 
 
 def load_config() -> dict:
@@ -123,7 +137,8 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
 # ---------------------------------------------------------------------------
 
 def think_and_plan(user_message: str, anchors: list[dict],
-                   all_subjects: list[str], db_path: Path) -> dict:
+                   all_subjects: list[str], db_path: Path,
+                   history: list[dict] | None = None) -> dict:
     """Read today's plan + context subjects, reason about intent, produce ack + dispatches."""
     today = str(date_type.today())
     plan = get_plan(db_path, today)
@@ -140,6 +155,7 @@ def think_and_plan(user_message: str, anchors: list[dict],
         plan=plan,
         subjects=subjects_summary,
         user_message=user_message,
+        history=_format_history(history or []),
     )
     try:
         raw = call_claude(prompt, timeout=60)
@@ -297,7 +313,8 @@ def _consolidate_memory(user_message: str, all_reports: list[str],
 # ---------------------------------------------------------------------------
 
 def _build_final_response(user_message: str, all_reports: list[str],
-                          memory_reports: list[str], db_path: Path) -> str:
+                          memory_reports: list[str], db_path: Path,
+                          history: list[dict] | None = None) -> str:
     today = str(date_type.today())
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
@@ -314,6 +331,7 @@ def _build_final_response(user_message: str, all_reports: list[str],
         plan=plan,
         context=context_text,
         check_in_log=plan.get("check_in_log", []),
+        history=_format_history(history or []),
     )
     try:
         raw = call_claude(prompt, timeout=60)
@@ -328,7 +346,8 @@ def _build_final_response(user_message: str, all_reports: list[str],
 # ---------------------------------------------------------------------------
 
 def _orchestrate(user_message: str, dispatches: list[dict], ack: str | None,
-                 db_path: Path, send_fn: Callable[[str], None]) -> None:
+                 db_path: Path, send_fn: Callable[[str], None],
+                 history: list[dict] | None = None) -> None:
     today = str(date_type.today())
     original_dispatches = dispatches
     all_reports: list[str] = []
@@ -354,8 +373,9 @@ def _orchestrate(user_message: str, dispatches: list[dict], ack: str | None,
     memory_reports = _consolidate_memory(user_message, all_reports, db_path)
 
     # Single final user-facing response
-    final = _build_final_response(user_message, all_reports, memory_reports, db_path)
+    final = _build_final_response(user_message, all_reports, memory_reports, db_path, history)
     send_fn(final)
+    return final  # returned so handle_message can persist it to history
 
 
 # ---------------------------------------------------------------------------
@@ -423,9 +443,13 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
         return
 
     # Free text: full orchestrator pipeline
+    history = get_recent_history(db_path, HISTORY_EXCHANGES)
     all_subjects = [e["subject"] for e in get_context_entries(db_path)]
-    result = think_and_plan(text, anchors, all_subjects, db_path)
-    _orchestrate(text, result["dispatches"], result["ack"], db_path, send_fn)
+    result = think_and_plan(text, anchors, all_subjects, db_path, history)
+    final = _orchestrate(text, result["dispatches"], result["ack"], db_path, send_fn, history)
+    insert_conversation_turn(db_path, "user", text)
+    if final:
+        insert_conversation_turn(db_path, "assistant", final)
 
 
 # ---------------------------------------------------------------------------

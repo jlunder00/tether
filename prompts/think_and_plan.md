@@ -17,6 +17,9 @@ You are planning actions for an ADHD accountability bot called Tether.
 ## Context subjects available
 {{ subjects }}
 
+## Recent conversation
+{{ history }}
+
 ## User message
 {{ user_message }}
 
