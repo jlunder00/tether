@@ -151,6 +151,25 @@ def patch_anchor(db_path: Path, anchor_id: str, **fields) -> None:
     upsert_anchor(db_path, anchor)
 
 
+def insert_conversation_turn(db_path: Path, role: str, body: str) -> None:
+    """Append one turn to conversation history. role is 'user' or 'assistant'."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO conversation_history (role, body) VALUES (?, ?)",
+            (role, body),
+        )
+
+
+def get_recent_history(db_path: Path, n: int = 5) -> list[dict]:
+    """Return the last n exchange pairs (up to 2*n rows) in chronological order."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT role, body, ts FROM conversation_history ORDER BY id DESC LIMIT ?",
+            (n * 2,),
+        ).fetchall()
+    return [dict(r) for r in reversed(rows)]
+
+
 def insert_check_in(db_path: Path, date: str, anchor_id: str,
                     accomplished: str, current_status: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")

@@ -7,6 +7,7 @@ from db.queries import (
     upsert_tasks,
     upsert_context_entry, get_context_entries, delete_context_entry,
     rename_context_subject,
+    insert_conversation_turn, get_recent_history,
 )
 
 
@@ -21,7 +22,8 @@ def test_init_creates_tables(db_path):
     import sqlite3
     conn = sqlite3.connect(db_path)
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-    assert {"anchors", "plans", "tasks", "acknowledgements", "context_entries", "edit_history"} <= tables
+    assert {"anchors", "plans", "tasks", "acknowledgements", "context_entries",
+            "edit_history", "conversation_history"} <= tables
 
 
 def test_upsert_and_get_anchor(db_path):
@@ -131,3 +133,41 @@ def test_rename_context_subject_no_children(hierarchical_db):
     subjects = {e["subject"] for e in entries}
     assert "General" not in subjects
     assert "Overview" in subjects
+
+
+# ---------------------------------------------------------------------------
+# conversation_history
+# ---------------------------------------------------------------------------
+
+def test_insert_and_get_recent_history(db_path):
+    insert_conversation_turn(db_path, "user", "Hello there")
+    insert_conversation_turn(db_path, "assistant", "Hi! How can I help?")
+    history = get_recent_history(db_path)
+    assert len(history) == 2
+    assert history[0]["role"] == "user"
+    assert history[0]["body"] == "Hello there"
+    assert history[1]["role"] == "assistant"
+    assert history[1]["body"] == "Hi! How can I help?"
+
+
+def test_get_recent_history_empty(db_path):
+    assert get_recent_history(db_path) == []
+
+
+def test_get_recent_history_respects_n(db_path):
+    for i in range(8):
+        insert_conversation_turn(db_path, "user", f"msg {i}")
+        insert_conversation_turn(db_path, "assistant", f"reply {i}")
+    history = get_recent_history(db_path, n=3)
+    assert len(history) == 6  # 3 exchanges = 6 rows
+    # Should be the most recent 3 exchanges in chronological order
+    assert history[-1]["body"] == "reply 7"
+    assert history[-2]["body"] == "msg 7"
+
+
+def test_get_recent_history_chronological_order(db_path):
+    insert_conversation_turn(db_path, "user", "first")
+    insert_conversation_turn(db_path, "assistant", "second")
+    insert_conversation_turn(db_path, "user", "third")
+    history = get_recent_history(db_path)
+    assert [r["body"] for r in history] == ["first", "second", "third"]

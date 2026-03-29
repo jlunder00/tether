@@ -299,3 +299,70 @@ def test_build_dispatch_prompt_no_subjects_loads_top_level(db_path):
     prompt = _build_dispatch_prompt("Hello", db_path, dispatch)
     assert "Intellipat/Backend" not in prompt
     assert "Intellipat" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _format_history
+# ---------------------------------------------------------------------------
+
+def test_format_history_empty():
+    from bot.message_handler import _format_history
+    assert _format_history([]) == "(none)"
+
+
+def test_format_history_renders_turns():
+    from bot.message_handler import _format_history
+    history = [
+        {"role": "user",      "body": "Move my tasks", "ts": "2026-03-28 14:00:00"},
+        {"role": "assistant", "body": "Done.",          "ts": "2026-03-28 14:00:05"},
+    ]
+    result = _format_history(history)
+    assert "User: Move my tasks" in result
+    assert "Bot: Done." in result
+    assert "2026-03-28 14:00" in result
+
+
+# ---------------------------------------------------------------------------
+# think_and_plan — history injected into prompt
+# ---------------------------------------------------------------------------
+
+def test_think_and_plan_history_in_prompt(db_path):
+    from bot.message_handler import think_and_plan
+    from db.queries import insert_conversation_turn
+    insert_conversation_turn(db_path, "user", "Earlier question")
+    insert_conversation_turn(db_path, "assistant", "Earlier answer")
+    history = [
+        {"role": "user",      "body": "Earlier question", "ts": "2026-03-28 10:00:00"},
+        {"role": "assistant", "body": "Earlier answer",   "ts": "2026-03-28 10:00:05"},
+    ]
+    captured = []
+    def capture(prompt, **kw):
+        captured.append(prompt)
+        return '{"ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
+    with patch("bot.message_handler.call_claude", side_effect=capture):
+        think_and_plan("New question", [ANCHOR], [], db_path, history=history)
+    assert "Earlier question" in captured[0]
+    assert "Earlier answer" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# handle_message — persists conversation turn
+# ---------------------------------------------------------------------------
+
+def test_handle_message_persists_conversation_turn(db_path):
+    from bot.message_handler import handle_message
+    from db.queries import get_recent_history
+    dispatch_result = '{"report": "Done.", "mutations": []}'
+    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
+    memory_result = '{"memory_dispatches": []}'
+    final_result = '{"message": "All good!", "mutations": []}'
+    call_returns = iter([
+        '{"ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}',
+        dispatch_result, eval_result, memory_result, final_result,
+    ])
+    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
+        with patch("bot.message_handler.DB_PATH", db_path):
+            handle_message("How am I doing?", [].append)
+    history = get_recent_history(db_path)
+    assert any(r["role"] == "user" and r["body"] == "How am I doing?" for r in history)
+    assert any(r["role"] == "assistant" and r["body"] == "All good!" for r in history)
