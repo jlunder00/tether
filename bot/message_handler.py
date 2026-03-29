@@ -42,6 +42,7 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
 
 MAX_ORCHESTRATION_ROUNDS = 3
+MAX_CONTEXT_ROUNDS = 4
 HISTORY_EXCHANGES = 5
 
 
@@ -54,6 +55,62 @@ def _format_history(history: list[dict]) -> str:
         ts = row["ts"][:16] if row["ts"] else ""
         lines.append(f"[{ts}] {label}: {row['body']}")
     return "\n".join(lines)
+
+
+def _fetch_requested_context(requests: list[dict], db_path: Path, round_num: int) -> str:
+    """Resolve a list of context requests into a formatted string block."""
+    today = str(date_type.today())
+    sections: list[str] = [f"## Fetched context (round {round_num})"]
+    for req in requests:
+        kind = req.get("kind")
+        if kind == "context_entry":
+            subject = req.get("subject", "")
+            entries = get_context_entries(db_path, prefix=subject)
+            if entries:
+                for e in entries:
+                    sections.append(f"### Context: {e['subject']}\n{e['body']}")
+            else:
+                sections.append(f"### Context: {subject}\n(not found)")
+        elif kind == "plan":
+            date = req.get("date", today)
+            plan = get_plan(db_path, date)
+            lines = [f"### Plan: {date}"]
+            for anchor_id, anchor_data in plan.get("anchors", {}).items():
+                lines.append(f"**{anchor_id}**")
+                for task in anchor_data.get("tasks", []):
+                    lines.append(f"- {task}")
+            if not plan.get("anchors"):
+                lines.append("(no tasks)")
+            sections.append("\n".join(lines))
+        elif kind == "anchor_detail":
+            anchor_id = req.get("anchor_id", "")
+            anchors = get_anchors(db_path)
+            anchor = next((a for a in anchors if a["id"] == anchor_id), None)
+            if anchor:
+                sections.append(
+                    f"### Anchor: {anchor_id}\n"
+                    f"Name: {anchor['name']}, Time: {anchor['time']}, "
+                    f"Duration: {anchor['duration_minutes']}min"
+                )
+            else:
+                sections.append(f"### Anchor: {anchor_id}\n(not found)")
+        elif kind == "check_in_log":
+            date = req.get("date", today)
+            plan = get_plan(db_path, date)
+            log = plan.get("check_in_log", [])
+            if log:
+                lines = [f"### Check-in log: {date}"]
+                for entry in log:
+                    lines.append(
+                        f"- [{entry.get('timestamp', '')}] {entry.get('anchor_id', '')}: "
+                        f"{entry.get('accomplished', '')}"
+                    )
+                sections.append("\n".join(lines))
+            else:
+                sections.append(f"### Check-in log: {date}\n(none)")
+        else:
+            logger.warning("Unknown context request kind: %s", kind)
+    return "\n\n".join(sections)
 
 
 def load_config() -> dict:
@@ -138,8 +195,16 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
 
 def think_and_plan(user_message: str, anchors: list[dict],
                    all_subjects: list[str], db_path: Path,
-                   history: list[dict] | None = None) -> dict:
-    """Read today's plan + context subjects, reason about intent, produce ack + dispatches."""
+                   history: list[dict] | None = None,
+                   extra_context: list[str] | None = None,
+                   round_num: int = 0,
+                   force_dispatch: bool = False) -> dict:
+    """Reason about the user's intent and produce either a dispatch plan or a context request.
+
+    Returns a dict with a 'type' key:
+      {"type": "dispatch",         "ack": ..., "dispatches": [...]}
+      {"type": "request_context",  "requests": [...], "reason": "..."}
+    """
     today = str(date_type.today())
     plan = get_plan(db_path, today)
     current_anchor_obj = get_current_anchor(anchors)
@@ -147,6 +212,7 @@ def think_and_plan(user_message: str, anchors: list[dict],
         f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors
     )
     subjects_summary = "\n".join(f"- {s}" for s in all_subjects)
+    accumulated = "\n\n".join(extra_context) if extra_context else ""
     template = _jinja.get_template("think_and_plan.md")
     prompt = template.render(
         date=today,
@@ -156,17 +222,31 @@ def think_and_plan(user_message: str, anchors: list[dict],
         subjects=subjects_summary,
         user_message=user_message,
         history=_format_history(history or []),
+        accumulated_context=accumulated,
+        rounds_remaining=MAX_CONTEXT_ROUNDS - round_num,
+        force_dispatch=force_dispatch,
     )
+    _fallback = {"type": "dispatch", "ack": None,
+                 "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}
     try:
         raw = call_claude(prompt, timeout=60)
         data = _parse_json(raw)
+        response_type = data.get("type", "dispatch")
+        if response_type == "request_context" and not force_dispatch:
+            return {
+                "type": "request_context",
+                "requests": data.get("requests", []),
+                "reason": data.get("reason", ""),
+            }
         return {
+            "type": "dispatch",
             "ack": data.get("ack"),
-            "dispatches": data.get("dispatches", [{"action": "chat", "subjects": [], "instructions": ""}]),
+            "dispatches": data.get("dispatches",
+                                   [{"action": "chat", "subjects": [], "instructions": ""}]),
         }
     except Exception as e:
         logger.warning("think_and_plan failed (%s), falling back to single chat call", e)
-        return {"ack": None, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}
+        return _fallback
 
 
 # ---------------------------------------------------------------------------
@@ -445,8 +525,25 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
     # Free text: full orchestrator pipeline
     history = get_recent_history(db_path, HISTORY_EXCHANGES)
     all_subjects = [e["subject"] for e in get_context_entries(db_path)]
-    result = think_and_plan(text, anchors, all_subjects, db_path, history)
-    final = _orchestrate(text, result["dispatches"], result["ack"], db_path, send_fn, history)
+
+    accumulated_context: list[str] = []
+    result: dict = {}
+    for round_num in range(MAX_CONTEXT_ROUNDS + 1):
+        force = round_num == MAX_CONTEXT_ROUNDS
+        result = think_and_plan(
+            text, anchors, all_subjects, db_path,
+            history=history,
+            extra_context=accumulated_context,
+            round_num=round_num,
+            force_dispatch=force,
+        )
+        if result["type"] == "request_context" and not force:
+            fetched = _fetch_requested_context(result["requests"], db_path, round_num + 1)
+            accumulated_context.append(fetched)
+        else:
+            break
+
+    final = _orchestrate(text, result["dispatches"], result.get("ack"), db_path, send_fn, history)
     insert_conversation_turn(db_path, "user", text)
     if final:
         insert_conversation_turn(db_path, "assistant", final)
