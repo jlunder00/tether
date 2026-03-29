@@ -54,6 +54,45 @@ def test_call_claude_raises_on_timeout():
             call_claude("some prompt")
 
 
+def test_call_claude_no_model_role_omits_model_flag():
+    from bot.message_handler import call_claude
+    mock_result = type("R", (), {"stdout": "hi", "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        call_claude("test prompt")
+    cmd = mock_run.call_args[0][0]
+    assert "--model" not in cmd
+    assert cmd == ["claude", "-p", "test prompt"]
+
+
+def test_call_claude_with_model_role_injects_model_flag():
+    from bot.message_handler import call_claude, _MODEL_DEFAULTS
+    mock_result = type("R", (), {"stdout": "hi", "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        with patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+            call_claude("test prompt", model_role="orchestrator")
+    cmd = mock_run.call_args[0][0]
+    assert "--model" in cmd
+    assert _MODEL_DEFAULTS["orchestrator"] in cmd
+
+
+def test_get_model_returns_config_value_when_present():
+    from bot.message_handler import get_model
+    with patch("bot.message_handler.load_config", return_value={"models": {"orchestrator": "custom-model"}}):
+        assert get_model("orchestrator") == "custom-model"
+
+
+def test_get_model_falls_back_to_default_when_key_missing():
+    from bot.message_handler import get_model, _MODEL_DEFAULTS
+    with patch("bot.message_handler.load_config", return_value={"models": {}}):
+        assert get_model("orchestrator") == _MODEL_DEFAULTS["orchestrator"]
+
+
+def test_get_model_falls_back_when_config_missing():
+    from bot.message_handler import get_model, _MODEL_DEFAULTS
+    with patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+        assert get_model("meta_eval") == _MODEL_DEFAULTS["meta_eval"]
+
+
 # ---------------------------------------------------------------------------
 # apply_mutations — patch/append ops
 # ---------------------------------------------------------------------------

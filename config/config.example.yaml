@@ -19,3 +19,15 @@ follow_up:
   enabled: true
   interval_minutes: 15
   max_attempts: 4
+
+# LLM model assignments per pipeline role.
+# Values are passed directly to the --model flag of `claude -p`.
+# Remove any key to fall back to the built-in default for that role.
+models:
+  orchestrator:              claude-sonnet-4-6
+  meta_eval:                 claude-haiku-4-5-20251001
+  meta_eval_repair:          claude-haiku-4-5-20251001
+  meta_eval_repair_escalate: claude-sonnet-4-6
+  execution_subagent:        claude-haiku-4-5-20251001
+  satisfaction_eval:         claude-haiku-4-5-20251001
+  response_builder:          claude-sonnet-4-6

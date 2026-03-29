@@ -45,6 +45,16 @@ MAX_ORCHESTRATION_ROUNDS = 3
 MAX_CONTEXT_ROUNDS = 4
 HISTORY_EXCHANGES = 5
 
+_MODEL_DEFAULTS: dict[str, str] = {
+    "orchestrator":              "claude-sonnet-4-6",
+    "meta_eval":                 "claude-haiku-4-5-20251001",
+    "meta_eval_repair":          "claude-haiku-4-5-20251001",
+    "meta_eval_repair_escalate": "claude-sonnet-4-6",
+    "execution_subagent":        "claude-haiku-4-5-20251001",
+    "satisfaction_eval":         "claude-haiku-4-5-20251001",
+    "response_builder":          "claude-sonnet-4-6",
+}
+
 
 def _format_history(history: list[dict]) -> str:
     if not history:
@@ -118,12 +128,22 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def call_claude(prompt: str, timeout: int = 180) -> str:
+def get_model(role: str) -> str:
+    """Return the model string for a pipeline role, reading from config with fallback."""
+    try:
+        config = load_config()
+        return config.get("models", {}).get(role) or _MODEL_DEFAULTS[role]
+    except Exception:
+        return _MODEL_DEFAULTS.get(role, "claude-sonnet-4-6")
+
+
+def call_claude(prompt: str, timeout: int = 180, model_role: str | None = None) -> str:
+    cmd = ["claude", "-p", prompt]
+    if model_role is not None:
+        cmd = ["claude", "-p", "--model", get_model(model_role), prompt]
     try:
         result = subprocess.run(
-            ["claude", "-p", prompt],
-            capture_output=True, text=True, check=True,
-            timeout=timeout,
+            cmd, capture_output=True, text=True, check=True, timeout=timeout,
         )
         return result.stdout.strip()
     except subprocess.TimeoutExpired:
