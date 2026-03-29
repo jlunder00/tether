@@ -357,7 +357,7 @@ def test_handle_message_persists_conversation_turn(db_path):
     memory_result = '{"memory_dispatches": []}'
     final_result = '{"message": "All good!", "mutations": []}'
     call_returns = iter([
-        '{"ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}',
+        '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}',
         dispatch_result, eval_result, memory_result, final_result,
     ])
     with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
@@ -366,3 +366,189 @@ def test_handle_message_persists_conversation_turn(db_path):
     history = get_recent_history(db_path)
     assert any(r["role"] == "user" and r["body"] == "How am I doing?" for r in history)
     assert any(r["role"] == "assistant" and r["body"] == "All good!" for r in history)
+
+
+# ---------------------------------------------------------------------------
+# _fetch_requested_context
+# ---------------------------------------------------------------------------
+
+def test_fetch_context_entry(db_path):
+    upsert_context_entry(db_path, "Intellipat", "Main entry.")
+    upsert_context_entry(db_path, "Intellipat/Backend", "Backend details.")
+    from bot.message_handler import _fetch_requested_context
+    result = _fetch_requested_context(
+        [{"kind": "context_entry", "subject": "Intellipat"}], db_path, round_num=1
+    )
+    assert "Main entry." in result
+    assert "Backend details." in result
+    assert "Fetched context (round 1)" in result
+
+
+def test_fetch_context_entry_not_found(db_path):
+    from bot.message_handler import _fetch_requested_context
+    result = _fetch_requested_context(
+        [{"kind": "context_entry", "subject": "Nonexistent"}], db_path, round_num=1
+    )
+    assert "not found" in result
+
+
+def test_fetch_plan(db_path):
+    from bot.message_handler import _fetch_requested_context
+    from db.queries import upsert_plan, upsert_tasks
+    upsert_plan(db_path, "2026-03-30")
+    upsert_tasks(db_path, "2026-03-30", "grind_am", ["Apply to jobs"], notes="")
+    result = _fetch_requested_context(
+        [{"kind": "plan", "date": "2026-03-30"}], db_path, round_num=1
+    )
+    assert "Apply to jobs" in result
+    assert "2026-03-30" in result
+
+
+def test_fetch_anchor_detail(db_path):
+    from bot.message_handler import _fetch_requested_context
+    result = _fetch_requested_context(
+        [{"kind": "anchor_detail", "anchor_id": "grind_am"}], db_path, round_num=1
+    )
+    assert "grind_am" in result
+    assert "The Grind" in result
+
+
+def test_fetch_check_in_log(db_path):
+    from bot.message_handler import _fetch_requested_context
+    from db.queries import insert_check_in
+    insert_check_in(db_path, TODAY, "grind_am", "Applied to 2 jobs", "on track")
+    result = _fetch_requested_context(
+        [{"kind": "check_in_log", "date": TODAY}], db_path, round_num=1
+    )
+    assert "Applied to 2 jobs" in result
+
+
+def test_fetch_multiple_kinds(db_path):
+    from bot.message_handler import _fetch_requested_context
+    upsert_context_entry(db_path, "General", "General notes.")
+    result = _fetch_requested_context([
+        {"kind": "context_entry", "subject": "General"},
+        {"kind": "anchor_detail", "anchor_id": "grind_am"},
+    ], db_path, round_num=2)
+    assert "General notes." in result
+    assert "The Grind" in result
+
+
+# ---------------------------------------------------------------------------
+# think_and_plan — request_context type
+# ---------------------------------------------------------------------------
+
+def test_think_and_plan_returns_request_context(db_path):
+    from bot.message_handler import think_and_plan
+    response = json.dumps({
+        "type": "request_context",
+        "requests": [{"kind": "context_entry", "subject": "Intellipat"}],
+        "reason": "Need to read Intellipat before planning.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = think_and_plan("Update Intellipat context", [ANCHOR], ["Intellipat"], db_path)
+    assert result["type"] == "request_context"
+    assert result["requests"][0]["subject"] == "Intellipat"
+
+
+def test_think_and_plan_force_dispatch_overrides_request_context(db_path):
+    from bot.message_handler import think_and_plan
+    # Even if claude returns request_context, force_dispatch=True should yield dispatch
+    response = json.dumps({
+        "type": "request_context",
+        "requests": [{"kind": "context_entry", "subject": "Intellipat"}],
+        "reason": "Still need more context.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = think_and_plan("whatever", [ANCHOR], [], db_path, force_dispatch=True)
+    assert result["type"] == "dispatch"
+
+
+def test_think_and_plan_accumulated_context_in_prompt(db_path):
+    from bot.message_handler import think_and_plan
+    captured = []
+    def capture(prompt, **kw):
+        captured.append(prompt)
+        return '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
+    with patch("bot.message_handler.call_claude", side_effect=capture):
+        think_and_plan(
+            "New question", [ANCHOR], [], db_path,
+            extra_context=["## Fetched context (round 1)\n### Context: Foo\nFoo body."],
+        )
+    assert "Foo body." in captured[0]
+
+
+def test_think_and_plan_rounds_remaining_in_prompt(db_path):
+    from bot.message_handler import think_and_plan
+    captured = []
+    def capture(prompt, **kw):
+        captured.append(prompt)
+        return '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
+    with patch("bot.message_handler.call_claude", side_effect=capture):
+        think_and_plan("hi", [ANCHOR], [], db_path, round_num=2)
+    # MAX_CONTEXT_ROUNDS=4, round_num=2 → 2 remaining
+    assert "2 request round" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# handle_message — context request loop
+# ---------------------------------------------------------------------------
+
+def test_handle_message_loops_on_request_context(db_path):
+    """Bot makes one context request then dispatches."""
+    from bot.message_handler import handle_message
+    request_ctx_response = json.dumps({
+        "type": "request_context",
+        "requests": [{"kind": "context_entry", "subject": "Job Applications"}],
+        "reason": "Need job app status.",
+    })
+    dispatch_response = json.dumps({
+        "type": "dispatch",
+        "ack": None,
+        "dispatches": [{"action": "chat", "subjects": ["Job Applications"], "instructions": "Answer."}],
+    })
+    subagent_result = '{"report": "Answered.", "mutations": []}'
+    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
+    memory_result = '{"memory_dispatches": []}'
+    final_result = '{"message": "Here you go.", "mutations": []}'
+
+    sent = []
+    call_returns = iter([
+        request_ctx_response,   # think_and_plan round 0 → request_context
+        dispatch_response,      # think_and_plan round 1 → dispatch
+        subagent_result, eval_result, memory_result, final_result,
+    ])
+    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
+        with patch("bot.message_handler.DB_PATH", db_path):
+            handle_message("What's my job app status?", sent.append)
+    assert sent == ["Here you go."]
+
+
+def test_handle_message_force_dispatch_after_max_rounds(db_path):
+    """After MAX_CONTEXT_ROUNDS of request_context, force a dispatch."""
+    from bot.message_handler import handle_message, MAX_CONTEXT_ROUNDS
+    request_ctx_response = json.dumps({
+        "type": "request_context",
+        "requests": [{"kind": "context_entry", "subject": "Foo"}],
+        "reason": "Always need more.",
+    })
+    forced_dispatch = json.dumps({
+        "type": "dispatch",
+        "ack": None,
+        "dispatches": [{"action": "chat", "subjects": [], "instructions": "Best effort."}],
+    })
+    subagent_result = '{"report": "Done.", "mutations": []}'
+    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
+    memory_result = '{"memory_dispatches": []}'
+    final_result = '{"message": "Done!", "mutations": []}'
+
+    # MAX_CONTEXT_ROUNDS calls returning request_context, then 1 forced dispatch call
+    call_sequence = [request_ctx_response] * MAX_CONTEXT_ROUNDS + [
+        forced_dispatch, subagent_result, eval_result, memory_result, final_result
+    ]
+    sent = []
+    call_returns = iter(call_sequence)
+    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
+        with patch("bot.message_handler.DB_PATH", db_path):
+            handle_message("Need help.", sent.append)
+    assert sent == ["Done!"]
