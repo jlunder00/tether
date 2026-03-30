@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from api.routes import plan as plan_routes
 from api.routes import anchors as anchor_routes
 from api.routes import context as context_routes
+from api.routes import logs as logs_routes
 from api.ws import manager
 import api.config as cfg
 
@@ -18,6 +19,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(plan_routes.router, prefix="/api")
     app.include_router(anchor_routes.router, prefix="/api")
     app.include_router(context_routes.router, prefix="/api")
+    app.include_router(logs_routes.router, prefix="/api")
 
     @app.post("/api/notify")
     async def notify():

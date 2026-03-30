@@ -27,6 +27,7 @@ from db.queries import (
     insert_check_in,
     insert_conversation_turn,
     list_plan_dates,
+    log_stage,
     patch_anchor,
     upsert_context_entry,
     upsert_plan,
@@ -54,6 +55,25 @@ HISTORY_EXCHANGES = 5
 MAX_PLANNING_ROUNDS = 4
 MAX_REPAIR_ATTEMPTS = 3
 MAX_SATISFACTION_RETRIES = 2
+
+# Module-level log context — set once per _run_v2_planning_loop call.
+# Safe because the bot is single-threaded.
+_log_ctx: dict = {"db_path": None, "session_id": None}
+
+
+def _set_log_context(db_path: Path, session_id: str) -> None:
+    _log_ctx["db_path"] = db_path
+    _log_ctx["session_id"] = session_id
+
+
+def _log_safe(stage: str, prompt: str, response: str, error: str | None = None) -> None:
+    """Log a pipeline stage if log context is set. Never raises."""
+    try:
+        if _log_ctx["db_path"] and _log_ctx["session_id"]:
+            log_stage(_log_ctx["db_path"], _log_ctx["session_id"], stage, prompt, response, error)
+    except Exception:
+        pass
+
 
 _MODEL_DEFAULTS: dict[str, str] = {
     "orchestrator":              "claude-sonnet-4-6",
@@ -147,16 +167,23 @@ def get_model(role: str) -> str:
         return _MODEL_DEFAULTS.get(role, "claude-sonnet-4-6")
 
 
-def call_claude(prompt: str, timeout: int = 180, model_role: str | None = None) -> str:
-    cmd = ["claude", "-p", prompt]
+def call_claude(prompt: str, timeout: int = 180, model_role: str | None = None,
+                stage: str = "") -> str:
+    cmd = ["claude", "-p", "--strict-mcp-config"]
     if model_role is not None:
-        cmd = ["claude", "-p", "--model", get_model(model_role), prompt]
+        cmd += ["--model", get_model(model_role)]
+    cmd.append(prompt)
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, check=True, timeout=timeout,
         )
-        return result.stdout.strip()
+        out = result.stdout.strip()
+        if stage:
+            _log_safe(stage, prompt, out)
+        return out
     except subprocess.TimeoutExpired:
+        if stage:
+            _log_safe(stage, prompt, "", f"timeout after {timeout}s")
         raise RuntimeError(f"Claude timed out after {timeout}s. Try a simpler request.")
 
 
@@ -278,6 +305,7 @@ def call_orchestrator(
     meta_eval_summary: str,
     fetched_context: str,
     anchors: list[dict],
+    stage: str = "orchestrator",
 ) -> str:
     """Call the orchestrator. Returns raw plain-text reasoning (not JSON)."""
     current_anchor = get_current_anchor(anchors)
@@ -293,7 +321,7 @@ def call_orchestrator(
         prior_conversation=_format_orchestrator_conversation(conversation),
         user_message=user_message,
     )
-    return call_claude(prompt, timeout=60, model_role="orchestrator")
+    return call_claude(prompt, timeout=60, model_role="orchestrator", stage=stage)
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +382,8 @@ def call_meta_eval(
 
     raw = ""
     try:
-        raw = call_claude(prompt, timeout=45, model_role="meta_eval")
+        raw = call_claude(prompt, timeout=45, model_role="meta_eval",
+                          stage=f"meta_eval_{round_num}")
         return _parse_json(raw)
     except Exception:
         pass
@@ -366,7 +395,8 @@ def call_meta_eval(
     for attempt in range(MAX_REPAIR_ATTEMPTS):
         role = "meta_eval_repair_escalate" if attempt == MAX_REPAIR_ATTEMPTS - 1 else "meta_eval_repair"
         try:
-            repaired = call_claude(repair_prompt, timeout=45, model_role=role)
+            repaired = call_claude(repair_prompt, timeout=45, model_role=role,
+                                   stage=f"meta_eval_repair_{round_num}_{attempt}")
             return _parse_json(repaired)
         except Exception:
             continue
@@ -423,7 +453,8 @@ def _dispatch_single_subagent(
         return f"SKIPPED: unknown type {op_type!r}"
 
     try:
-        raw = call_claude(prompt, timeout=120, model_role="execution_subagent")
+        raw = call_claude(prompt, timeout=120, model_role="execution_subagent",
+                          stage=f"subagent_{op_type}")
         data = _parse_json(raw)
         report = data.get("report", "")
         db_mutation = {k: v for k, v in data.items() if k != "report"}
@@ -474,7 +505,8 @@ def call_satisfaction_eval(
         db_state=db_state,
     )
     try:
-        raw = call_claude(prompt, timeout=45, model_role="satisfaction_eval")
+        raw = call_claude(prompt, timeout=45, model_role="satisfaction_eval",
+                          stage="satisfaction_eval")
         data = _parse_json(raw)
         return {
             "satisfied": data.get("satisfied", True),
@@ -510,7 +542,8 @@ def call_response_builder(
     )
     raw = ""
     try:
-        raw = call_claude(prompt, timeout=60, model_role="response_builder")
+        raw = call_claude(prompt, timeout=60, model_role="response_builder",
+                          stage="response_builder")
         data = _parse_json(raw)
         return data.get("message", raw)
     except RuntimeError as e:
@@ -564,6 +597,7 @@ def _run_v2_planning_loop(
     available_dates = list(dict.fromkeys([today] + list_plan_dates(db_path)))
     session_id = str(uuid.uuid4())
     clear_session_state(db_path, session_id)
+    _set_log_context(db_path, session_id)
 
     orchestrator_conv: list[dict] = []
     current_mutation_plan: list[dict] = []
@@ -584,6 +618,7 @@ def _run_v2_planning_loop(
             meta_eval_summary=last_meta_summary,
             fetched_context=last_fetched,
             anchors=anchors,
+            stage=f"orchestrator_{round_num}",
         )
         orchestrator_conv.append({"role": "orchestrator", "body": orch_response, "round": round_num})
         insert_orchestrator_turn(db_path, session_id, "orchestrator", orch_response, round_num)

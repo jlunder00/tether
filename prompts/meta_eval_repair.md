@@ -1,3 +1,5 @@
+**You are invoked via `claude -p`. You have no tool access. Produce only JSON output.**
+
 The meta-evaluator produced output that could not be parsed as JSON. Your job is to fix it and return only valid JSON.
 
 ## Malformed output

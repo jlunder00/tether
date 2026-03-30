@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS orchestrator_conversation (
     round_num   INTEGER NOT NULL,
     ts          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS invocation_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT NOT NULL,
+    stage       TEXT NOT NULL,
+    prompt      TEXT NOT NULL DEFAULT '',
+    response    TEXT NOT NULL DEFAULT '',
+    error       TEXT,
+    ts          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

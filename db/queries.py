@@ -221,6 +221,50 @@ def get_staging_mutations(db_path: Path, session_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def log_stage(db_path: Path, session_id: str, stage: str,
+              prompt: str, response: str, error: str | None = None) -> None:
+    """Append one pipeline stage to the invocation log; prune to last 10 sessions."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO invocation_log (session_id, stage, prompt, response, error, ts)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, stage, prompt, response, error, now),
+        )
+        conn.execute("""
+            DELETE FROM invocation_log
+            WHERE session_id NOT IN (
+                SELECT session_id FROM (
+                    SELECT session_id, MAX(ts) AS latest
+                    FROM invocation_log
+                    GROUP BY session_id
+                    ORDER BY latest DESC
+                    LIMIT 10
+                )
+            )
+        """)
+
+
+def get_invocation_log(db_path: Path, n: int = 5) -> list[dict]:
+    """Return all log entries for the last n sessions, oldest first."""
+    with get_db(db_path) as conn:
+        rows = conn.execute("""
+            SELECT id, session_id, stage, prompt, response, error, ts
+            FROM invocation_log
+            WHERE session_id IN (
+                SELECT session_id FROM (
+                    SELECT session_id, MAX(ts) AS latest
+                    FROM invocation_log
+                    GROUP BY session_id
+                    ORDER BY latest DESC
+                    LIMIT ?
+                )
+            )
+            ORDER BY id
+        """, (n,)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def insert_check_in(db_path: Path, date: str, anchor_id: str,
                     accomplished: str, current_status: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
