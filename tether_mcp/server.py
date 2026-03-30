@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from db.queries import (
     get_anchors as _db_get_anchors,
     get_context_entries,
+    get_invocation_log,
     get_plan,
     upsert_context_entry,
     upsert_plan,
@@ -162,6 +163,14 @@ def get_anchors() -> list[dict]:
 def get_current_anchor() -> dict:
     """Get the currently active anchor based on the current time."""
     return _get_current_anchor()
+
+
+@mcp.tool()
+def get_bot_log(n: int = 5) -> list[dict]:
+    """Get the last n bot invocation sessions from the pipeline log.
+    Each entry has: session_id, stage, prompt, response, error, ts.
+    Stages: orchestrator_N, meta_eval_N, meta_eval_repair_N_attempt, subagent_<type>, satisfaction_eval, response_builder."""
+    return get_invocation_log(_db(), n=n)
 
 
 if __name__ == "__main__":

@@ -61,7 +61,16 @@ def test_call_claude_no_model_role_omits_model_flag():
         call_claude("test prompt")
     cmd = mock_run.call_args[0][0]
     assert "--model" not in cmd
-    assert cmd == ["claude", "-p", "test prompt"]
+    assert cmd == ["claude", "-p", "--strict-mcp-config", "test prompt"]
+
+
+def test_call_claude_includes_strict_mcp_config():
+    from bot.message_handler import call_claude
+    mock_result = type("R", (), {"stdout": "hi", "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        call_claude("test prompt", model_role="orchestrator")
+    cmd = mock_run.call_args[0][0]
+    assert "--strict-mcp-config" in cmd
 
 
 def test_call_claude_with_model_role_injects_model_flag():

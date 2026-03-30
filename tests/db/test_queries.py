@@ -11,6 +11,7 @@ from db.queries import (
     clear_session_state,
     insert_orchestrator_turn, get_orchestrator_conversation,
     upsert_staging_mutation, get_staging_mutations,
+    log_stage, get_invocation_log,
 )
 
 
@@ -252,3 +253,54 @@ def test_init_creates_new_tables(db_path):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     assert "staging_mutations" in tables
     assert "orchestrator_conversation" in tables
+    assert "invocation_log" in tables
+
+
+# ---------------------------------------------------------------------------
+# invocation_log
+# ---------------------------------------------------------------------------
+
+def test_log_stage_inserts_entry(db_path):
+    log_stage(db_path, "sess1", "orchestrator_0", "the prompt", "the response")
+    entries = get_invocation_log(db_path, n=1)
+    assert len(entries) == 1
+    assert entries[0]["session_id"] == "sess1"
+    assert entries[0]["stage"] == "orchestrator_0"
+    assert entries[0]["prompt"] == "the prompt"
+    assert entries[0]["response"] == "the response"
+    assert entries[0]["error"] is None
+
+
+def test_log_stage_records_error(db_path):
+    log_stage(db_path, "sess1", "meta_eval_0", "prompt", "", error="timeout after 45s")
+    entries = get_invocation_log(db_path, n=1)
+    assert entries[0]["error"] == "timeout after 45s"
+
+
+def test_get_invocation_log_returns_n_sessions(db_path):
+    for i in range(4):
+        log_stage(db_path, f"sess{i}", f"stage_{i}", "p", "r")
+    # n=2 should return only the last 2 sessions
+    entries = get_invocation_log(db_path, n=2)
+    session_ids = {e["session_id"] for e in entries}
+    assert session_ids == {"sess2", "sess3"}
+
+
+def test_log_stage_prunes_beyond_10_sessions(db_path):
+    for i in range(12):
+        log_stage(db_path, f"sess{i}", "stage", "p", "r")
+    entries = get_invocation_log(db_path, n=99)
+    session_ids = {e["session_id"] for e in entries}
+    # Only the 10 most recent sessions survive
+    assert len(session_ids) == 10
+    assert "sess0" not in session_ids
+    assert "sess1" not in session_ids
+    assert "sess11" in session_ids
+
+
+def test_get_invocation_log_multiple_stages_per_session(db_path):
+    for stage in ["orchestrator_0", "meta_eval_0", "subagent_update_plan", "response_builder"]:
+        log_stage(db_path, "sess1", stage, "prompt", "response")
+    entries = get_invocation_log(db_path, n=1)
+    stages = [e["stage"] for e in entries]
+    assert stages == ["orchestrator_0", "meta_eval_0", "subagent_update_plan", "response_builder"]
