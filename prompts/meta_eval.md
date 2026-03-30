@@ -77,4 +77,5 @@ Respond with JSON only — no explanation, no markdown fences.
 - The mutation plan is cumulative — include unchanged mutations from the current plan.
 - Set orchestrator_done to true when: no new context was fetched AND the plan is complete AND no ambiguities remain.
 - If new context was fetched this round, set orchestrator_done to false — the orchestrator must see it.
-- For multi-date moves: two update_plan_tasks mutations (one to clear source, one to set destination).
+- **Moving tasks between dates requires TWO mutations per block: one to SET the destination and one to CLEAR the source (tasks: []). Order matters: always put all destination-SET mutations before any source-CLEAR mutations.** This way if a copy fails mid-way, the source data is still intact. Example: moving block X from 2026-03-29 to 2026-03-30 → first `{..., "date": "2026-03-30", "tasks": [...]}`, then `{..., "date": "2026-03-29", "tasks": []}`.
+- If the orchestrator says "move", always stage both halves in that order. If they say "copy", stage only the destination mutations.
