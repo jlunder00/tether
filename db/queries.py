@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from db.schema import get_db
@@ -60,17 +62,53 @@ def get_plan(db_path: Path, date: str) -> dict:
                 "acknowledgements": acknowledgements, "check_in_log": check_in_log}
 
 
-def upsert_tasks(db_path: Path, date: str, anchor_id: str,
-                 tasks: list[str], notes: str) -> None:
+def upsert_tasks(
+    db_path: Path, date: str, anchor_id: str,
+    tasks: list[dict], notes: str = "",
+) -> list[dict]:
+    """Merge task list for (date, anchor_id). Each task: {id?, text, status?, followup_config?}.
+    Accepts plain strings for backward compatibility. Returns list with UUIDs populated."""
+    task_dicts = [
+        {"text": t, "status": "pending"} if isinstance(t, str) else t
+        for t in tasks
+    ]
     with get_db(db_path) as conn:
-        conn.execute(
-            "DELETE FROM tasks WHERE plan_date=? AND anchor_id=?", (date, anchor_id)
-        )
-        for i, text in enumerate(tasks):
-            conn.execute(
-                "INSERT INTO tasks (plan_date, anchor_id, position, text, notes) VALUES (?,?,?,?,?)",
-                (date, anchor_id, i, text, notes)
+        existing_uuids = {
+            row["uuid"]
+            for row in conn.execute(
+                "SELECT uuid FROM tasks WHERE plan_date=? AND anchor_id=? AND uuid IS NOT NULL",
+                (date, anchor_id),
             )
+        }
+        incoming_uuids = {t["id"] for t in task_dicts if t.get("id")}
+        for uid in existing_uuids - incoming_uuids:
+            conn.execute("DELETE FROM tasks WHERE uuid=?", (uid,))
+
+        result = []
+        for pos, task in enumerate(task_dicts):
+            uid = task.get("id") or ""
+            status = task.get("status", "pending")
+            fc = task.get("followup_config")
+            fc_json = json.dumps(fc) if fc is not None else None
+            if uid and uid in existing_uuids:
+                conn.execute(
+                    "UPDATE tasks SET text=?, status=?, position=?, followup_config=?, notes=? "
+                    "WHERE uuid=?",
+                    (task["text"], status, pos, fc_json, notes, uid),
+                )
+            else:
+                uid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO tasks (uuid, plan_date, anchor_id, position, text, status, "
+                    "followup_config, notes) VALUES (?,?,?,?,?,?,?,?)",
+                    (uid, date, anchor_id, pos, task["text"], status, fc_json, notes),
+                )
+            result.append({
+                "id": uid, "text": task["text"], "status": status,
+                "position": pos, "followup_config": fc,
+                "blocks": [], "blocked_by": [],
+            })
+        return result
 
 
 def upsert_context_entry(db_path: Path, subject: str, body: str) -> None:
