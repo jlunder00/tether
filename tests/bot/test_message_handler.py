@@ -337,3 +337,194 @@ def test_handle_message_force_dispatch_after_max_rounds(db_path):
 
     # Should have called meta_eval exactly MAX_PLANNING_ROUNDS + 1 times (rounds 0..MAX)
     assert call_count["n"] == MAX_PLANNING_ROUNDS + 1
+
+
+# ---------------------------------------------------------------------------
+# call_meta_eval — valid JSON, repair escalation, sentinel
+# ---------------------------------------------------------------------------
+
+def _meta_valid():
+    return json.dumps({
+        "summary": "Staging a plan update.",
+        "context_to_fetch": [],
+        "mutation_plan": [{"id": "m1", "type": "chat", "description": "Hi", "message": "Hello!"}],
+        "orchestrator_done": True,
+    })
+
+
+def _meta_eval_kwargs(db_path):
+    from db.queries import get_anchors
+    return dict(
+        orchestrator_conversation=[{"role": "orchestrator", "body": "Say hi", "round": 0}],
+        current_mutation_plan=[],
+        fetched_context_log=[],
+        anchors=get_anchors(db_path),
+        all_subjects=["Job Applications"],
+        available_dates=[TODAY],
+        today=TODAY,
+        round_num=0,
+        max_rounds=4,
+        force_done=False,
+    )
+
+
+def test_call_meta_eval_valid_json(db_path):
+    from bot.message_handler import call_meta_eval
+    with patch("bot.message_handler.call_claude", return_value=_meta_valid()):
+        result = call_meta_eval(**_meta_eval_kwargs(db_path))
+    assert result["summary"] == "Staging a plan update."
+    assert result["orchestrator_done"] is True
+    assert result["mutation_plan"][0]["type"] == "chat"
+    assert "_parse_error" not in result
+
+
+def test_call_meta_eval_repair_escalation_haiku_x2_then_sonnet(db_path):
+    """meta_eval bad → repair haiku x2 bad → repair sonnet succeeds."""
+    from bot.message_handler import call_meta_eval
+    # calls: meta_eval, repair-haiku-0, repair-haiku-1, repair-sonnet-2
+    side_effects = ["not json", "not json", "not json", _meta_valid()]
+    with patch("bot.message_handler.call_claude", side_effect=side_effects):
+        result = call_meta_eval(**_meta_eval_kwargs(db_path))
+    assert result["orchestrator_done"] is True
+    assert "_parse_error" not in result
+
+
+def test_call_meta_eval_all_repairs_fail_returns_sentinel(db_path):
+    """All 4 calls return bad JSON → sentinel with _parse_error: True."""
+    from bot.message_handler import call_meta_eval
+    prior_plan = [{"id": "m0", "type": "chat", "description": "prev"}]
+    kwargs = _meta_eval_kwargs(db_path)
+    kwargs["current_mutation_plan"] = prior_plan
+    with patch("bot.message_handler.call_claude", return_value="not json"):
+        result = call_meta_eval(**kwargs)
+    assert result["_parse_error"] is True
+    assert result["orchestrator_done"] is False
+    # preserves the prior mutation plan
+    assert result["mutation_plan"] == prior_plan
+
+
+# ---------------------------------------------------------------------------
+# _run_v2_planning_loop — parse error counter aborts
+# ---------------------------------------------------------------------------
+
+def test_run_v2_planning_loop_aborts_on_repeated_parse_errors(db_path):
+    """Three consecutive _parse_error responses should raise RuntimeError."""
+    from bot.message_handler import _run_v2_planning_loop
+    anchors = get_anchors(db_path)
+    sentinel = {
+        "summary": "error",
+        "context_to_fetch": [],
+        "mutation_plan": [],
+        "orchestrator_done": False,
+        "_parse_error": True,
+    }
+    with patch("bot.message_handler.call_orchestrator", return_value="thinking."), \
+         patch("bot.message_handler.call_meta_eval", return_value=sentinel):
+        with pytest.raises(RuntimeError, match="planning process"):
+            _run_v2_planning_loop("help me", anchors, [], db_path, TODAY)
+
+
+# ---------------------------------------------------------------------------
+# dispatch_typed_subagents — routing
+# ---------------------------------------------------------------------------
+
+def test_dispatch_typed_subagents_routes_upsert_mutation(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutation = {
+        "id": "m1",
+        "type": "update_plan_tasks",
+        "description": "Set grind_am tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": ["Apply to 3 jobs"],
+    }
+    subagent_response = json.dumps({
+        "op": "update_plan_tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": ["Apply to 3 jobs"],
+        "report": "Set grind_am tasks to 1 item.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=subagent_response):
+        reports, chat_messages = dispatch_typed_subagents([mutation], "Do the thing.", db_path)
+    assert len(reports) == 1
+    assert reports[0] == "Set grind_am tasks to 1 item."
+    assert chat_messages == []
+
+
+def test_dispatch_typed_subagents_chat_captured_not_dispatched(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutations = [
+        {"id": "c1", "type": "chat", "description": "Answer question", "message": "Here's the answer."},
+    ]
+    with patch("bot.message_handler.call_claude") as mock_claude:
+        reports, chat_messages = dispatch_typed_subagents(mutations, "Brief.", db_path)
+    mock_claude.assert_not_called()
+    assert reports == []
+    assert chat_messages == ["Here's the answer."]
+
+
+def test_dispatch_typed_subagents_routes_patch_mutation(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutation = {
+        "id": "p1",
+        "type": "patch_context",
+        "description": "Update priority",
+        "subject": "Job Applications",
+        "old": "Priority 1.",
+        "new": "Priority 1 — applying.",
+    }
+    subagent_response = json.dumps({
+        "op": "patch_context",
+        "subject": "Job Applications",
+        "old": "Priority 1.",
+        "new": "Priority 1 — applying.",
+        "report": "Updated priority line in Job Applications.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=subagent_response):
+        reports, chat_messages = dispatch_typed_subagents([mutation], "Brief.", db_path)
+    assert len(reports) == 1
+    assert "Job Applications" in reports[0] or "priority" in reports[0].lower()
+    assert chat_messages == []
+
+
+# ---------------------------------------------------------------------------
+# call_satisfaction_eval
+# ---------------------------------------------------------------------------
+
+def test_call_satisfaction_eval_satisfied(db_path):
+    from bot.message_handler import call_satisfaction_eval
+    response = json.dumps({"satisfied": True, "issues": [], "replan_needed": False})
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = call_satisfaction_eval(
+            "Update grind_am tasks",
+            [{"id": "m1", "type": "update_plan_tasks", "description": "Set tasks"}],
+            ["Set grind_am tasks to 1 item."],
+            db_path,
+        )
+    assert result["satisfied"] is True
+    assert result["replan_needed"] is False
+    assert result["issues"] == []
+
+
+def test_call_satisfaction_eval_not_satisfied(db_path):
+    from bot.message_handler import call_satisfaction_eval
+    response = json.dumps({
+        "satisfied": False,
+        "issues": ["grind_am tasks were not updated"],
+        "replan_needed": True,
+    })
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = call_satisfaction_eval("Update grind_am tasks", [], [], db_path)
+    assert result["satisfied"] is False
+    assert result["replan_needed"] is True
+    assert len(result["issues"]) == 1
+
+
+def test_call_satisfaction_eval_fails_gracefully(db_path):
+    """If Claude call raises, satisfaction eval defaults to satisfied=True."""
+    from bot.message_handler import call_satisfaction_eval
+    with patch("bot.message_handler.call_claude", side_effect=RuntimeError("timeout")):
+        result = call_satisfaction_eval("anything", [], [], db_path)
+    assert result["satisfied"] is True
+    assert result["replan_needed"] is False
