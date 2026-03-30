@@ -8,6 +8,9 @@ from db.queries import (
     upsert_context_entry, get_context_entries, delete_context_entry,
     rename_context_subject,
     insert_conversation_turn, get_recent_history,
+    clear_session_state,
+    insert_orchestrator_turn, get_orchestrator_conversation,
+    upsert_staging_mutation, get_staging_mutations,
 )
 
 
@@ -171,3 +174,81 @@ def test_get_recent_history_chronological_order(db_path):
     insert_conversation_turn(db_path, "user", "third")
     history = get_recent_history(db_path)
     assert [r["body"] for r in history] == ["first", "second", "third"]
+
+
+# ---------------------------------------------------------------------------
+# orchestrator_conversation + staging_mutations
+# ---------------------------------------------------------------------------
+
+def test_insert_and_get_orchestrator_conversation(db_path):
+    insert_orchestrator_turn(db_path, "sess1", "orchestrator", "I think we should update the plan", 0)
+    insert_orchestrator_turn(db_path, "sess1", "meta_eval", "Fetching Intellipat context", 0)
+    conv = get_orchestrator_conversation(db_path, "sess1")
+    assert len(conv) == 2
+    assert conv[0]["role"] == "orchestrator"
+    assert conv[0]["body"] == "I think we should update the plan"
+    assert conv[0]["round_num"] == 0
+    assert conv[1]["role"] == "meta_eval"
+
+
+def test_get_orchestrator_conversation_empty(db_path):
+    assert get_orchestrator_conversation(db_path, "nonexistent") == []
+
+
+def test_orchestrator_conversation_isolated_by_session(db_path):
+    insert_orchestrator_turn(db_path, "sess1", "orchestrator", "session 1 turn", 0)
+    insert_orchestrator_turn(db_path, "sess2", "orchestrator", "session 2 turn", 0)
+    assert len(get_orchestrator_conversation(db_path, "sess1")) == 1
+    assert len(get_orchestrator_conversation(db_path, "sess2")) == 1
+
+
+def test_upsert_and_get_staging_mutations(db_path):
+    upsert_staging_mutation(db_path, "sess1", "mut1", "update_plan",
+                            "Set grind_am tasks for today", '{"anchor_id": "grind_am"}')
+    upsert_staging_mutation(db_path, "sess1", "mut2", "chat",
+                            "Answer question about schedule", '{"message": "hi"}')
+    mutations = get_staging_mutations(db_path, "sess1")
+    assert len(mutations) == 2
+    assert mutations[0]["id"] == "mut1"
+    assert mutations[0]["type"] == "update_plan"
+    assert mutations[1]["id"] == "mut2"
+
+
+def test_upsert_staging_mutation_updates_existing(db_path):
+    upsert_staging_mutation(db_path, "sess1", "mut1", "update_plan", "original desc", "{}")
+    upsert_staging_mutation(db_path, "sess1", "mut1", "update_plan", "updated desc", '{"key": "val"}')
+    mutations = get_staging_mutations(db_path, "sess1")
+    assert len(mutations) == 1
+    assert mutations[0]["description"] == "updated desc"
+    assert mutations[0]["params_json"] == '{"key": "val"}'
+
+
+def test_get_staging_mutations_empty(db_path):
+    assert get_staging_mutations(db_path, "nonexistent") == []
+
+
+def test_staging_mutations_isolated_by_session(db_path):
+    upsert_staging_mutation(db_path, "sess1", "mut1", "update_plan", "sess1 mut", "{}")
+    upsert_staging_mutation(db_path, "sess2", "mut2", "chat", "sess2 mut", "{}")
+    assert len(get_staging_mutations(db_path, "sess1")) == 1
+    assert len(get_staging_mutations(db_path, "sess2")) == 1
+
+
+def test_clear_session_state(db_path):
+    insert_orchestrator_turn(db_path, "sess1", "orchestrator", "some turn", 0)
+    upsert_staging_mutation(db_path, "sess1", "mut1", "update_plan", "a mutation", "{}")
+    # add another session that should not be cleared
+    insert_orchestrator_turn(db_path, "sess2", "orchestrator", "other session", 0)
+    clear_session_state(db_path, "sess1")
+    assert get_orchestrator_conversation(db_path, "sess1") == []
+    assert get_staging_mutations(db_path, "sess1") == []
+    # sess2 untouched
+    assert len(get_orchestrator_conversation(db_path, "sess2")) == 1
+
+
+def test_init_creates_new_tables(db_path):
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    assert "staging_mutations" in tables
+    assert "orchestrator_conversation" in tables

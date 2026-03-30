@@ -54,6 +54,45 @@ def test_call_claude_raises_on_timeout():
             call_claude("some prompt")
 
 
+def test_call_claude_no_model_role_omits_model_flag():
+    from bot.message_handler import call_claude
+    mock_result = type("R", (), {"stdout": "hi", "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        call_claude("test prompt")
+    cmd = mock_run.call_args[0][0]
+    assert "--model" not in cmd
+    assert cmd == ["claude", "-p", "test prompt"]
+
+
+def test_call_claude_with_model_role_injects_model_flag():
+    from bot.message_handler import call_claude, _MODEL_DEFAULTS
+    mock_result = type("R", (), {"stdout": "hi", "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result) as mock_run:
+        with patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+            call_claude("test prompt", model_role="orchestrator")
+    cmd = mock_run.call_args[0][0]
+    assert "--model" in cmd
+    assert _MODEL_DEFAULTS["orchestrator"] in cmd
+
+
+def test_get_model_returns_config_value_when_present():
+    from bot.message_handler import get_model
+    with patch("bot.message_handler.load_config", return_value={"models": {"orchestrator": "custom-model"}}):
+        assert get_model("orchestrator") == "custom-model"
+
+
+def test_get_model_falls_back_to_default_when_key_missing():
+    from bot.message_handler import get_model, _MODEL_DEFAULTS
+    with patch("bot.message_handler.load_config", return_value={"models": {}}):
+        assert get_model("orchestrator") == _MODEL_DEFAULTS["orchestrator"]
+
+
+def test_get_model_falls_back_when_config_missing():
+    from bot.message_handler import get_model, _MODEL_DEFAULTS
+    with patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+        assert get_model("meta_eval") == _MODEL_DEFAULTS["meta_eval"]
+
+
 # ---------------------------------------------------------------------------
 # apply_mutations — patch/append ops
 # ---------------------------------------------------------------------------
@@ -94,157 +133,6 @@ def test_apply_mutations_patch_context_missing_subject(db_path, caplog):
 
 
 # ---------------------------------------------------------------------------
-# think_and_plan
-# ---------------------------------------------------------------------------
-
-def test_think_and_plan_returns_dispatches(db_path):
-    from bot.message_handler import think_and_plan
-    response = json.dumps({
-        "ack": "Got it, updating grind block.",
-        "dispatches": [{"action": "update_plan", "anchor_id": "grind_am",
-                        "subjects": ["Job Applications"], "instructions": "Set tasks to X, Y."}],
-    })
-    with patch("bot.message_handler.call_claude", return_value=response):
-        result = think_and_plan("Update my grind tasks",
-                                [ANCHOR], ["Job Applications"], db_path)
-    assert result["ack"] == "Got it, updating grind block."
-    assert result["dispatches"][0]["action"] == "update_plan"
-
-
-def test_think_and_plan_chat_only_null_ack(db_path):
-    from bot.message_handler import think_and_plan
-    response = json.dumps({
-        "ack": None,
-        "dispatches": [{"action": "chat", "subjects": ["Job Applications"], "instructions": ""}],
-    })
-    with patch("bot.message_handler.call_claude", return_value=response):
-        result = think_and_plan("What should I do now?", [ANCHOR], ["Job Applications"], db_path)
-    assert result["ack"] is None
-
-
-def test_think_and_plan_fallback_on_invalid_json(db_path):
-    from bot.message_handler import think_and_plan
-    with patch("bot.message_handler.call_claude", return_value="not json at all"):
-        result = think_and_plan("whatever", [ANCHOR], [], db_path)
-    assert result["ack"] is None
-    assert result["dispatches"] == [{"action": "chat", "subjects": [], "instructions": ""}]
-
-
-def test_think_and_plan_includes_plan_in_prompt(db_path):
-    from bot.message_handler import think_and_plan
-    captured = []
-    def capture(prompt, **kw):
-        captured.append(prompt)
-        return json.dumps({"ack": None, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]})
-    with patch("bot.message_handler.call_claude", side_effect=capture):
-        think_and_plan("Move my tasks", [ANCHOR], ["Job Applications"], db_path)
-    assert "Apply to 3 jobs" in captured[0]
-
-
-# ---------------------------------------------------------------------------
-# _execute_dispatch
-# ---------------------------------------------------------------------------
-
-def test_execute_dispatch_returns_report(db_path):
-    from bot.message_handler import _execute_dispatch
-    dispatch_result = json.dumps({
-        "report": "Set grind_am tasks to: Apply to 5 jobs.",
-        "mutations": [{"op": "update_plan_tasks", "anchor_id": "grind_am", "tasks": ["Apply to 5 jobs"]}],
-    })
-    with patch("bot.message_handler.call_claude", return_value=dispatch_result):
-        result = _execute_dispatch(
-            {"action": "update_plan", "anchor_id": "grind_am", "subjects": [], "instructions": "Set to 5 jobs."},
-            "Update grind tasks", db_path,
-        )
-    assert result["report"] == "Set grind_am tasks to: Apply to 5 jobs."
-    from db.queries import get_plan
-    plan = get_plan(db_path, TODAY)
-    assert plan["anchors"]["grind_am"]["tasks"] == ["Apply to 5 jobs"]
-
-
-def test_execute_dispatch_returns_failed_on_timeout(db_path):
-    from bot.message_handler import _execute_dispatch
-    with patch("bot.message_handler.call_claude", side_effect=RuntimeError("timed out")):
-        result = _execute_dispatch({"action": "chat", "subjects": []}, "hi", db_path)
-    assert result["report"].startswith("FAILED:")
-    assert result["mutations"] == []
-
-
-# ---------------------------------------------------------------------------
-# _orchestrate — full pipeline
-# ---------------------------------------------------------------------------
-
-def test_orchestrate_chat_only_single_final_message(db_path):
-    from bot.message_handler import _orchestrate
-    dispatches = [{"action": "chat", "subjects": ["Job Applications"], "instructions": ""}]
-    dispatch_result = json.dumps({"report": "Told user to focus on jobs.", "mutations": []})
-    eval_result = json.dumps({"complete": True, "remaining_dispatches": [], "assessment": "Done."})
-    memory_result = json.dumps({"memory_dispatches": []})
-    final_result = json.dumps({"message": "Focus on job apps.", "mutations": []})
-    sent = []
-    call_returns = iter([dispatch_result, eval_result, memory_result, final_result])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            _orchestrate("What should I do?", dispatches, None, db_path, sent.append)
-    # No ack for chat-only, one final message
-    assert sent == ["Focus on job apps."]
-
-
-def test_orchestrate_mutation_sends_ack_then_final(db_path):
-    from bot.message_handler import _orchestrate
-    dispatches = [{"action": "update_plan", "anchor_id": "grind_am", "subjects": [], "instructions": ""}]
-    dispatch_result = json.dumps({"report": "Updated grind_am.", "mutations": []})
-    eval_result = json.dumps({"complete": True, "remaining_dispatches": [], "assessment": "Done."})
-    memory_result = json.dumps({"memory_dispatches": []})
-    final_result = json.dumps({"message": "All done!", "mutations": []})
-    sent = []
-    call_returns = iter([dispatch_result, eval_result, memory_result, final_result])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        _orchestrate("Update my tasks", dispatches, "Got it, updating.", db_path, sent.append)
-    assert sent[0] == "Got it, updating."
-    assert sent[-1] == "All done!"
-
-
-def test_orchestrate_retries_on_incomplete(db_path):
-    from bot.message_handler import _orchestrate
-    dispatches = [{"action": "update_plan", "anchor_id": "grind_am", "subjects": [], "instructions": ""}]
-    dispatch1 = json.dumps({"report": "FAILED: timeout", "mutations": []})
-    eval1 = json.dumps({
-        "complete": False,
-        "remaining_dispatches": [{"action": "update_plan", "anchor_id": "grind_am",
-                                   "subjects": [], "instructions": "Retry: set tasks."}],
-        "assessment": "grind_am not updated."
-    })
-    dispatch2 = json.dumps({"report": "Set grind_am tasks.", "mutations": []})
-    eval2 = json.dumps({"complete": True, "remaining_dispatches": [], "assessment": "Done."})
-    memory_result = json.dumps({"memory_dispatches": []})
-    final_result = json.dumps({"message": "Done after retry.", "mutations": []})
-    sent = []
-    call_returns = iter([dispatch1, eval1, dispatch2, eval2, memory_result, final_result])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        _orchestrate("Update grind tasks", dispatches, "On it.", db_path, sent.append)
-    assert "Done after retry." in sent
-
-
-def test_orchestrate_memory_dispatches_executed(db_path):
-    from bot.message_handler import _orchestrate
-    dispatches = [{"action": "chat", "subjects": [], "instructions": ""}]
-    dispatch_result = json.dumps({"report": "Answered.", "mutations": []})
-    eval_result = json.dumps({"complete": True, "remaining_dispatches": [], "assessment": ""})
-    memory_result = json.dumps({"memory_dispatches": [
-        {"action": "update_context", "subjects": ["Job Applications"],
-         "instructions": "Append: Applied to Anthropic."}
-    ]})
-    mem_dispatch_result = json.dumps({"report": "Appended to Job Applications.", "mutations": []})
-    final_result = json.dumps({"message": "Got it!", "mutations": []})
-    sent = []
-    call_returns = iter([dispatch_result, eval_result, memory_result, mem_dispatch_result, final_result])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        _orchestrate("I applied to Anthropic today", dispatches, None, db_path, sent.append)
-    assert sent == ["Got it!"]
-
-
-# ---------------------------------------------------------------------------
 # handle_message: slash commands
 # ---------------------------------------------------------------------------
 
@@ -279,29 +167,6 @@ def test_handle_update_plan_saves_tasks(db_path):
 
 
 # ---------------------------------------------------------------------------
-# _build_dispatch_prompt targeted context
-# ---------------------------------------------------------------------------
-
-def test_build_dispatch_prompt_targeted_subjects(db_path):
-    from bot.message_handler import _build_dispatch_prompt
-    dispatch = {"action": "update_plan", "anchor_id": "grind_am",
-                "subjects": ["Job Applications"], "instructions": "Set tasks."}
-    prompt = _build_dispatch_prompt("Update my tasks", db_path, dispatch)
-    assert "Job Applications" in prompt
-    assert "Priority 1." in prompt
-
-
-def test_build_dispatch_prompt_no_subjects_loads_top_level(db_path):
-    upsert_context_entry(db_path, "Intellipat", "Startup context.")
-    upsert_context_entry(db_path, "Intellipat/Backend", "Should NOT appear.")
-    from bot.message_handler import _build_dispatch_prompt
-    dispatch = {"action": "chat", "subjects": [], "instructions": ""}
-    prompt = _build_dispatch_prompt("Hello", db_path, dispatch)
-    assert "Intellipat/Backend" not in prompt
-    assert "Intellipat" in prompt
-
-
-# ---------------------------------------------------------------------------
 # _format_history
 # ---------------------------------------------------------------------------
 
@@ -323,44 +188,18 @@ def test_format_history_renders_turns():
 
 
 # ---------------------------------------------------------------------------
-# think_and_plan — history injected into prompt
-# ---------------------------------------------------------------------------
-
-def test_think_and_plan_history_in_prompt(db_path):
-    from bot.message_handler import think_and_plan
-    from db.queries import insert_conversation_turn
-    insert_conversation_turn(db_path, "user", "Earlier question")
-    insert_conversation_turn(db_path, "assistant", "Earlier answer")
-    history = [
-        {"role": "user",      "body": "Earlier question", "ts": "2026-03-28 10:00:00"},
-        {"role": "assistant", "body": "Earlier answer",   "ts": "2026-03-28 10:00:05"},
-    ]
-    captured = []
-    def capture(prompt, **kw):
-        captured.append(prompt)
-        return '{"ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
-    with patch("bot.message_handler.call_claude", side_effect=capture):
-        think_and_plan("New question", [ANCHOR], [], db_path, history=history)
-    assert "Earlier question" in captured[0]
-    assert "Earlier answer" in captured[0]
-
-
-# ---------------------------------------------------------------------------
 # handle_message — persists conversation turn
 # ---------------------------------------------------------------------------
 
 def test_handle_message_persists_conversation_turn(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_recent_history
-    dispatch_result = '{"report": "Done.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "All good!", "mutations": []}'
-    call_returns = iter([
-        '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}',
-        dispatch_result, eval_result, memory_result, final_result,
-    ])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
+    orch_conv = [{"role": "orchestrator", "body": "User wants a status check.", "round": 0}]
+    with patch("bot.message_handler._run_v2_planning_loop",
+               return_value=([], [], [], orch_conv)), \
+         patch("bot.message_handler.call_satisfaction_eval",
+               return_value={"satisfied": True, "issues": [], "replan_needed": False}), \
+         patch("bot.message_handler.call_response_builder", return_value="All good!"):
         with patch("bot.message_handler.DB_PATH", db_path):
             handle_message("How am I doing?", [].append)
     history = get_recent_history(db_path)
@@ -435,120 +274,257 @@ def test_fetch_multiple_kinds(db_path):
 
 
 # ---------------------------------------------------------------------------
-# think_and_plan — request_context type
-# ---------------------------------------------------------------------------
-
-def test_think_and_plan_returns_request_context(db_path):
-    from bot.message_handler import think_and_plan
-    response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Intellipat"}],
-        "reason": "Need to read Intellipat before planning.",
-    })
-    with patch("bot.message_handler.call_claude", return_value=response):
-        result = think_and_plan("Update Intellipat context", [ANCHOR], ["Intellipat"], db_path)
-    assert result["type"] == "request_context"
-    assert result["requests"][0]["subject"] == "Intellipat"
-
-
-def test_think_and_plan_force_dispatch_overrides_request_context(db_path):
-    from bot.message_handler import think_and_plan
-    # Even if claude returns request_context, force_dispatch=True should yield dispatch
-    response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Intellipat"}],
-        "reason": "Still need more context.",
-    })
-    with patch("bot.message_handler.call_claude", return_value=response):
-        result = think_and_plan("whatever", [ANCHOR], [], db_path, force_dispatch=True)
-    assert result["type"] == "dispatch"
-
-
-def test_think_and_plan_accumulated_context_in_prompt(db_path):
-    from bot.message_handler import think_and_plan
-    captured = []
-    def capture(prompt, **kw):
-        captured.append(prompt)
-        return '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
-    with patch("bot.message_handler.call_claude", side_effect=capture):
-        think_and_plan(
-            "New question", [ANCHOR], [], db_path,
-            extra_context=["## Fetched context (round 1)\n### Context: Foo\nFoo body."],
-        )
-    assert "Foo body." in captured[0]
-
-
-def test_think_and_plan_rounds_remaining_in_prompt(db_path):
-    from bot.message_handler import think_and_plan
-    captured = []
-    def capture(prompt, **kw):
-        captured.append(prompt)
-        return '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}'
-    with patch("bot.message_handler.call_claude", side_effect=capture):
-        think_and_plan("hi", [ANCHOR], [], db_path, round_num=2)
-    # MAX_CONTEXT_ROUNDS=4, round_num=2 → 2 remaining
-    assert "2 request round" in captured[0]
-
-
-# ---------------------------------------------------------------------------
-# handle_message — context request loop
+# handle_message — v2 planning loop
 # ---------------------------------------------------------------------------
 
 def test_handle_message_loops_on_request_context(db_path):
-    """Bot makes one context request then dispatches."""
-    from bot.message_handler import handle_message
-    request_ctx_response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Job Applications"}],
-        "reason": "Need job app status.",
-    })
-    dispatch_response = json.dumps({
-        "type": "dispatch",
-        "ack": None,
-        "dispatches": [{"action": "chat", "subjects": ["Job Applications"], "instructions": "Answer."}],
-    })
-    subagent_result = '{"report": "Answered.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "Here you go.", "mutations": []}'
+    """Planning loop makes one context fetch then commits."""
+    from bot.message_handler import _run_v2_planning_loop, MAX_PLANNING_ROUNDS
+    upsert_context_entry(db_path, "Job Applications", "Priority 1.")
 
-    sent = []
-    call_returns = iter([
-        request_ctx_response,   # think_and_plan round 0 → request_context
-        dispatch_response,      # think_and_plan round 1 → dispatch
-        subagent_result, eval_result, memory_result, final_result,
-    ])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("What's my job app status?", sent.append)
-    assert sent == ["Here you go."]
+    # Round 0: orchestrator reasons; meta_eval fetches context, not done
+    # Round 1: orchestrator reasons; meta_eval stages chat mutation, done
+    meta_round0 = json.dumps({
+        "summary": "Fetching Job Applications context first.",
+        "context_to_fetch": [{"kind": "context_entry", "subject": "Job Applications"}],
+        "mutation_plan": [],
+        "orchestrator_done": False,
+    })
+    meta_round1 = json.dumps({
+        "summary": "Have context. Answering question.",
+        "context_to_fetch": [],
+        "mutation_plan": [{"id": "c1", "type": "chat", "description": "Answer", "message": "Here you go."}],
+        "orchestrator_done": True,
+    })
+    meta_calls = iter([meta_round0, meta_round1])
+    anchors = get_anchors(db_path)
+    today = str(date.today())
+
+    with patch("bot.message_handler.call_orchestrator", return_value="Reasoning text."), \
+         patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(meta_calls)):
+        mutation_plan, reports, chat_messages, orch_conv = _run_v2_planning_loop(
+            "What's my job app status?", anchors, [], db_path, today
+        )
+
+    # Two orchestrator rounds happened (meta was called twice)
+    assert len(orch_conv) == 2
+    # chat mutation captured
+    assert chat_messages == ["Here you go."]
+    assert reports == []
 
 
 def test_handle_message_force_dispatch_after_max_rounds(db_path):
-    """After MAX_CONTEXT_ROUNDS of request_context, force a dispatch."""
-    from bot.message_handler import handle_message, MAX_CONTEXT_ROUNDS
-    request_ctx_response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Foo"}],
-        "reason": "Always need more.",
+    """Loop terminates after MAX_PLANNING_ROUNDS even if meta_eval never sets done."""
+    from bot.message_handler import _run_v2_planning_loop, MAX_PLANNING_ROUNDS
+    not_done = json.dumps({
+        "summary": "Still thinking.",
+        "context_to_fetch": [],
+        "mutation_plan": [],
+        "orchestrator_done": False,
     })
-    forced_dispatch = json.dumps({
-        "type": "dispatch",
-        "ack": None,
-        "dispatches": [{"action": "chat", "subjects": [], "instructions": "Best effort."}],
-    })
-    subagent_result = '{"report": "Done.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "Done!", "mutations": []}'
+    anchors = get_anchors(db_path)
+    today = str(date.today())
 
-    # MAX_CONTEXT_ROUNDS calls returning request_context, then 1 forced dispatch call
-    call_sequence = [request_ctx_response] * MAX_CONTEXT_ROUNDS + [
-        forced_dispatch, subagent_result, eval_result, memory_result, final_result
+    call_count = {"n": 0}
+    def count_calls(p, **kw):
+        call_count["n"] += 1
+        return not_done
+
+    with patch("bot.message_handler.call_orchestrator", return_value="Reasoning."), \
+         patch("bot.message_handler.call_claude", side_effect=count_calls), \
+         patch("bot.message_handler.dispatch_typed_subagents", return_value=([], [])):
+        _run_v2_planning_loop("Help.", anchors, [], db_path, today)
+
+    # Should have called meta_eval exactly MAX_PLANNING_ROUNDS + 1 times (rounds 0..MAX)
+    assert call_count["n"] == MAX_PLANNING_ROUNDS + 1
+
+
+# ---------------------------------------------------------------------------
+# call_meta_eval — valid JSON, repair escalation, sentinel
+# ---------------------------------------------------------------------------
+
+def _meta_valid():
+    return json.dumps({
+        "summary": "Staging a plan update.",
+        "context_to_fetch": [],
+        "mutation_plan": [{"id": "m1", "type": "chat", "description": "Hi", "message": "Hello!"}],
+        "orchestrator_done": True,
+    })
+
+
+def _meta_eval_kwargs(db_path):
+    from db.queries import get_anchors
+    return dict(
+        orchestrator_conversation=[{"role": "orchestrator", "body": "Say hi", "round": 0}],
+        current_mutation_plan=[],
+        fetched_context_log=[],
+        anchors=get_anchors(db_path),
+        all_subjects=["Job Applications"],
+        available_dates=[TODAY],
+        today=TODAY,
+        round_num=0,
+        max_rounds=4,
+        force_done=False,
+    )
+
+
+def test_call_meta_eval_valid_json(db_path):
+    from bot.message_handler import call_meta_eval
+    with patch("bot.message_handler.call_claude", return_value=_meta_valid()):
+        result = call_meta_eval(**_meta_eval_kwargs(db_path))
+    assert result["summary"] == "Staging a plan update."
+    assert result["orchestrator_done"] is True
+    assert result["mutation_plan"][0]["type"] == "chat"
+    assert "_parse_error" not in result
+
+
+def test_call_meta_eval_repair_escalation_haiku_x2_then_sonnet(db_path):
+    """meta_eval bad → repair haiku x2 bad → repair sonnet succeeds."""
+    from bot.message_handler import call_meta_eval
+    # calls: meta_eval, repair-haiku-0, repair-haiku-1, repair-sonnet-2
+    side_effects = ["not json", "not json", "not json", _meta_valid()]
+    with patch("bot.message_handler.call_claude", side_effect=side_effects):
+        result = call_meta_eval(**_meta_eval_kwargs(db_path))
+    assert result["orchestrator_done"] is True
+    assert "_parse_error" not in result
+
+
+def test_call_meta_eval_all_repairs_fail_returns_sentinel(db_path):
+    """All 4 calls return bad JSON → sentinel with _parse_error: True."""
+    from bot.message_handler import call_meta_eval
+    prior_plan = [{"id": "m0", "type": "chat", "description": "prev"}]
+    kwargs = _meta_eval_kwargs(db_path)
+    kwargs["current_mutation_plan"] = prior_plan
+    with patch("bot.message_handler.call_claude", return_value="not json"):
+        result = call_meta_eval(**kwargs)
+    assert result["_parse_error"] is True
+    assert result["orchestrator_done"] is False
+    # preserves the prior mutation plan
+    assert result["mutation_plan"] == prior_plan
+
+
+# ---------------------------------------------------------------------------
+# _run_v2_planning_loop — parse error counter aborts
+# ---------------------------------------------------------------------------
+
+def test_run_v2_planning_loop_aborts_on_repeated_parse_errors(db_path):
+    """Three consecutive _parse_error responses should raise RuntimeError."""
+    from bot.message_handler import _run_v2_planning_loop
+    anchors = get_anchors(db_path)
+    sentinel = {
+        "summary": "error",
+        "context_to_fetch": [],
+        "mutation_plan": [],
+        "orchestrator_done": False,
+        "_parse_error": True,
+    }
+    with patch("bot.message_handler.call_orchestrator", return_value="thinking."), \
+         patch("bot.message_handler.call_meta_eval", return_value=sentinel):
+        with pytest.raises(RuntimeError, match="planning process"):
+            _run_v2_planning_loop("help me", anchors, [], db_path, TODAY)
+
+
+# ---------------------------------------------------------------------------
+# dispatch_typed_subagents — routing
+# ---------------------------------------------------------------------------
+
+def test_dispatch_typed_subagents_routes_upsert_mutation(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutation = {
+        "id": "m1",
+        "type": "update_plan_tasks",
+        "description": "Set grind_am tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": ["Apply to 3 jobs"],
+    }
+    subagent_response = json.dumps({
+        "op": "update_plan_tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": ["Apply to 3 jobs"],
+        "report": "Set grind_am tasks to 1 item.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=subagent_response):
+        reports, chat_messages = dispatch_typed_subagents([mutation], "Do the thing.", db_path)
+    assert len(reports) == 1
+    assert reports[0] == "Set grind_am tasks to 1 item."
+    assert chat_messages == []
+
+
+def test_dispatch_typed_subagents_chat_captured_not_dispatched(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutations = [
+        {"id": "c1", "type": "chat", "description": "Answer question", "message": "Here's the answer."},
     ]
-    sent = []
-    call_returns = iter(call_sequence)
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("Need help.", sent.append)
-    assert sent == ["Done!"]
+    with patch("bot.message_handler.call_claude") as mock_claude:
+        reports, chat_messages = dispatch_typed_subagents(mutations, "Brief.", db_path)
+    mock_claude.assert_not_called()
+    assert reports == []
+    assert chat_messages == ["Here's the answer."]
+
+
+def test_dispatch_typed_subagents_routes_patch_mutation(db_path):
+    from bot.message_handler import dispatch_typed_subagents
+    mutation = {
+        "id": "p1",
+        "type": "patch_context",
+        "description": "Update priority",
+        "subject": "Job Applications",
+        "old": "Priority 1.",
+        "new": "Priority 1 — applying.",
+    }
+    subagent_response = json.dumps({
+        "op": "patch_context",
+        "subject": "Job Applications",
+        "old": "Priority 1.",
+        "new": "Priority 1 — applying.",
+        "report": "Updated priority line in Job Applications.",
+    })
+    with patch("bot.message_handler.call_claude", return_value=subagent_response):
+        reports, chat_messages = dispatch_typed_subagents([mutation], "Brief.", db_path)
+    assert len(reports) == 1
+    assert "Job Applications" in reports[0] or "priority" in reports[0].lower()
+    assert chat_messages == []
+
+
+# ---------------------------------------------------------------------------
+# call_satisfaction_eval
+# ---------------------------------------------------------------------------
+
+def test_call_satisfaction_eval_satisfied(db_path):
+    from bot.message_handler import call_satisfaction_eval
+    response = json.dumps({"satisfied": True, "issues": [], "replan_needed": False})
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = call_satisfaction_eval(
+            "Update grind_am tasks",
+            [{"id": "m1", "type": "update_plan_tasks", "description": "Set tasks"}],
+            ["Set grind_am tasks to 1 item."],
+            db_path,
+        )
+    assert result["satisfied"] is True
+    assert result["replan_needed"] is False
+    assert result["issues"] == []
+
+
+def test_call_satisfaction_eval_not_satisfied(db_path):
+    from bot.message_handler import call_satisfaction_eval
+    response = json.dumps({
+        "satisfied": False,
+        "issues": ["grind_am tasks were not updated"],
+        "replan_needed": True,
+    })
+    with patch("bot.message_handler.call_claude", return_value=response):
+        result = call_satisfaction_eval("Update grind_am tasks", [], [], db_path)
+    assert result["satisfied"] is False
+    assert result["replan_needed"] is True
+    assert len(result["issues"]) == 1
+
+
+def test_call_satisfaction_eval_fails_gracefully(db_path):
+    """If Claude call raises, satisfaction eval defaults to satisfied=True."""
+    from bot.message_handler import call_satisfaction_eval
+    with patch("bot.message_handler.call_claude", side_effect=RuntimeError("timeout")):
+        result = call_satisfaction_eval("anything", [], [], db_path)
+    assert result["satisfied"] is True
+    assert result["replan_needed"] is False

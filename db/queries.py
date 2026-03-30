@@ -170,6 +170,57 @@ def get_recent_history(db_path: Path, n: int = 5) -> list[dict]:
     return [dict(r) for r in reversed(rows)]
 
 
+def clear_session_state(db_path: Path, session_id: str) -> None:
+    """Delete all staging mutations and orchestrator conversation rows for a session."""
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM staging_mutations WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM orchestrator_conversation WHERE session_id=?", (session_id,))
+
+
+def insert_orchestrator_turn(db_path: Path, session_id: str,
+                              role: str, body: str, round_num: int) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO orchestrator_conversation (session_id, role, body, round_num)"
+            " VALUES (?, ?, ?, ?)",
+            (session_id, role, body, round_num),
+        )
+
+
+def get_orchestrator_conversation(db_path: Path, session_id: str) -> list[dict]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT role, body, round_num, ts FROM orchestrator_conversation"
+            " WHERE session_id=? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def upsert_staging_mutation(db_path: Path, session_id: str, id: str,
+                             type: str, description: str, params_json: str) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute("""
+            INSERT INTO staging_mutations (id, session_id, type, description, params_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                description=excluded.description,
+                params_json=excluded.params_json,
+                updated_at=excluded.updated_at
+        """, (id, session_id, type, description, params_json, now, now))
+
+
+def get_staging_mutations(db_path: Path, session_id: str) -> list[dict]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, session_id, type, description, params_json, created_at, updated_at"
+            " FROM staging_mutations WHERE session_id=? ORDER BY created_at",
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def insert_check_in(db_path: Path, date: str, anchor_id: str,
                     accomplished: str, current_status: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
