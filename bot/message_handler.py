@@ -510,6 +510,7 @@ def call_response_builder(
         history=_format_history(history),
         user_message=user_message,
     )
+    raw = ""
     try:
         raw = call_claude(prompt, timeout=60, model_role="response_builder")
         data = _parse_json(raw)
@@ -814,6 +815,90 @@ def _build_slash_prompt(user_message: str, db_path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# v2 Pipeline: planning loop helper
+# ---------------------------------------------------------------------------
+
+def _run_v2_planning_loop(
+    text: str,
+    anchors: list[dict],
+    history: list[dict],
+    db_path: Path,
+    today: str,
+    issues_context: str = "",
+) -> tuple[list[dict], list[str], list[str], list[dict]]:
+    """Run orchestrator → meta-eval loop then dispatch subagents.
+
+    Returns (mutation_plan, reports, chat_messages, orchestrator_conv).
+    Raises RuntimeError if parse errors exceed threshold.
+    """
+    all_subjects = [e["subject"] for e in get_context_entries(db_path)]
+    available_dates = list(dict.fromkeys([today] + list_plan_dates(db_path)))
+    session_id = str(uuid.uuid4())
+    clear_session_state(db_path, session_id)
+
+    orchestrator_conv: list[dict] = []
+    current_mutation_plan: list[dict] = []
+    fetched_context_log: list[str] = []
+    last_meta_summary = issues_context
+    last_fetched = ""
+    parse_error_count = 0
+
+    for round_num in range(MAX_PLANNING_ROUNDS + 1):
+        force_done = round_num == MAX_PLANNING_ROUNDS
+
+        orch_response = call_orchestrator(
+            user_message=text,
+            plan=get_plan(db_path, today),
+            subjects=all_subjects,
+            history=history,
+            conversation=orchestrator_conv,
+            meta_eval_summary=last_meta_summary,
+            fetched_context=last_fetched,
+            anchors=anchors,
+        )
+        orchestrator_conv.append({"role": "orchestrator", "body": orch_response, "round": round_num})
+        insert_orchestrator_turn(db_path, session_id, "orchestrator", orch_response, round_num)
+
+        meta = call_meta_eval(
+            orchestrator_conversation=orchestrator_conv,
+            current_mutation_plan=current_mutation_plan,
+            fetched_context_log=fetched_context_log,
+            anchors=anchors,
+            all_subjects=all_subjects,
+            available_dates=available_dates,
+            today=today,
+            round_num=round_num,
+            max_rounds=MAX_PLANNING_ROUNDS,
+            force_done=force_done,
+        )
+
+        if meta.get("_parse_error"):
+            parse_error_count += 1
+            if parse_error_count >= 3:
+                raise RuntimeError(
+                    "Something went wrong with my planning process. "
+                    "Please try again or rephrase your request."
+                )
+
+        last_meta_summary = meta.get("summary", "")
+        current_mutation_plan = meta.get("mutation_plan", current_mutation_plan)
+
+        context_requests = meta.get("context_to_fetch", [])
+        if context_requests:
+            last_fetched = _fetch_requested_context(context_requests, db_path, round_num + 1)
+            fetched_context_log.append(last_fetched)
+        else:
+            last_fetched = ""
+
+        if meta.get("orchestrator_done") or force_done:
+            break
+
+    orchestrator_briefing = _summarize_orchestrator_conv(orchestrator_conv)
+    reports, chat_messages = dispatch_typed_subagents(current_mutation_plan, orchestrator_briefing, db_path)
+    return current_mutation_plan, reports, chat_messages, orchestrator_conv
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -853,31 +938,38 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
             send_fn(str(e))
         return
 
-    # Free text: full orchestrator pipeline
+    # Free text: v2 orchestrator pipeline
     history = get_recent_history(db_path, HISTORY_EXCHANGES)
-    all_subjects = [e["subject"] for e in get_context_entries(db_path)]
 
-    accumulated_context: list[str] = []
-    result: dict = {}
-    for round_num in range(MAX_CONTEXT_ROUNDS + 1):
-        force = round_num == MAX_CONTEXT_ROUNDS
-        result = think_and_plan(
-            text, anchors, all_subjects, db_path,
-            history=history,
-            extra_context=accumulated_context,
-            round_num=round_num,
-            force_dispatch=force,
+    try:
+        mutation_plan, reports, chat_messages, orch_conv = _run_v2_planning_loop(
+            text, anchors, history, db_path, today
         )
-        if result["type"] == "request_context" and not force:
-            fetched = _fetch_requested_context(result["requests"], db_path, round_num + 1)
-            accumulated_context.append(fetched)
-        else:
+    except RuntimeError as e:
+        send_fn(str(e))
+        insert_conversation_turn(db_path, "user", text)
+        return
+
+    original_intent = orch_conv[0]["body"] if orch_conv else text
+
+    for _ in range(MAX_SATISFACTION_RETRIES):
+        sat = call_satisfaction_eval(original_intent, mutation_plan, reports, db_path)
+        if not sat["replan_needed"]:
+            break
+        issues_context = "Previous attempt had issues:\n" + "\n".join(
+            f"- {i}" for i in sat["issues"]
+        )
+        try:
+            mutation_plan, reports, chat_messages, orch_conv = _run_v2_planning_loop(
+                text, anchors, history, db_path, today, issues_context=issues_context
+            )
+        except RuntimeError:
             break
 
-    final = _orchestrate(text, result["dispatches"], result.get("ack"), db_path, send_fn, history)
+    final = call_response_builder(text, reports, chat_messages, history, db_path, anchors)
+    send_fn(final)
     insert_conversation_turn(db_path, "user", text)
-    if final:
-        insert_conversation_turn(db_path, "assistant", final)
+    insert_conversation_turn(db_path, "assistant", final)
 
 
 # ---------------------------------------------------------------------------

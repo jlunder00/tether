@@ -391,15 +391,12 @@ def test_think_and_plan_history_in_prompt(db_path):
 def test_handle_message_persists_conversation_turn(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_recent_history
-    dispatch_result = '{"report": "Done.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "All good!", "mutations": []}'
-    call_returns = iter([
-        '{"type": "dispatch", "ack": null, "dispatches": [{"action": "chat", "subjects": [], "instructions": ""}]}',
-        dispatch_result, eval_result, memory_result, final_result,
-    ])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
+    orch_conv = [{"role": "orchestrator", "body": "User wants a status check.", "round": 0}]
+    with patch("bot.message_handler._run_v2_planning_loop",
+               return_value=([], [], [], orch_conv)), \
+         patch("bot.message_handler.call_satisfaction_eval",
+               return_value={"satisfied": True, "issues": [], "replan_needed": False}), \
+         patch("bot.message_handler.call_response_builder", return_value="All good!"):
         with patch("bot.message_handler.DB_PATH", db_path):
             handle_message("How am I doing?", [].append)
     history = get_recent_history(db_path)
@@ -534,60 +531,62 @@ def test_think_and_plan_rounds_remaining_in_prompt(db_path):
 # ---------------------------------------------------------------------------
 
 def test_handle_message_loops_on_request_context(db_path):
-    """Bot makes one context request then dispatches."""
-    from bot.message_handler import handle_message
-    request_ctx_response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Job Applications"}],
-        "reason": "Need job app status.",
-    })
-    dispatch_response = json.dumps({
-        "type": "dispatch",
-        "ack": None,
-        "dispatches": [{"action": "chat", "subjects": ["Job Applications"], "instructions": "Answer."}],
-    })
-    subagent_result = '{"report": "Answered.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "Here you go.", "mutations": []}'
+    """Planning loop makes one context fetch then commits."""
+    from bot.message_handler import _run_v2_planning_loop, MAX_PLANNING_ROUNDS
+    upsert_context_entry(db_path, "Job Applications", "Priority 1.")
 
-    sent = []
-    call_returns = iter([
-        request_ctx_response,   # think_and_plan round 0 → request_context
-        dispatch_response,      # think_and_plan round 1 → dispatch
-        subagent_result, eval_result, memory_result, final_result,
-    ])
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("What's my job app status?", sent.append)
-    assert sent == ["Here you go."]
+    # Round 0: orchestrator reasons; meta_eval fetches context, not done
+    # Round 1: orchestrator reasons; meta_eval stages chat mutation, done
+    meta_round0 = json.dumps({
+        "summary": "Fetching Job Applications context first.",
+        "context_to_fetch": [{"kind": "context_entry", "subject": "Job Applications"}],
+        "mutation_plan": [],
+        "orchestrator_done": False,
+    })
+    meta_round1 = json.dumps({
+        "summary": "Have context. Answering question.",
+        "context_to_fetch": [],
+        "mutation_plan": [{"id": "c1", "type": "chat", "description": "Answer", "message": "Here you go."}],
+        "orchestrator_done": True,
+    })
+    meta_calls = iter([meta_round0, meta_round1])
+    anchors = get_anchors(db_path)
+    today = str(date.today())
+
+    with patch("bot.message_handler.call_orchestrator", return_value="Reasoning text."), \
+         patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(meta_calls)):
+        mutation_plan, reports, chat_messages, orch_conv = _run_v2_planning_loop(
+            "What's my job app status?", anchors, [], db_path, today
+        )
+
+    # Two orchestrator rounds happened (meta was called twice)
+    assert len(orch_conv) == 2
+    # chat mutation captured
+    assert chat_messages == ["Here you go."]
+    assert reports == []
 
 
 def test_handle_message_force_dispatch_after_max_rounds(db_path):
-    """After MAX_CONTEXT_ROUNDS of request_context, force a dispatch."""
-    from bot.message_handler import handle_message, MAX_CONTEXT_ROUNDS
-    request_ctx_response = json.dumps({
-        "type": "request_context",
-        "requests": [{"kind": "context_entry", "subject": "Foo"}],
-        "reason": "Always need more.",
+    """Loop terminates after MAX_PLANNING_ROUNDS even if meta_eval never sets done."""
+    from bot.message_handler import _run_v2_planning_loop, MAX_PLANNING_ROUNDS
+    not_done = json.dumps({
+        "summary": "Still thinking.",
+        "context_to_fetch": [],
+        "mutation_plan": [],
+        "orchestrator_done": False,
     })
-    forced_dispatch = json.dumps({
-        "type": "dispatch",
-        "ack": None,
-        "dispatches": [{"action": "chat", "subjects": [], "instructions": "Best effort."}],
-    })
-    subagent_result = '{"report": "Done.", "mutations": []}'
-    eval_result = '{"complete": true, "remaining_dispatches": [], "assessment": ""}'
-    memory_result = '{"memory_dispatches": []}'
-    final_result = '{"message": "Done!", "mutations": []}'
+    anchors = get_anchors(db_path)
+    today = str(date.today())
 
-    # MAX_CONTEXT_ROUNDS calls returning request_context, then 1 forced dispatch call
-    call_sequence = [request_ctx_response] * MAX_CONTEXT_ROUNDS + [
-        forced_dispatch, subagent_result, eval_result, memory_result, final_result
-    ]
-    sent = []
-    call_returns = iter(call_sequence)
-    with patch("bot.message_handler.call_claude", side_effect=lambda p, **kw: next(call_returns)):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("Need help.", sent.append)
-    assert sent == ["Done!"]
+    call_count = {"n": 0}
+    def count_calls(p, **kw):
+        call_count["n"] += 1
+        return not_done
+
+    with patch("bot.message_handler.call_orchestrator", return_value="Reasoning."), \
+         patch("bot.message_handler.call_claude", side_effect=count_calls), \
+         patch("bot.message_handler.dispatch_typed_subagents", return_value=([], [])):
+        _run_v2_planning_loop("Help.", anchors, [], db_path, today)
+
+    # Should have called meta_eval exactly MAX_PLANNING_ROUNDS + 1 times (rounds 0..MAX)
+    assert call_count["n"] == MAX_PLANNING_ROUNDS + 1
