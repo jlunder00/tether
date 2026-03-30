@@ -42,7 +42,7 @@ Respond with JSON only — no explanation, no markdown fences.
   "mutation_plan": [
     {
       "id": "unique-kebab-id",
-      "type": "update_plan | update_context | append_context | patch_context | update_anchor | chat",
+      "type": "update_plan_tasks | update_context | append_context | patch_context | update_anchor | chat",
       "description": "Plain English: what this mutation does"
       // ...type-specific fields below
     }
@@ -53,8 +53,8 @@ Respond with JSON only — no explanation, no markdown fences.
 
 ### Mutation plan field shapes by type
 
-**update_plan:**
-`{"id", "type": "update_plan", "description", "anchor_id", "date", "tasks": [...]}`
+**update_plan_tasks:**
+`{"id", "type": "update_plan_tasks", "description", "anchor_id", "date", "tasks": [...]}`
 
 **update_context** (full rewrite — only for large structural changes):
 `{"id", "type": "update_context", "description", "subject", "body"}`
@@ -77,4 +77,4 @@ Respond with JSON only — no explanation, no markdown fences.
 - The mutation plan is cumulative — include unchanged mutations from the current plan.
 - Set orchestrator_done to true when: no new context was fetched AND the plan is complete AND no ambiguities remain.
 - If new context was fetched this round, set orchestrator_done to false — the orchestrator must see it.
-- For multi-date moves: two update_plan mutations (one to clear source, one to set destination).
+- For multi-date moves: two update_plan_tasks mutations (one to clear source, one to set destination).
