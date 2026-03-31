@@ -371,3 +371,55 @@ def test_get_plan_returns_task_objects(db_path):
     assert task["id"] is not None and len(task["id"]) == 36
     assert task["blocks"] == []
     assert task["blocked_by"] == []
+
+
+# ---------------------------------------------------------------------------
+# Task model v2: patch_task_fields, move_task_atomic, dependencies
+# ---------------------------------------------------------------------------
+
+def test_patch_task_fields_updates_status(db_path):
+    from db.queries import patch_task_fields
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "Task"}], notes="")
+    uid = tasks[0]["id"]
+    result = patch_task_fields(db_path, uid, {"status": "done"})
+    assert result["status"] == "done"
+    assert result["id"] == uid
+
+
+def test_patch_task_fields_returns_none_for_missing(db_path):
+    from db.queries import patch_task_fields
+    assert patch_task_fields(db_path, "nonexistent-uuid", {"status": "done"}) is None
+
+
+def test_move_task_atomic(db_path):
+    from db.queries import move_task_atomic
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_plan(db_path, "2026-03-31")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "Move me"}], notes="")
+    uid = tasks[0]["id"]
+    move_task_atomic(db_path, uid, "2026-03-31", "grind_am", position=0)
+    src = get_plan(db_path, "2026-03-30")
+    dst = get_plan(db_path, "2026-03-31")
+    assert src["anchors"].get("grind_am", {}).get("tasks", []) == []
+    assert dst["anchors"]["grind_am"]["tasks"][0]["text"] == "Move me"
+    assert dst["anchors"]["grind_am"]["tasks"][0]["id"] == uid
+
+
+def test_add_and_remove_task_dependency(db_path):
+    from db.queries import add_task_dependency, remove_task_dependency
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Task A"}, {"text": "Task B"}], notes="")
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    add_task_dependency(db_path, uid_b, uid_a)  # B blocked by A
+    plan = get_plan(db_path, "2026-03-30")
+    task_b = next(t for t in plan["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
+    assert uid_a in task_b["blocked_by"]
+    remove_task_dependency(db_path, uid_b, uid_a)
+    plan2 = get_plan(db_path, "2026-03-30")
+    task_b2 = next(t for t in plan2["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
+    assert task_b2["blocked_by"] == []

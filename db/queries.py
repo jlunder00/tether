@@ -140,6 +140,72 @@ def upsert_tasks(
         return result
 
 
+def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
+    """Update allowed fields on a task. Returns updated task dict or None if not found."""
+    allowed = {"text", "status", "position", "followup_config"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE tasks SET {set_clause} WHERE uuid=?",
+            (*updates.values(), task_uuid),
+        )
+        row = conn.execute(
+            "SELECT uuid, text, status, position, followup_config FROM tasks WHERE uuid=?",
+            (task_uuid,),
+        ).fetchone()
+    if not row:
+        return None
+    fc = row["followup_config"]
+    return {
+        "id": row["uuid"], "text": row["text"], "status": row["status"],
+        "position": row["position"],
+        "followup_config": json.loads(fc) if fc else None,
+        "blocks": [], "blocked_by": [],
+    }
+
+
+def move_task_atomic(
+    db_path: Path, task_uuid: str, date: str, anchor_id: str, position: int | None = None,
+) -> None:
+    """Atomically move a task to a different date/anchor."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT plan_date FROM tasks WHERE uuid=?", (task_uuid,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Task {task_uuid} not found")
+        conn.execute("INSERT OR IGNORE INTO plans (date) VALUES (?)", (date,))
+        if position is None:
+            max_pos = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE plan_date=? AND anchor_id=?",
+                (date, anchor_id),
+            ).fetchone()[0]
+            position = max_pos + 1
+        conn.execute(
+            "UPDATE tasks SET plan_date=?, anchor_id=?, position=? WHERE uuid=?",
+            (date, anchor_id, position, task_uuid),
+        )
+
+
+def add_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO task_dependencies (task_id, blocked_by_id) VALUES (?,?)",
+            (task_id, blocked_by_id),
+        )
+
+
+def remove_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM task_dependencies WHERE task_id=? AND blocked_by_id=?",
+            (task_id, blocked_by_id),
+        )
+
+
 def upsert_context_entry(db_path: Path, subject: str, body: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
