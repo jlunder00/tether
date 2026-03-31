@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useContextStore } from '../stores/context'
+import MilestoneDetail from './MilestoneDetail.vue'
+import { useMilestoneStore } from '../stores/milestones'
 
 const store = useContextStore()
 const editing = ref<string | null>(null)
@@ -9,6 +11,24 @@ const renaming = ref<string | null>(null)
 const renameValue = ref('')
 const newSubject = ref('')
 const expandedGroups = ref<Set<string>>(new Set())
+
+const milestoneStore = useMilestoneStore()
+const expandedMilestones = ref<Set<string>>(new Set())
+const addingMilestoneFor = ref<string | null>(null)
+const newMilestoneName = ref('')
+
+function toggleMilestone(id: string) {
+  const next = new Set(expandedMilestones.value)
+  if (next.has(id)) next.delete(id); else next.add(id)
+  expandedMilestones.value = next
+}
+
+async function addMilestone(subject: string) {
+  if (!newMilestoneName.value.trim()) return
+  await milestoneStore.createMilestone(subject, newMilestoneName.value.trim())
+  newMilestoneName.value = ''
+  addingMilestoneFor.value = null
+}
 
 const topLevel = computed(() =>
   store.entries.filter(e => !e.subject.includes('/'))
@@ -71,7 +91,10 @@ function deleteWithConfirm(subject: string, childCount: number) {
   if (confirm(msg)) store.deleteEntry(subject)
 }
 
-onMounted(() => store.fetchEntries())
+onMounted(() => {
+  store.fetchEntries()
+  milestoneStore.fetchAll()
+})
 </script>
 
 <template>
@@ -122,6 +145,36 @@ onMounted(() => store.fetchEntries())
           </div>
         </div>
         <p v-else class="text-xs text-white/50 line-clamp-2">{{ entry.body || '(empty)' }}</p>
+
+        <!-- Milestone chips -->
+        <div v-if="milestoneStore.bySubject[entry.subject]?.length" class="mt-2 flex flex-wrap gap-1">
+          <button
+            v-for="m in milestoneStore.bySubject[entry.subject]" :key="m.id"
+            @click="toggleMilestone(m.id)"
+            class="text-xs px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 flex items-center gap-1">
+            <span :class="m.status === 'done' ? 'bg-green-400'
+                        : m.status === 'in_progress' ? 'bg-blue-400'
+                        : m.status === 'blocked' ? 'bg-red-400' : 'bg-white/20'"
+                  class="w-1.5 h-1.5 rounded-full" />
+            {{ m.name }} {{ m.done_count }}/{{ m.task_count }}
+          </button>
+        </div>
+        <template v-for="m in milestoneStore.bySubject[entry.subject]" :key="'detail-' + m.id">
+          <MilestoneDetail
+            v-if="expandedMilestones.has(m.id)"
+            :milestone="m"
+            @close="toggleMilestone(m.id)" />
+        </template>
+        <div v-if="addingMilestoneFor === entry.subject" class="mt-2 flex gap-2">
+          <input v-model="newMilestoneName" placeholder="Milestone name…"
+                 @keydown.enter="addMilestone(entry.subject)"
+                 class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs" />
+          <button @click="addMilestone(entry.subject)" class="text-xs text-white/60 hover:text-white">Add</button>
+          <button @click="addingMilestoneFor = null; newMilestoneName = ''"
+                  class="text-xs text-white/40">cancel</button>
+        </div>
+        <button v-else @click="addingMilestoneFor = entry.subject"
+                class="mt-1 text-xs text-white/30 hover:text-white/60">+ milestone</button>
 
         <!-- Children (expanded) -->
         <template v-if="expandedGroups.has(entry.subject)">

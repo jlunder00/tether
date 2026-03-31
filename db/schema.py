@@ -38,6 +38,24 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     PRIMARY KEY (task_id, blocked_by_id)
 );
 
+CREATE TABLE IF NOT EXISTS milestones (
+    id              TEXT PRIMARY KEY,
+    context_subject TEXT NOT NULL REFERENCES context_entries(subject) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    description     TEXT,
+    target_date     TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    status_override INTEGER NOT NULL DEFAULT 0,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS milestone_tasks (
+    milestone_id TEXT NOT NULL REFERENCES milestones(id) ON DELETE CASCADE,
+    task_id      TEXT NOT NULL,
+    PRIMARY KEY (milestone_id, task_id)
+);
+
 CREATE TABLE IF NOT EXISTS acknowledgements (
     plan_date TEXT NOT NULL,
     anchor_id TEXT NOT NULL,

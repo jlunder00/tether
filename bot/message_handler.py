@@ -37,6 +37,7 @@ from db.queries import (
     get_orchestrator_conversation,
     upsert_staging_mutation,
     get_staging_mutations,
+    link_milestone_task,
 )
 from db.schema import init_db
 
@@ -240,6 +241,10 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
             elif op == "insert_check_in":
                 insert_check_in(db_path, today, m["anchor_id"],
                                 m["accomplished"], m["current_status"])
+            elif op == "link_milestone_tasks":
+                milestone_id = m["milestone_id"]
+                for task_id in m.get("task_ids", []):
+                    link_milestone_task(db_path, milestone_id, task_id)
             else:
                 logger.warning("Unknown mutation op: %s", op)
         except Exception as e:
