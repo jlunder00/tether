@@ -45,6 +45,7 @@ export const usePlanStore = defineStore('plan', () => {
   const today = localDateString(new Date())
   const activeDate = ref(today)
   const savedDates = ref<string[]>([])
+  const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
     if (date) activeDate.value = date
@@ -62,6 +63,53 @@ export const usePlanStore = defineStore('plan', () => {
   function goToPrevDay() { fetchPlan(offsetDate(activeDate.value, -1)) }
   function goToNextDay() { fetchPlan(offsetDate(activeDate.value, +1)) }
   function goToToday()   { fetchPlan(today) }
+
+  async function fetchPlanRange(startDate: string, endDate: string) {
+    const resp = await fetch(`/api/plan/range?start=${startDate}&end=${endDate}`)
+    const data: Record<string, DayPlan> = await resp.json()
+    plans.value = { ...plans.value, ...data }
+  }
+
+  async function moveTask(
+    taskUuid: string,
+    fromDate: string, fromAnchor: string,
+    toDate: string, toAnchor: string,
+    position?: number,
+  ) {
+    // Optimistic update in plans cache
+    const fromDay = plans.value[fromDate] ?? (fromDate === activeDate.value ? plan.value : null)
+    const toDay = plans.value[toDate] ?? (toDate === activeDate.value ? plan.value : null)
+    if (fromDay && toDay) {
+      const task = fromDay.anchors[fromAnchor]?.tasks.find(t => t.id === taskUuid)
+      if (task) {
+        fromDay.anchors[fromAnchor].tasks = fromDay.anchors[fromAnchor].tasks.filter(t => t.id !== taskUuid)
+        if (!toDay.anchors[toAnchor]) toDay.anchors[toAnchor] = { tasks: [], notes: '' }
+        const pos = position ?? toDay.anchors[toAnchor].tasks.length
+        toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
+      }
+    }
+    await fetch(`/api/tasks/${taskUuid}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: toDate, anchor_id: toAnchor, position }),
+    })
+  }
+
+  async function reorderTask(taskUuid: string, date: string, anchorId: string, newPosition: number) {
+    const dayPlan = plans.value[date] ?? (date === activeDate.value ? plan.value : null)
+    if (!dayPlan?.anchors[anchorId]) return
+    const tasks = dayPlan.anchors[anchorId].tasks
+    const idx = tasks.findIndex(t => t.id === taskUuid)
+    if (idx === -1) return
+    const [task] = tasks.splice(idx, 1)
+    tasks.splice(newPosition, 0, task)
+    tasks.forEach((t, i) => { t.position = i })
+    await fetch(`/api/tasks/${taskUuid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: newPosition }),
+    })
+  }
 
   async function updateAnchorTasks(anchorId: string, tasks: Task[], notes: string) {
     if (!plan.value) return
@@ -101,9 +149,10 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   return {
-    plan, loading, today, activeDate, savedDates,
+    plan, loading, today, activeDate, savedDates, plans,
     fetchPlan, fetchSavedDates,
     goToPrevDay, goToNextDay, goToToday,
+    fetchPlanRange, moveTask, reorderTask,
     updateAnchorTasks, updateTaskStatus, connectWebSocket,
   }
 })

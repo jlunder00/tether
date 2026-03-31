@@ -38,6 +38,8 @@ from db.queries import (
     upsert_staging_mutation,
     get_staging_mutations,
     link_milestone_task,
+    create_milestone,
+    patch_milestone,
 )
 from db.schema import init_db
 
@@ -245,6 +247,19 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
                 milestone_id = m["milestone_id"]
                 for task_id in m.get("task_ids", []):
                     link_milestone_task(db_path, milestone_id, task_id)
+            elif op == "create_milestone":
+                create_milestone(
+                    db_path,
+                    m["context_subject"],
+                    m["name"],
+                    description=m.get("description"),
+                    target_date=m.get("target_date"),
+                )
+            elif op == "patch_milestone":
+                fields = {k: v for k, v in m.items()
+                          if k in {"name", "description", "target_date", "status"}}
+                if fields:
+                    patch_milestone(db_path, m["milestone_id"], fields)
             else:
                 logger.warning("Unknown mutation op: %s", op)
         except Exception as e:

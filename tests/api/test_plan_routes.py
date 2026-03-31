@@ -122,3 +122,17 @@ async def test_move_task(app, db_path):
         )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_plan_range_returns_dict_of_day_plans(app, db_path):
+    from datetime import date, timedelta
+    today = str(date.today())
+    tomorrow = str(date.today() + timedelta(days=1))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/plan/range?start={today}&end={tomorrow}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert today in data
+    assert tomorrow in data
+    assert "anchors" in data[today]
