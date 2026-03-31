@@ -54,7 +54,8 @@ def test_upsert_tasks_replaces_anchor_tasks(db_path):
     upsert_tasks(db_path, "2026-03-26", "grind_am",
                  tasks=["Apply to 3 jobs", "Follow up Stripe"], notes="ML roles")
     plan = get_plan(db_path, "2026-03-26")
-    assert plan["anchors"]["grind_am"]["tasks"] == ["Apply to 3 jobs", "Follow up Stripe"]
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["Apply to 3 jobs", "Follow up Stripe"]
     assert plan["anchors"]["grind_am"]["notes"] == "ML roles"
 
 
@@ -66,7 +67,8 @@ def test_upsert_tasks_replaces_existing(db_path):
     upsert_tasks(db_path, "2026-03-26", "grind_am", tasks=["Old task"], notes="")
     upsert_tasks(db_path, "2026-03-26", "grind_am", tasks=["New task"], notes="")
     plan = get_plan(db_path, "2026-03-26")
-    assert plan["anchors"]["grind_am"]["tasks"] == ["New task"]
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["New task"]
 
 
 def test_context_entry_crud(db_path):
@@ -350,3 +352,22 @@ def test_upsert_tasks_removes_deleted_tasks(db_path):
                            [{"id": uid_a, "text": "Task A"}], notes="")
     assert len(updated) == 1
     assert updated[0]["id"] == uid_a
+
+
+# ---------------------------------------------------------------------------
+# Task model v2: get_plan returns task objects
+# ---------------------------------------------------------------------------
+
+def test_get_plan_returns_task_objects(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_tasks(db_path, "2026-03-30", "grind_am",
+                 [{"text": "Apply", "status": "in_progress"}], notes="")
+    plan = get_plan(db_path, "2026-03-30")
+    task = plan["anchors"]["grind_am"]["tasks"][0]
+    assert isinstance(task, dict)
+    assert task["text"] == "Apply"
+    assert task["status"] == "in_progress"
+    assert task["id"] is not None and len(task["id"]) == 36
+    assert task["blocks"] == []
+    assert task["blocked_by"] == []

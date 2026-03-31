@@ -37,7 +37,8 @@ def get_plan(db_path: Path, date: str) -> dict:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
         task_rows = conn.execute(
-            "SELECT anchor_id, text, notes, position FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+            "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
+            "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
             (date,)
         ).fetchall()
 
@@ -46,7 +47,35 @@ def get_plan(db_path: Path, date: str) -> dict:
             aid = row["anchor_id"]
             if aid not in anchors:
                 anchors[aid] = {"tasks": [], "notes": row["notes"]}
-            anchors[aid]["tasks"].append(row["text"])
+            fc = row["followup_config"]
+            anchors[aid]["tasks"].append({
+                "id": row["uuid"],
+                "text": row["text"],
+                "status": row["status"] or "pending",
+                "position": row["position"],
+                "followup_config": json.loads(fc) if fc else None,
+                "blocks": [],
+                "blocked_by": [],
+            })
+
+        # Populate dependency fields
+        all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
+        if all_uuids:
+            placeholders = ",".join("?" for _ in all_uuids)
+            dep_rows = conn.execute(
+                f"SELECT task_id, blocked_by_id FROM task_dependencies "
+                f"WHERE task_id IN ({placeholders}) OR blocked_by_id IN ({placeholders})",
+                all_uuids + all_uuids,
+            ).fetchall()
+            blocked_by_map: dict[str, list] = {}
+            blocks_map: dict[str, list] = {}
+            for dep in dep_rows:
+                blocked_by_map.setdefault(dep["task_id"], []).append(dep["blocked_by_id"])
+                blocks_map.setdefault(dep["blocked_by_id"], []).append(dep["task_id"])
+            for anchor_data in anchors.values():
+                for task in anchor_data["tasks"]:
+                    task["blocked_by"] = blocked_by_map.get(task["id"], [])
+                    task["blocks"] = blocks_map.get(task["id"], [])
 
         ack_rows = conn.execute(
             "SELECT anchor_id, acknowledged_at FROM acknowledgements WHERE plan_date=?", (date,)

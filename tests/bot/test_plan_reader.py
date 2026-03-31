@@ -90,7 +90,8 @@ def db_config_dir(tmp_path):
 def test_load_plan_from_db(db_config_dir):
     plan = load_plan(db_config_dir)
     assert "grind_am" in plan.anchors
-    assert plan.anchors["grind_am"].tasks == ["Apply to 3 jobs", "Follow up"]
+    texts = [t["text"] for t in plan.anchors["grind_am"].tasks]
+    assert texts == ["Apply to 3 jobs", "Follow up"]
 
 
 def test_load_context_from_db_concatenates_entries(db_config_dir):

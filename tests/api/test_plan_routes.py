@@ -50,7 +50,7 @@ async def test_put_anchor_tasks_updates_db(app, db_path):
     assert resp.status_code == 200
     from db.queries import get_plan
     plan = get_plan(db_path, str(date.today()))
-    assert plan["anchors"]["grind_am"]["tasks"] == ["Updated task"]
+    assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["Updated task"]
 
 
 @pytest.mark.asyncio

@@ -172,7 +172,7 @@ def test_handle_update_plan_saves_tasks(db_path):
         with patch("bot.message_handler.DB_PATH", db_path):
             handle_message("/update-plan grind_am :: New task 1; New task 2", [].append)
     plan = get_plan(db_path, TODAY)
-    assert plan["anchors"]["grind_am"]["tasks"] == ["New task 1", "New task 2"]
+    assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["New task 1", "New task 2"]
 
 
 # ---------------------------------------------------------------------------
