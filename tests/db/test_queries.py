@@ -12,6 +12,8 @@ from db.queries import (
     insert_orchestrator_turn, get_orchestrator_conversation,
     upsert_staging_mutation, get_staging_mutations,
     log_stage, get_invocation_log,
+    create_milestone, get_milestones, patch_milestone, delete_milestone,
+    link_milestone_task, unlink_milestone_task,
 )
 
 
@@ -428,7 +430,6 @@ def test_add_and_remove_task_dependency(db_path):
 # ── Milestone tests ──────────────────────────────────────────────────────────
 
 def test_create_milestone_returns_dict_with_uuid(db_path):
-    from db.queries import create_milestone, upsert_context_entry
     upsert_context_entry(db_path, "Proj", "body")
     m = create_milestone(db_path, "Proj", "Backend API")
     assert len(m["id"]) == 36
@@ -440,7 +441,6 @@ def test_create_milestone_returns_dict_with_uuid(db_path):
 
 
 def test_get_milestones_returns_list_for_subject(db_path):
-    from db.queries import create_milestone, get_milestones, upsert_context_entry
     upsert_context_entry(db_path, "Proj", "body")
     create_milestone(db_path, "Proj", "M1")
     create_milestone(db_path, "Proj", "M2")
@@ -450,7 +450,6 @@ def test_get_milestones_returns_list_for_subject(db_path):
 
 
 def test_get_milestones_no_subject_returns_all(db_path):
-    from db.queries import create_milestone, get_milestones, upsert_context_entry
     upsert_context_entry(db_path, "A", "body")
     upsert_context_entry(db_path, "B", "body")
     create_milestone(db_path, "A", "MA")
@@ -459,8 +458,6 @@ def test_get_milestones_no_subject_returns_all(db_path):
 
 
 def test_derive_milestone_status_in_progress(db_path):
-    from db.queries import (create_milestone, get_milestones, link_milestone_task,
-                             upsert_tasks, upsert_plan, upsert_context_entry)
     upsert_anchor(db_path, _ANCHOR)
     upsert_plan(db_path, "2026-03-30")
     upsert_context_entry(db_path, "Proj", "body")
@@ -477,8 +474,6 @@ def test_derive_milestone_status_in_progress(db_path):
 
 
 def test_derive_milestone_status_all_done(db_path):
-    from db.queries import (create_milestone, get_milestones, link_milestone_task,
-                             upsert_tasks, upsert_plan, upsert_context_entry)
     upsert_anchor(db_path, _ANCHOR)
     upsert_plan(db_path, "2026-03-30")
     upsert_context_entry(db_path, "Proj", "body")
@@ -489,8 +484,20 @@ def test_derive_milestone_status_all_done(db_path):
     assert get_milestones(db_path, "Proj")[0]["status"] == "done"
 
 
+def test_derive_milestone_status_blocked(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_context_entry(db_path, "Proj", "body")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "T1", "status": "blocked"}, {"text": "T2", "status": "pending"}],
+                         notes="")
+    m = create_milestone(db_path, "Proj", "Goal")
+    link_milestone_task(db_path, m["id"], tasks[0]["id"])
+    link_milestone_task(db_path, m["id"], tasks[1]["id"])
+    assert get_milestones(db_path, "Proj")[0]["status"] == "blocked"
+
+
 def test_patch_milestone_name(db_path):
-    from db.queries import create_milestone, patch_milestone, upsert_context_entry
     upsert_context_entry(db_path, "Proj", "body")
     m = create_milestone(db_path, "Proj", "Old")
     updated = patch_milestone(db_path, m["id"], {"name": "New"})
@@ -498,7 +505,6 @@ def test_patch_milestone_name(db_path):
 
 
 def test_patch_milestone_status_sets_override(db_path):
-    from db.queries import create_milestone, patch_milestone, upsert_context_entry
     upsert_context_entry(db_path, "Proj", "body")
     m = create_milestone(db_path, "Proj", "Goal")
     updated = patch_milestone(db_path, m["id"], {"status": "done"})
@@ -507,12 +513,10 @@ def test_patch_milestone_status_sets_override(db_path):
 
 
 def test_patch_milestone_returns_none_for_missing(db_path):
-    from db.queries import patch_milestone
     assert patch_milestone(db_path, "nonexistent", {"name": "x"}) is None
 
 
 def test_delete_milestone(db_path):
-    from db.queries import create_milestone, delete_milestone, get_milestones, upsert_context_entry
     upsert_context_entry(db_path, "Proj", "body")
     m = create_milestone(db_path, "Proj", "Temp")
     delete_milestone(db_path, m["id"])
@@ -520,8 +524,6 @@ def test_delete_milestone(db_path):
 
 
 def test_link_and_unlink_milestone_task(db_path):
-    from db.queries import (create_milestone, link_milestone_task, unlink_milestone_task,
-                             get_milestones, upsert_tasks, upsert_plan, upsert_context_entry)
     upsert_anchor(db_path, _ANCHOR)
     upsert_plan(db_path, "2026-03-30")
     upsert_context_entry(db_path, "Proj", "body")
@@ -534,7 +536,6 @@ def test_link_and_unlink_milestone_task(db_path):
 
 
 def test_rename_context_cascades_to_milestones(db_path):
-    from db.queries import create_milestone, get_milestones, rename_context_subject, upsert_context_entry
     upsert_context_entry(db_path, "OldProj", "body")
     create_milestone(db_path, "OldProj", "Goal")
     rename_context_subject(db_path, "OldProj", "NewProj")

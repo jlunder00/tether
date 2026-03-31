@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from db.schema import get_db
@@ -441,23 +442,23 @@ def create_milestone(
     description: str | None = None, target_date: str | None = None,
 ) -> dict:
     mid = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
         conn.execute(
-            "INSERT INTO milestones (id, context_subject, name, description, target_date) "
-            "VALUES (?,?,?,?,?)",
-            (mid, context_subject, name, description, target_date),
+            "INSERT INTO milestones (id, context_subject, name, description, target_date, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (mid, context_subject, name, description, target_date, now, now),
         )
     return {
         "id": mid, "context_subject": context_subject, "name": name,
         "description": description, "target_date": target_date,
         "status": "pending", "status_override": False,
-        "created_at": None, "updated_at": None,
+        "created_at": now, "updated_at": now,
         "task_count": 0, "done_count": 0, "task_ids": [], "tasks": [],
     }
 
 
 def get_milestones(db_path: Path, context_subject: str | None = None) -> list[dict]:
-    from collections import defaultdict
     with get_db(db_path) as conn:
         if context_subject is not None:
             rows = conn.execute(
@@ -536,7 +537,11 @@ def patch_milestone(db_path: Path, milestone_id: str, fields: dict) -> dict | No
         )
         if cur.rowcount == 0:
             return None
-    return next((m for m in get_milestones(db_path) if m["id"] == milestone_id), None)
+        row = conn.execute(
+            "SELECT context_subject FROM milestones WHERE id=?", (milestone_id,)
+        ).fetchone()
+    subject = row["context_subject"]
+    return next((m for m in get_milestones(db_path, subject) if m["id"] == milestone_id), None)
 
 
 def delete_milestone(db_path: Path, milestone_id: str) -> None:
