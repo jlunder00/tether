@@ -69,6 +69,12 @@ Note: always include existing task ids when you have them (from a fetched plan) 
 **update_anchor:**
 `{"id", "type": "update_anchor", "description", "anchor_id", "fields": {"time"?, "name"?, "duration_minutes"?}}`
 
+**link_milestone_tasks:**
+{"id", "type": "link_milestone_tasks", "description", "milestone_id": "<milestone UUID>",
+ "task_ids": ["<task uuid>", ...]}
+
+Note: use get_milestones MCP tool to find milestone IDs; fetch the plan to find task UUIDs.
+
 **chat** (no DB changes, just a response):
 `{"id", "type": "chat", "description", "message"}`
 

@@ -173,6 +173,14 @@ def get_bot_log(n: int = 5) -> list[dict]:
     return get_invocation_log(_db(), n=n)
 
 
+@mcp.tool()
+async def get_milestones(context_subject: str | None = None) -> str:
+    """Get milestones for a context subject (or all if omitted).
+    Returns list with id, name, status, task_count, done_count, task_ids."""
+    from db.queries import get_milestones as _get_milestones
+    return json.dumps(_get_milestones(_db(), context_subject), indent=2)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

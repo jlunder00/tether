@@ -50,4 +50,11 @@ Note: include the existing task `id` to preserve UUIDs and dependencies. Use `nu
   "report": "One sentence: what was changed on which anchor."
 }
 ```
+{% elif op == "link_milestone_tasks" %}
+{
+  "op": "link_milestone_tasks",
+  "milestone_id": "<milestone_id from params>",
+  "task_ids": ["<task_id>", ...],
+  "report": "One sentence: which tasks were linked to which milestone."
+}
 {% endif %}
