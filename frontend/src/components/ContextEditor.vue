@@ -153,7 +153,8 @@ onMounted(() => {
             @click="toggleMilestone(m.id)"
             class="text-xs px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 flex items-center gap-1">
             <span :class="m.status === 'done' ? 'bg-green-400'
-                        : m.status === 'in_progress' ? 'bg-blue-400' : 'bg-white/20'"
+                        : m.status === 'in_progress' ? 'bg-blue-400'
+                        : m.status === 'blocked' ? 'bg-red-400' : 'bg-white/20'"
                   class="w-1.5 h-1.5 rounded-full" />
             {{ m.name }} {{ m.done_count }}/{{ m.task_count }}
           </button>
