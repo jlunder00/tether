@@ -247,6 +247,8 @@ def delete_context_entry(db_path: Path, subject: str) -> None:
 def rename_context_subject(db_path: Path, old_subject: str, new_subject: str) -> None:
     """Rename a subject and cascade to all children."""
     with get_db(db_path) as conn:
+        # Temporarily disable FK checks so we can update both tables atomically
+        conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute(
             "UPDATE context_entries SET subject = ? WHERE subject = ?",
             (new_subject, old_subject)
@@ -261,6 +263,19 @@ def rename_context_subject(db_path: Path, old_subject: str, new_subject: str) ->
                 "UPDATE context_entries SET subject = ? WHERE subject = ?",
                 (new_child, row["subject"])
             )
+        # cascade milestone context_subject (exact match)
+        conn.execute(
+            "UPDATE milestones SET context_subject=? WHERE context_subject=?",
+            (new_subject, old_subject),
+        )
+        # cascade milestone context_subject (child subjects)
+        for row in children:
+            new_child = new_subject + row["subject"][len(old_subject):]
+            conn.execute(
+                "UPDATE milestones SET context_subject=? WHERE context_subject=?",
+                (new_child, row["subject"]),
+            )
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def list_plan_dates(db_path: Path) -> list[str]:
@@ -406,4 +421,140 @@ def insert_check_in(db_path: Path, date: str, anchor_id: str,
             "INSERT INTO check_ins (plan_date, anchor_id, type, timestamp, accomplished, current_status)"
             " VALUES (?, ?, 'user_checkin', ?, ?, ?)",
             (date, anchor_id, now, accomplished, current_status),
+        )
+
+
+def _derive_milestone_status(statuses: list[str]) -> str:
+    if not statuses:
+        return 'pending'
+    if all(s == 'done' for s in statuses):
+        return 'done'
+    if any(s == 'blocked' for s in statuses) and not any(s == 'in_progress' for s in statuses):
+        return 'blocked'
+    if any(s in ('in_progress', 'done') for s in statuses):
+        return 'in_progress'
+    return 'pending'
+
+
+def create_milestone(
+    db_path: Path, context_subject: str, name: str,
+    description: str | None = None, target_date: str | None = None,
+) -> dict:
+    mid = str(uuid.uuid4())
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO milestones (id, context_subject, name, description, target_date) "
+            "VALUES (?,?,?,?,?)",
+            (mid, context_subject, name, description, target_date),
+        )
+    return {
+        "id": mid, "context_subject": context_subject, "name": name,
+        "description": description, "target_date": target_date,
+        "status": "pending", "status_override": False,
+        "created_at": None, "updated_at": None,
+        "task_count": 0, "done_count": 0, "task_ids": [], "tasks": [],
+    }
+
+
+def get_milestones(db_path: Path, context_subject: str | None = None) -> list[dict]:
+    from collections import defaultdict
+    with get_db(db_path) as conn:
+        if context_subject is not None:
+            rows = conn.execute(
+                "SELECT * FROM milestones WHERE context_subject=? ORDER BY created_at",
+                (context_subject,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM milestones ORDER BY context_subject, created_at"
+            ).fetchall()
+
+        if not rows:
+            return []
+
+        ids = [m["id"] for m in rows]
+        ph = ",".join("?" for _ in ids)
+        links = conn.execute(
+            f"SELECT mt.milestone_id, mt.task_id, "
+            f"COALESCE(t.status, 'pending') AS task_status, "
+            f"t.text AS task_text, t.plan_date, t.anchor_id "
+            f"FROM milestone_tasks mt "
+            f"LEFT JOIN tasks t ON t.uuid = mt.task_id "
+            f"WHERE mt.milestone_id IN ({ph})",
+            ids,
+        ).fetchall()
+
+    task_ids_map: dict = defaultdict(list)
+    tasks_map: dict = defaultdict(list)
+    statuses_map: dict = defaultdict(list)
+    for row in links:
+        mid = row["milestone_id"]
+        task_ids_map[mid].append(row["task_id"])
+        statuses_map[mid].append(row["task_status"])
+        tasks_map[mid].append({
+            "id": row["task_id"], "text": row["task_text"],
+            "status": row["task_status"],
+            "plan_date": row["plan_date"], "anchor_id": row["anchor_id"],
+        })
+
+    result = []
+    for m in rows:
+        mid = m["id"]
+        statuses = statuses_map[mid]
+        result.append({
+            "id": mid,
+            "context_subject": m["context_subject"],
+            "name": m["name"],
+            "description": m["description"],
+            "target_date": m["target_date"],
+            "status": m["status"] if m["status_override"] else _derive_milestone_status(statuses),
+            "status_override": bool(m["status_override"]),
+            "created_at": m["created_at"],
+            "updated_at": m["updated_at"],
+            "task_count": len(statuses),
+            "done_count": sum(1 for s in statuses if s == "done"),
+            "task_ids": task_ids_map[mid],
+            "tasks": tasks_map[mid],
+        })
+    return result
+
+
+def patch_milestone(db_path: Path, milestone_id: str, fields: dict) -> dict | None:
+    allowed = {"name", "description", "target_date"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if "status" in fields:
+        updates["status"] = fields["status"]
+        updates["status_override"] = 1
+    if not updates:
+        return None
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            f"UPDATE milestones SET {set_clause} WHERE id=?",
+            (*updates.values(), milestone_id),
+        )
+        if cur.rowcount == 0:
+            return None
+    return next((m for m in get_milestones(db_path) if m["id"] == milestone_id), None)
+
+
+def delete_milestone(db_path: Path, milestone_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM milestones WHERE id=?", (milestone_id,))
+
+
+def link_milestone_task(db_path: Path, milestone_id: str, task_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO milestone_tasks (milestone_id, task_id) VALUES (?,?)",
+            (milestone_id, task_id),
+        )
+
+
+def unlink_milestone_task(db_path: Path, milestone_id: str, task_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM milestone_tasks WHERE milestone_id=? AND task_id=?",
+            (milestone_id, task_id),
         )
