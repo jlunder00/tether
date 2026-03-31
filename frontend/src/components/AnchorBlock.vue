@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { useDraggable } from 'vue-draggable-plus'
 import TaskItem from './TaskItem.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
@@ -10,38 +9,14 @@ const props = defineProps<{
   anchorName: string
   time: string
   color: string
-  date?: string   // defaults to store activeDate; WeekView passes explicit date
+  date?: string
 }>()
 
 const store = usePlanStore()
 const ulRef = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
-const dayPlan = computed(() =>
-  props.date
-    ? store.plans[props.date]
-    : store.plan
-)
+const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
-
-// Writable computed so useDraggable always reads the live tasks array (even after async
-// plan load) and writes back via splice-in-place rather than swapping the reference.
-const draggableTasks = computed<Task[]>({
-  get: () => anchorPlan.value.tasks,
-  set: (newTasks: Task[]) => {
-    const plan = props.date ? store.plans[props.date] : store.plan
-    if (!plan?.anchors[props.anchorId]) return
-    const arr = plan.anchors[props.anchorId].tasks
-    arr.splice(0, arr.length, ...newTasks)
-  },
-})
-
-useDraggable(ulRef, draggableTasks, {
-  group: 'tasks',
-  handle: '.drag-handle',
-  forceFallback: true,
-  animation: 150,
-  onEnd: onDragEnd,
-})
 
 function onUpdate(task: Task, index: number) {
   const updated = [...anchorPlan.value.tasks]
@@ -62,13 +37,8 @@ function onAddNewTask() {
   }
   const tasks = effectivePlan.anchors[props.anchorId].tasks
   tasks.push({
-    id: '',
-    text: '',
-    status: 'pending' as const,
-    position: tasks.length,
-    followup_config: null,
-    blocks: [],
-    blocked_by: [],
+    id: '', text: '', status: 'pending' as const,
+    position: tasks.length, followup_config: null, blocks: [], blocked_by: [],
   })
   nextTick(() => {
     const inputs = ulRef.value?.querySelectorAll('input')
@@ -76,17 +46,30 @@ function onAddNewTask() {
   })
 }
 
-function onDragEnd(evt: any) {
-  const fromAnchor = evt.from.dataset.anchorId as string
-  const fromDate = evt.from.dataset.date as string
-  const toAnchor = evt.to.dataset.anchorId as string
-  const toDate = evt.to.dataset.date as string
-  const taskId = evt.item.dataset.taskId as string
+// ── Drag and drop ─────────────────────────────────────────────────────────────
+
+function onDragStart(evt: DragEvent, task: Task) {
+  if (!task.id) { evt.preventDefault(); return }
+  // Show the whole row as the drag ghost instead of just the handle
+  const row = (evt.currentTarget as HTMLElement)
+  evt.dataTransfer?.setDragImage(row, 20, row.offsetHeight / 2)
+  evt.dataTransfer!.effectAllowed = 'move'
+  evt.dataTransfer!.setData('application/json', JSON.stringify({
+    taskId: task.id,
+    fromAnchorId: props.anchorId,
+    fromDate: effectiveDate.value,
+  }))
+}
+
+function onDrop(evt: DragEvent, toIndex: number) {
+  const raw = evt.dataTransfer?.getData('application/json')
+  if (!raw) return
+  const { taskId, fromAnchorId, fromDate } = JSON.parse(raw)
   if (!taskId) return
-  if (fromAnchor === toAnchor && fromDate === toDate) {
-    store.reorderTask(taskId, toDate, toAnchor, evt.newIndex)
+  if (fromAnchorId === props.anchorId && fromDate === effectiveDate.value) {
+    store.reorderTask(taskId, effectiveDate.value, props.anchorId, toIndex)
   } else {
-    store.moveTask(taskId, fromDate, fromAnchor, toDate, toAnchor, evt.newIndex)
+    store.moveTask(taskId, fromDate, fromAnchorId, effectiveDate.value, props.anchorId, toIndex)
   }
 }
 </script>
@@ -103,18 +86,29 @@ function onDragEnd(evt: any) {
         ref="ulRef"
         :data-anchor-id="anchorId"
         :data-date="effectiveDate"
-        class="space-y-1">
+        class="space-y-1"
+        @dragover.prevent
+        @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
         <div
           v-for="(task, i) in anchorPlan.tasks"
           :key="task.id || i"
-          :data-task-id="task.id">
+          :data-task-id="task.id"
+          class="group flex items-center"
+          @dragover.prevent
+          @drop.stop.prevent="onDrop($event, i)">
+          <span
+            class="cursor-grab text-white/25 select-none opacity-0 group-hover:opacity-100 transition-opacity px-1 flex-shrink-0 leading-none"
+            draggable="true"
+            @dragstart="onDragStart($event, task)">⠿</span>
           <TaskItem
+            class="flex-1 min-w-0"
             :task="task"
             @update="onUpdate($event, i)"
             @remove="onRemove(i)" />
         </div>
       </ul>
-      <button type="button" @click="onAddNewTask" class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
+      <button type="button" @click="onAddNewTask"
+              class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
     </div>
   </div>
 </template>
