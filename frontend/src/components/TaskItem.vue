@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import type { Task, TaskStatus } from '../stores/plan'
+import { useMilestoneStore } from '../stores/milestones'
+const milestoneStore = useMilestoneStore()
 
 const props = defineProps<{ task: Task }>()
 const emit = defineEmits<{
@@ -39,6 +41,11 @@ function updateText(e: Event) {
       :class="task.status === 'done' ? 'line-through opacity-40' : ''"
       @change="updateText"
       class="flex-1 bg-transparent border-b border-white/20 focus:border-white/60 outline-none text-sm py-0.5" />
+    <span
+      v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
+      class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/50 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      {{ m.name }}
+    </span>
     <button
       @click="emit('remove')"
       class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
