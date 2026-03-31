@@ -82,7 +82,7 @@ function onDragEnd(evt: any) {
     </div>
     <div ref="taskContainer" class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
       <ul
-        v-draggable="[anchorPlan.tasks, { group: 'tasks', handle: '.drag-handle', onEnd: onDragEnd }]"
+        v-draggable="[anchorPlan.tasks, { group: 'tasks', handle: '.drag-handle', forceFallback: true, animation: 150, onEnd: onDragEnd }]"
         :data-anchor-id="anchorId"
         :data-date="effectiveDate"
         class="space-y-1">
