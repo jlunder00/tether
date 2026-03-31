@@ -20,7 +20,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app = FastAPI(title="Tether")
     app.include_router(plan_routes.router, prefix="/api")
     app.include_router(anchor_routes.router, prefix="/api")
-    app.include_router(milestones_routes.router, prefix="/api")
+    app.include_router(milestones_routes.router, prefix="/api")  # must be before context_routes (overlapping {subject:path} wildcard)
     app.include_router(context_routes.router, prefix="/api")
     app.include_router(logs_routes.router, prefix="/api")
     app.include_router(tasks_routes.router, prefix="/api")

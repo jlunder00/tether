@@ -20,6 +20,8 @@ async def list_milestones(subject: str):
 
 @router.post("/context/{subject:path}/milestones")
 async def create_milestone_route(subject: str, body: dict):
+    if "name" not in body:
+        raise HTTPException(status_code=422, detail="'name' is required")
     return create_milestone(
         cfg.DB_PATH, subject, body["name"],
         description=body.get("description"),
@@ -43,6 +45,8 @@ async def delete_milestone_route(milestone_id: str):
 
 @router.post("/milestones/{milestone_id}/tasks")
 async def link_task(milestone_id: str, body: dict):
+    if "task_id" not in body:
+        raise HTTPException(status_code=422, detail="'task_id' is required")
     link_milestone_task(cfg.DB_PATH, milestone_id, body["task_id"])
     return {"ok": True}
 
