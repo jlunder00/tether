@@ -57,4 +57,19 @@ Note: include the existing task `id` to preserve UUIDs and dependencies. Use `nu
   "task_ids": ["<task_id>", ...],
   "report": "One sentence: which tasks were linked to which milestone."
 }
+{% elif op == "create_milestone" %}
+{
+  "op": "create_milestone",
+  "context_subject": "<context_subject from params>",
+  "name": "<name from params>",
+  "description": "<description from params or null>",
+  "target_date": "<target_date from params or null>",
+  "report": "One sentence: what milestone was created and for which context."
+}
+{% elif op == "patch_milestone" %}
+{
+  "op": "patch_milestone",
+  "milestone_id": "<milestone_id from params>",
+  "report": "One sentence: what was changed on which milestone."
+}
 {% endif %}
