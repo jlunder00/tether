@@ -75,6 +75,17 @@ Note: always include existing task ids when you have them (from a fetched plan) 
 
 Note: use get_milestones MCP tool to find milestone IDs; fetch the plan to find task UUIDs.
 
+**create_milestone:**
+{"id", "type": "create_milestone", "description", "context_subject": "<subject>",
+ "name": "<milestone name>", "description": "<optional text or null>",
+ "target_date": "<YYYY-MM-DD or null>"}
+
+**patch_milestone:**
+{"id", "type": "patch_milestone", "description", "milestone_id": "<UUID>",
+ <any of: "name", "description", "target_date", "status">}
+
+Note: use get_milestones MCP tool to get milestone IDs before patching.
+
 **chat** (no DB changes, just a response):
 `{"id", "type": "chat", "description", "message"}`
 

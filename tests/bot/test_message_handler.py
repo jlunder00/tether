@@ -566,3 +566,38 @@ def test_call_satisfaction_eval_fails_gracefully(db_path):
         result = call_satisfaction_eval("anything", [], [], db_path)
     assert result["satisfied"] is True
     assert result["replan_needed"] is False
+
+
+def test_apply_mutations_create_milestone(db_path):
+    from bot.message_handler import apply_mutations
+    upsert_context_entry(db_path, "Proj", "body")
+    apply_mutations([{
+        "op": "create_milestone",
+        "context_subject": "Proj",
+        "name": "Ship v2",
+        "description": "All tasks for v2 launch",
+        "target_date": "2026-04-30",
+    }], db_path, TODAY)
+    from db.queries import get_milestones
+    ms = get_milestones(db_path, "Proj")
+    assert len(ms) == 1
+    assert ms[0]["name"] == "Ship v2"
+    assert ms[0]["target_date"] == "2026-04-30"
+
+
+def test_apply_mutations_patch_milestone(db_path):
+    from bot.message_handler import apply_mutations
+    from db.queries import create_milestone
+    upsert_context_entry(db_path, "Proj", "body")
+    m = create_milestone(db_path, "Proj", "Old Name")
+    apply_mutations([{
+        "op": "patch_milestone",
+        "milestone_id": m["id"],
+        "name": "New Name",
+        "status": "in_progress",
+    }], db_path, TODAY)
+    from db.queries import get_milestones
+    ms = get_milestones(db_path, "Proj")
+    assert ms[0]["name"] == "New Name"
+    assert ms[0]["status"] == "in_progress"
+    assert ms[0]["status_override"] is True
