@@ -59,3 +59,66 @@ async def test_get_anchors(app):
         resp = await client.get("/api/anchors")
     assert resp.status_code == 200
     assert any(a["id"] == "grind_am" for a in resp.json())
+
+
+@pytest.mark.asyncio
+async def test_put_anchor_tasks_returns_task_objects(app, db_path):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.put(
+            f"/api/plan/{date.today()}/anchors/grind_am",
+            json={"tasks": [{"text": "New task", "status": "pending"}], "notes": ""}
+        )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert len(data["tasks"]) == 1
+    assert len(data["tasks"][0]["id"]) == 36
+    assert data["tasks"][0]["text"] == "New task"
+
+
+@pytest.mark.asyncio
+async def test_get_plan_returns_task_objects_with_status(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get(f"/api/plan/{date.today()}")
+    task = resp.json()["anchors"]["grind_am"]["tasks"][0]
+    assert isinstance(task, dict)
+    assert "id" in task and "status" in task
+
+
+@pytest.mark.asyncio
+async def test_patch_task_status(app, db_path):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put(
+            f"/api/plan/{date.today()}/anchors/grind_am",
+            json={"tasks": [{"text": "Task"}], "notes": ""}
+        )
+        task_id = put_resp.json()["tasks"][0]["id"]
+        resp = await client.patch(f"/api/tasks/{task_id}", json={"status": "in_progress"})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_not_found(app):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.patch("/api/tasks/nonexistent-uuid", json={"status": "done"})
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_move_task(app, db_path):
+    from datetime import timedelta
+    today = str(date.today())
+    tomorrow = str(date.today() + timedelta(days=1))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        put_resp = await client.put(
+            f"/api/plan/{today}/anchors/grind_am",
+            json={"tasks": [{"text": "Move me"}], "notes": ""}
+        )
+        task_id = put_resp.json()["tasks"][0]["id"]
+        resp = await client.put(
+            f"/api/tasks/{task_id}/move",
+            json={"date": tomorrow, "anchor_id": "grind_am"}
+        )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
