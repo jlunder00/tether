@@ -22,13 +22,6 @@ const dayPlan = computed(() =>
 )
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
 
-const tasks = computed({
-  get: () => anchorPlan.value.tasks,
-  set: (val: Task[]) => {
-    store.updateAnchorTasks(props.anchorId, val, anchorPlan.value.notes ?? '')
-  },
-})
-
 function onUpdate(task: Task, index: number) {
   const updated = [...anchorPlan.value.tasks]
   updated[index] = task
@@ -80,7 +73,7 @@ function onDragEnd(evt: any) {
     </div>
     <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
       <VueDraggable
-        v-model="tasks"
+        :modelValue="anchorPlan.tasks"
         group="tasks"
         item-key="id"
         :data-anchor-id="anchorId"
@@ -97,7 +90,7 @@ function onDragEnd(evt: any) {
           </div>
         </template>
       </VueDraggable>
-      <button @click="onAddNewTask" class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
+      <button type="button" @click="onAddNewTask" class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
     </div>
   </div>
 </template>
