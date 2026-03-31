@@ -115,7 +115,14 @@ export const usePlanStore = defineStore('plan', () => {
 
   async function updateAnchorTasks(anchorId: string, tasks: Task[], notes: string) {
     if (!plan.value) return
-    plan.value.anchors[anchorId] = { tasks, notes }
+    const anchor = plan.value.anchors[anchorId]
+    if (!anchor) {
+      plan.value.anchors[anchorId] = { tasks, notes }
+    } else {
+      // Mutate in-place to keep the array reference stable for the drag directive
+      anchor.tasks.splice(0, anchor.tasks.length, ...tasks)
+      anchor.notes = notes
+    }
     const resp = await fetch(`/api/plan/${activeDate.value}/anchors/${anchorId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -123,7 +130,9 @@ export const usePlanStore = defineStore('plan', () => {
     })
     const data = await resp.json()
     if (data.tasks && plan.value.anchors[anchorId]) {
-      plan.value.anchors[anchorId].tasks = data.tasks  // sync server-assigned UUIDs
+      // Mutate in-place to sync server-assigned UUIDs without breaking the reference
+      const arr = plan.value.anchors[anchorId].tasks
+      arr.splice(0, arr.length, ...data.tasks)
     }
   }
 
