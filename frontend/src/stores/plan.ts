@@ -48,8 +48,10 @@ export const usePlanStore = defineStore('plan', () => {
   const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
-    if (date) activeDate.value = date
-    loading.value = true
+    if (date) {
+      activeDate.value = date
+      loading.value = true
+    }
     const resp = await fetch(`/api/plan/${activeDate.value}`)
     plan.value = await resp.json()
     loading.value = false
