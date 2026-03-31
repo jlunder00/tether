@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { vDraggable } from 'vue-draggable-plus'
+import { useDraggable } from 'vue-draggable-plus'
 import TaskItem from './TaskItem.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
@@ -14,7 +14,7 @@ const props = defineProps<{
 }>()
 
 const store = usePlanStore()
-const taskContainer = ref<HTMLElement | null>(null)
+const ulRef = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() =>
   props.date
@@ -22,6 +22,26 @@ const dayPlan = computed(() =>
     : store.plan
 )
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
+
+// Writable computed so useDraggable always reads the live tasks array (even after async
+// plan load) and writes back via splice-in-place rather than swapping the reference.
+const draggableTasks = computed<Task[]>({
+  get: () => anchorPlan.value.tasks,
+  set: (newTasks: Task[]) => {
+    const plan = props.date ? store.plans[props.date] : store.plan
+    if (!plan?.anchors[props.anchorId]) return
+    const arr = plan.anchors[props.anchorId].tasks
+    arr.splice(0, arr.length, ...newTasks)
+  },
+})
+
+useDraggable(ulRef, draggableTasks, {
+  group: 'tasks',
+  handle: '.drag-handle',
+  forceFallback: true,
+  animation: 150,
+  onEnd: onDragEnd,
+})
 
 function onUpdate(task: Task, index: number) {
   const updated = [...anchorPlan.value.tasks]
@@ -35,8 +55,6 @@ function onRemove(index: number) {
 }
 
 function onAddNewTask() {
-  // Push directly to reactive state — no API call yet.
-  // The PUT fires when the user types text and @change triggers onUpdate.
   const effectivePlan = props.date ? store.plans[props.date] : store.plan
   if (!effectivePlan) return
   if (!effectivePlan.anchors[props.anchorId]) {
@@ -53,7 +71,7 @@ function onAddNewTask() {
     blocked_by: [],
   })
   nextTick(() => {
-    const inputs = taskContainer.value?.querySelectorAll('input')
+    const inputs = ulRef.value?.querySelectorAll('input')
     if (inputs?.length) (inputs[inputs.length - 1] as HTMLInputElement).focus()
   })
 }
@@ -80,9 +98,9 @@ function onDragEnd(evt: any) {
       <span class="text-xs opacity-75">{{ time }}</span>
       <span class="font-bold text-sm mt-0.5">{{ anchorName }}</span>
     </div>
-    <div ref="taskContainer" class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
+    <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
       <ul
-        v-draggable="[anchorPlan.tasks, { group: 'tasks', handle: '.drag-handle', forceFallback: true, animation: 150, onEnd: onDragEnd }]"
+        ref="ulRef"
         :data-anchor-id="anchorId"
         :data-date="effectiveDate"
         class="space-y-1">
