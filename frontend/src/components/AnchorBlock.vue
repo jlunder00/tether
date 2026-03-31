@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { VueDraggable } from 'vue-draggable-plus'
+import { computed, nextTick, ref } from 'vue'
+import { vDraggable } from 'vue-draggable-plus'
 import TaskItem from './TaskItem.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
@@ -14,6 +14,7 @@ const props = defineProps<{
 }>()
 
 const store = usePlanStore()
+const taskContainer = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() =>
   props.date
@@ -34,19 +35,27 @@ function onRemove(index: number) {
 }
 
 function onAddNewTask() {
-  const updated = [
-    ...anchorPlan.value.tasks,
-    {
-      id: '',
-      text: '',
-      status: 'pending' as const,
-      position: anchorPlan.value.tasks.length,
-      followup_config: null,
-      blocks: [],
-      blocked_by: [],
-    },
-  ]
-  store.updateAnchorTasks(props.anchorId, updated, anchorPlan.value.notes ?? '')
+  // Push directly to reactive state — no API call yet.
+  // The PUT fires when the user types text and @change triggers onUpdate.
+  const effectivePlan = props.date ? store.plans[props.date] : store.plan
+  if (!effectivePlan) return
+  if (!effectivePlan.anchors[props.anchorId]) {
+    effectivePlan.anchors[props.anchorId] = { tasks: [], notes: '' }
+  }
+  const tasks = effectivePlan.anchors[props.anchorId].tasks
+  tasks.push({
+    id: '',
+    text: '',
+    status: 'pending' as const,
+    position: tasks.length,
+    followup_config: null,
+    blocks: [],
+    blocked_by: [],
+  })
+  nextTick(() => {
+    const inputs = taskContainer.value?.querySelectorAll('input')
+    if (inputs?.length) (inputs[inputs.length - 1] as HTMLInputElement).focus()
+  })
 }
 
 function onDragEnd(evt: any) {
@@ -71,25 +80,22 @@ function onDragEnd(evt: any) {
       <span class="text-xs opacity-75">{{ time }}</span>
       <span class="font-bold text-sm mt-0.5">{{ anchorName }}</span>
     </div>
-    <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
-      <VueDraggable
-        :modelValue="anchorPlan.tasks"
-        group="tasks"
-        item-key="id"
+    <div ref="taskContainer" class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
+      <ul
+        v-draggable="[anchorPlan.tasks, { group: 'tasks', onEnd: onDragEnd }]"
         :data-anchor-id="anchorId"
         :data-date="effectiveDate"
-        @end="onDragEnd"
-        tag="ul"
         class="space-y-1">
-        <template #item="{ element: task, index: i }">
-          <div :data-task-id="task.id">
-            <TaskItem
-              :task="task"
-              @update="onUpdate($event, i)"
-              @remove="onRemove(i)" />
-          </div>
-        </template>
-      </VueDraggable>
+        <div
+          v-for="(task, i) in anchorPlan.tasks"
+          :key="task.id || i"
+          :data-task-id="task.id">
+          <TaskItem
+            :task="task"
+            @update="onUpdate($event, i)"
+            @remove="onRemove(i)" />
+        </div>
+      </ul>
       <button type="button" @click="onAddNewTask" class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
     </div>
   </div>
