@@ -54,7 +54,8 @@ def test_upsert_tasks_replaces_anchor_tasks(db_path):
     upsert_tasks(db_path, "2026-03-26", "grind_am",
                  tasks=["Apply to 3 jobs", "Follow up Stripe"], notes="ML roles")
     plan = get_plan(db_path, "2026-03-26")
-    assert plan["anchors"]["grind_am"]["tasks"] == ["Apply to 3 jobs", "Follow up Stripe"]
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["Apply to 3 jobs", "Follow up Stripe"]
     assert plan["anchors"]["grind_am"]["notes"] == "ML roles"
 
 
@@ -66,7 +67,8 @@ def test_upsert_tasks_replaces_existing(db_path):
     upsert_tasks(db_path, "2026-03-26", "grind_am", tasks=["Old task"], notes="")
     upsert_tasks(db_path, "2026-03-26", "grind_am", tasks=["New task"], notes="")
     plan = get_plan(db_path, "2026-03-26")
-    assert plan["anchors"]["grind_am"]["tasks"] == ["New task"]
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["New task"]
 
 
 def test_context_entry_crud(db_path):
@@ -304,3 +306,120 @@ def test_get_invocation_log_multiple_stages_per_session(db_path):
     entries = get_invocation_log(db_path, n=1)
     stages = [e["stage"] for e in entries]
     assert stages == ["orchestrator_0", "meta_eval_0", "subagent_update_plan", "response_builder"]
+
+
+# ---------------------------------------------------------------------------
+# Task model v2: upsert_tasks returns list[dict] with UUIDs
+# ---------------------------------------------------------------------------
+
+_ANCHOR = {"id": "grind_am", "name": "The Grind", "time": "08:00",
+           "duration_minutes": 120, "flexibility": "locked",
+           "strictness": 4, "color": "#e05c5c", "position": 1}
+
+
+def test_upsert_tasks_returns_uuid_for_new_task(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Apply to Adobe", "status": "pending"}], notes="")
+    assert len(tasks) == 1
+    assert tasks[0]["id"] is not None
+    assert len(tasks[0]["id"]) == 36
+    assert tasks[0]["text"] == "Apply to Adobe"
+    assert tasks[0]["status"] == "pending"
+
+
+def test_upsert_tasks_preserves_uuid_on_update(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Apply", "status": "pending"}], notes="")
+    uid = tasks[0]["id"]
+    updated = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                           [{"id": uid, "text": "Apply v2", "status": "in_progress"}], notes="")
+    assert updated[0]["id"] == uid
+    assert updated[0]["text"] == "Apply v2"
+    assert updated[0]["status"] == "in_progress"
+
+
+def test_upsert_tasks_removes_deleted_tasks(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Task A"}, {"text": "Task B"}], notes="")
+    uid_a = tasks[0]["id"]
+    updated = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                           [{"id": uid_a, "text": "Task A"}], notes="")
+    assert len(updated) == 1
+    assert updated[0]["id"] == uid_a
+
+
+# ---------------------------------------------------------------------------
+# Task model v2: get_plan returns task objects
+# ---------------------------------------------------------------------------
+
+def test_get_plan_returns_task_objects(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_tasks(db_path, "2026-03-30", "grind_am",
+                 [{"text": "Apply", "status": "in_progress"}], notes="")
+    plan = get_plan(db_path, "2026-03-30")
+    task = plan["anchors"]["grind_am"]["tasks"][0]
+    assert isinstance(task, dict)
+    assert task["text"] == "Apply"
+    assert task["status"] == "in_progress"
+    assert task["id"] is not None and len(task["id"]) == 36
+    assert task["blocks"] == []
+    assert task["blocked_by"] == []
+
+
+# ---------------------------------------------------------------------------
+# Task model v2: patch_task_fields, move_task_atomic, dependencies
+# ---------------------------------------------------------------------------
+
+def test_patch_task_fields_updates_status(db_path):
+    from db.queries import patch_task_fields
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "Task"}], notes="")
+    uid = tasks[0]["id"]
+    result = patch_task_fields(db_path, uid, {"status": "done"})
+    assert result["status"] == "done"
+    assert result["id"] == uid
+
+
+def test_patch_task_fields_returns_none_for_missing(db_path):
+    from db.queries import patch_task_fields
+    assert patch_task_fields(db_path, "nonexistent-uuid", {"status": "done"}) is None
+
+
+def test_move_task_atomic(db_path):
+    from db.queries import move_task_atomic
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_plan(db_path, "2026-03-31")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "Move me"}], notes="")
+    uid = tasks[0]["id"]
+    move_task_atomic(db_path, uid, "2026-03-31", "grind_am", position=0)
+    src = get_plan(db_path, "2026-03-30")
+    dst = get_plan(db_path, "2026-03-31")
+    assert src["anchors"].get("grind_am", {}).get("tasks", []) == []
+    assert dst["anchors"]["grind_am"]["tasks"][0]["text"] == "Move me"
+    assert dst["anchors"]["grind_am"]["tasks"][0]["id"] == uid
+
+
+def test_add_and_remove_task_dependency(db_path):
+    from db.queries import add_task_dependency, remove_task_dependency
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Task A"}, {"text": "Task B"}], notes="")
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    add_task_dependency(db_path, uid_b, uid_a)  # B blocked by A
+    plan = get_plan(db_path, "2026-03-30")
+    task_b = next(t for t in plan["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
+    assert uid_a in task_b["blocked_by"]
+    remove_task_dependency(db_path, uid_b, uid_a)
+    plan2 = get_plan(db_path, "2026-03-30")
+    task_b2 = next(t for t in plan2["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
+    assert task_b2["blocked_by"] == []

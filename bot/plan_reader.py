@@ -8,7 +8,7 @@ from pathlib import Path
 
 @dataclass
 class AnchorPlan:
-    tasks: list[str] = field(default_factory=list)
+    tasks: list = field(default_factory=list)  # list[str] from YAML, list[dict] from DB
     notes: str = ""
 
 

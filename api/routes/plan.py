@@ -18,8 +18,13 @@ async def get_plan_route(date: str):
 
 @router.put("/plan/{date}/anchors/{anchor_id}")
 async def put_anchor_tasks(date: str, anchor_id: str, body: dict):
+    tasks_raw = body.get("tasks", [])
+    tasks = [
+        {"text": t, "status": "pending"} if isinstance(t, str) else t
+        for t in tasks_raw
+    ]
     upsert_plan(cfg.DB_PATH, date)
-    upsert_tasks(cfg.DB_PATH, date, anchor_id,
-                 tasks=body.get("tasks", []), notes=body.get("notes", ""))
+    updated_tasks = upsert_tasks(cfg.DB_PATH, date, anchor_id, tasks,
+                                 notes=body.get("notes", ""))
     await manager.broadcast({"type": "plan_updated", "date": date, "anchor_id": anchor_id})
-    return {"ok": True}
+    return {"ok": True, "tasks": updated_tasks}

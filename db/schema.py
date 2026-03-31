@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS anchors (
     flexibility TEXT NOT NULL DEFAULT 'flexible',
     strictness INTEGER NOT NULL DEFAULT 3,
     color TEXT NOT NULL DEFAULT '#888888',
-    position INTEGER NOT NULL DEFAULT 0
+    position INTEGER NOT NULL DEFAULT 0,
+    followup_config TEXT
 );
 
 CREATE TABLE IF NOT EXISTS plans (
@@ -21,11 +22,20 @@ CREATE TABLE IF NOT EXISTS plans (
 
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uuid TEXT UNIQUE,
     plan_date TEXT NOT NULL REFERENCES plans(date) ON DELETE CASCADE,
     anchor_id TEXT NOT NULL REFERENCES anchors(id),
     position INTEGER NOT NULL DEFAULT 0,
     text TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    followup_config TEXT,
     notes TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    task_id       TEXT NOT NULL,
+    blocked_by_id TEXT NOT NULL,
+    PRIMARY KEY (task_id, blocked_by_id)
 );
 
 CREATE TABLE IF NOT EXISTS acknowledgements (

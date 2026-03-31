@@ -133,7 +133,7 @@ def test_get_today_plan_returns_anchors():
     from tether_mcp.server import _get_today_plan
     plan = _get_today_plan("2026-03-26")
     assert "grind_am" in plan["anchors"]
-    assert plan["anchors"]["grind_am"]["tasks"] == ["Apply to 3 jobs"]
+    assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["Apply to 3 jobs"]
 
 
 def test_update_plan_tasks_persists(db_path):
@@ -141,7 +141,7 @@ def test_update_plan_tasks_persists(db_path):
     from db.queries import get_plan
     _update_plan_tasks("grind_am", ["New task A", "New task B"], "2026-03-26")
     plan = get_plan(db_path, "2026-03-26")
-    assert plan["anchors"]["grind_am"]["tasks"] == ["New task A", "New task B"]
+    assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["New task A", "New task B"]
 
 
 def test_get_anchors_returns_list():

@@ -2,12 +2,13 @@
 import { computed } from 'vue'
 import TaskList from './TaskList.vue'
 import { usePlanStore } from '../stores/plan'
+import type { Task } from '../stores/plan'
 
 const props = defineProps<{ anchorId: string; anchorName: string; time: string; color: string }>()
 const store = usePlanStore()
 const anchorPlan = computed(() => store.plan?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
 
-async function onUpdate(tasks: string[]) {
+async function onUpdate(tasks: Task[]) {
   await store.updateAnchorTasks(props.anchorId, tasks, anchorPlan.value?.notes ?? '')
 }
 </script>

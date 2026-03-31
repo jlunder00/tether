@@ -1,7 +1,27 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-export interface AnchorPlan { tasks: string[]; notes: string }
+export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
+
+export interface FollowupConfig {
+  enabled: boolean
+  pre_ack_interval_min: number
+  pre_ack_max_pings: number
+  post_ack_interval_min: number
+  post_ack_pings: number
+}
+
+export interface Task {
+  id: string
+  text: string
+  status: TaskStatus
+  position: number
+  followup_config: FollowupConfig | null
+  blocks: string[]
+  blocked_by: string[]
+}
+
+export interface AnchorPlan { tasks: Task[]; notes: string }
 export interface DayPlan {
   date: string
   anchors: Record<string, AnchorPlan>
@@ -43,14 +63,31 @@ export const usePlanStore = defineStore('plan', () => {
   function goToNextDay() { fetchPlan(offsetDate(activeDate.value, +1)) }
   function goToToday()   { fetchPlan(today) }
 
-  async function updateAnchorTasks(anchorId: string, tasks: string[], notes: string) {
+  async function updateAnchorTasks(anchorId: string, tasks: Task[], notes: string) {
     if (!plan.value) return
     plan.value.anchors[anchorId] = { tasks, notes }
-    await fetch(`/api/plan/${activeDate.value}/anchors/${anchorId}`, {
+    const resp = await fetch(`/api/plan/${activeDate.value}/anchors/${anchorId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tasks, notes }),
     })
+    const data = await resp.json()
+    if (data.tasks && plan.value.anchors[anchorId]) {
+      plan.value.anchors[anchorId].tasks = data.tasks  // sync server-assigned UUIDs
+    }
+  }
+
+  async function updateTaskStatus(taskId: string, status: TaskStatus) {
+    await fetch(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    if (!plan.value) return
+    for (const anchor of Object.values(plan.value.anchors)) {
+      const task = anchor.tasks.find(t => t.id === taskId)
+      if (task) { task.status = status; break }
+    }
   }
 
   function connectWebSocket() {
@@ -67,6 +104,6 @@ export const usePlanStore = defineStore('plan', () => {
     plan, loading, today, activeDate, savedDates,
     fetchPlan, fetchSavedDates,
     goToPrevDay, goToNextDay, goToToday,
-    updateAnchorTasks, connectWebSocket,
+    updateAnchorTasks, updateTaskStatus, connectWebSocket,
   }
 })

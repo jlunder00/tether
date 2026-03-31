@@ -1,4 +1,6 @@
 from __future__ import annotations
+import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from db.schema import get_db
@@ -35,7 +37,8 @@ def get_plan(db_path: Path, date: str) -> dict:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
         task_rows = conn.execute(
-            "SELECT anchor_id, text, notes, position FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+            "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
+            "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
             (date,)
         ).fetchall()
 
@@ -44,7 +47,35 @@ def get_plan(db_path: Path, date: str) -> dict:
             aid = row["anchor_id"]
             if aid not in anchors:
                 anchors[aid] = {"tasks": [], "notes": row["notes"]}
-            anchors[aid]["tasks"].append(row["text"])
+            fc = row["followup_config"]
+            anchors[aid]["tasks"].append({
+                "id": row["uuid"],
+                "text": row["text"],
+                "status": row["status"] or "pending",
+                "position": row["position"],
+                "followup_config": json.loads(fc) if fc else None,
+                "blocks": [],
+                "blocked_by": [],
+            })
+
+        # Populate dependency fields
+        all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
+        if all_uuids:
+            placeholders = ",".join("?" for _ in all_uuids)
+            dep_rows = conn.execute(
+                f"SELECT task_id, blocked_by_id FROM task_dependencies "
+                f"WHERE task_id IN ({placeholders}) OR blocked_by_id IN ({placeholders})",
+                all_uuids + all_uuids,
+            ).fetchall()
+            blocked_by_map: dict[str, list] = {}
+            blocks_map: dict[str, list] = {}
+            for dep in dep_rows:
+                blocked_by_map.setdefault(dep["task_id"], []).append(dep["blocked_by_id"])
+                blocks_map.setdefault(dep["blocked_by_id"], []).append(dep["task_id"])
+            for anchor_data in anchors.values():
+                for task in anchor_data["tasks"]:
+                    task["blocked_by"] = blocked_by_map.get(task["id"], [])
+                    task["blocks"] = blocks_map.get(task["id"], [])
 
         ack_rows = conn.execute(
             "SELECT anchor_id, acknowledged_at FROM acknowledgements WHERE plan_date=?", (date,)
@@ -60,17 +91,119 @@ def get_plan(db_path: Path, date: str) -> dict:
                 "acknowledgements": acknowledgements, "check_in_log": check_in_log}
 
 
-def upsert_tasks(db_path: Path, date: str, anchor_id: str,
-                 tasks: list[str], notes: str) -> None:
+def upsert_tasks(
+    db_path: Path, date: str, anchor_id: str,
+    tasks: list[dict], notes: str = "",
+) -> list[dict]:
+    """Merge task list for (date, anchor_id). Each task: {id?, text, status?, followup_config?}.
+    Accepts plain strings for backward compatibility. Returns list with UUIDs populated."""
+    task_dicts = [
+        {"text": t, "status": "pending"} if isinstance(t, str) else t
+        for t in tasks
+    ]
+    with get_db(db_path) as conn:
+        existing_uuids = {
+            row["uuid"]
+            for row in conn.execute(
+                "SELECT uuid FROM tasks WHERE plan_date=? AND anchor_id=? AND uuid IS NOT NULL",
+                (date, anchor_id),
+            )
+        }
+        incoming_uuids = {t["id"] for t in task_dicts if t.get("id")}
+        for uid in existing_uuids - incoming_uuids:
+            conn.execute("DELETE FROM tasks WHERE uuid=?", (uid,))
+
+        result = []
+        for pos, task in enumerate(task_dicts):
+            uid = task.get("id") or ""
+            status = task.get("status", "pending")
+            fc = task.get("followup_config")
+            fc_json = json.dumps(fc) if fc is not None else None
+            if uid and uid in existing_uuids:
+                conn.execute(
+                    "UPDATE tasks SET text=?, status=?, position=?, followup_config=?, notes=? "
+                    "WHERE uuid=?",
+                    (task["text"], status, pos, fc_json, notes, uid),
+                )
+            else:
+                uid = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO tasks (uuid, plan_date, anchor_id, position, text, status, "
+                    "followup_config, notes) VALUES (?,?,?,?,?,?,?,?)",
+                    (uid, date, anchor_id, pos, task["text"], status, fc_json, notes),
+                )
+            result.append({
+                "id": uid, "text": task["text"], "status": status,
+                "position": pos, "followup_config": fc,
+                "blocks": [], "blocked_by": [],
+            })
+        return result
+
+
+def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
+    """Update allowed fields on a task. Returns updated task dict or None if not found."""
+    allowed = {"text", "status", "position", "followup_config"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in updates)
     with get_db(db_path) as conn:
         conn.execute(
-            "DELETE FROM tasks WHERE plan_date=? AND anchor_id=?", (date, anchor_id)
+            f"UPDATE tasks SET {set_clause} WHERE uuid=?",
+            (*updates.values(), task_uuid),
         )
-        for i, text in enumerate(tasks):
-            conn.execute(
-                "INSERT INTO tasks (plan_date, anchor_id, position, text, notes) VALUES (?,?,?,?,?)",
-                (date, anchor_id, i, text, notes)
-            )
+        row = conn.execute(
+            "SELECT uuid, text, status, position, followup_config FROM tasks WHERE uuid=?",
+            (task_uuid,),
+        ).fetchone()
+    if not row:
+        return None
+    fc = row["followup_config"]
+    return {
+        "id": row["uuid"], "text": row["text"], "status": row["status"],
+        "position": row["position"],
+        "followup_config": json.loads(fc) if fc else None,
+        "blocks": [], "blocked_by": [],
+    }
+
+
+def move_task_atomic(
+    db_path: Path, task_uuid: str, date: str, anchor_id: str, position: int | None = None,
+) -> None:
+    """Atomically move a task to a different date/anchor."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT plan_date FROM tasks WHERE uuid=?", (task_uuid,)
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Task {task_uuid} not found")
+        conn.execute("INSERT OR IGNORE INTO plans (date) VALUES (?)", (date,))
+        if position is None:
+            max_pos = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE plan_date=? AND anchor_id=?",
+                (date, anchor_id),
+            ).fetchone()[0]
+            position = max_pos + 1
+        conn.execute(
+            "UPDATE tasks SET plan_date=?, anchor_id=?, position=? WHERE uuid=?",
+            (date, anchor_id, position, task_uuid),
+        )
+
+
+def add_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO task_dependencies (task_id, blocked_by_id) VALUES (?,?)",
+            (task_id, blocked_by_id),
+        )
+
+
+def remove_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM task_dependencies WHERE task_id=? AND blocked_by_id=?",
+            (task_id, blocked_by_id),
+        )
 
 
 def upsert_context_entry(db_path: Path, subject: str, body: str) -> None:
