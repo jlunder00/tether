@@ -54,7 +54,8 @@ Respond with JSON only — no explanation, no markdown fences.
 ### Mutation plan field shapes by type
 
 **update_plan_tasks:**
-`{"id", "type": "update_plan_tasks", "description", "anchor_id", "date", "tasks": [...]}`
+`{"id", "type": "update_plan_tasks", "description", "anchor_id", "date", "tasks": [{"id": "<uuid or null>", "text": "<text>", "status": "pending|in_progress|done|skipped|blocked"}]}`
+Note: always include existing task ids when you have them (from a fetched plan) to avoid creating duplicates.
 
 **update_context** (full rewrite — only for large structural changes):
 `{"id", "type": "update_context", "description", "subject", "body"}`

@@ -4,7 +4,7 @@ import subprocess
 from datetime import date
 from unittest.mock import patch, call as mock_call
 from db.schema import init_db
-from db.queries import get_anchors, upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry, get_context_entries
+from db.queries import get_anchors, get_plan, upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry, get_context_entries
 
 TODAY = str(date.today())
 
@@ -139,6 +139,35 @@ def test_apply_mutations_patch_context_missing_subject(db_path, caplog):
     apply_mutations([{"op": "patch_context", "subject": "Nonexistent",
                       "old": "x", "new": "y"}], db_path, TODAY)
     # Should warn but not raise
+
+
+def test_apply_mutations_update_plan_tasks_with_task_objects(db_path):
+    from bot.message_handler import apply_mutations
+    apply_mutations([{
+        "op": "update_plan_tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": [{"text": "New task", "status": "in_progress"}],
+    }], db_path, TODAY)
+    plan = get_plan(db_path, TODAY)
+    tasks = plan["anchors"]["grind_am"]["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["text"] == "New task"
+    assert tasks[0]["status"] == "in_progress"
+    assert tasks[0]["id"] is not None
+
+
+def test_apply_mutations_update_plan_tasks_string_list_backward_compat(db_path):
+    from bot.message_handler import apply_mutations
+    apply_mutations([{
+        "op": "update_plan_tasks",
+        "anchor_id": "grind_am",
+        "date": TODAY,
+        "tasks": ["String task 1", "String task 2"],
+    }], db_path, TODAY)
+    plan = get_plan(db_path, TODAY)
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["String task 1", "String task 2"]
 
 
 # ---------------------------------------------------------------------------

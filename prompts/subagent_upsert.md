@@ -25,10 +25,13 @@ Respond with JSON only — no explanation, no markdown fences.
   "op": "update_plan_tasks",
   "anchor_id": "<anchor_id from params>",
   "date": "<date from params>",
-  "tasks": ["<tasks from params>"],
+  "tasks": [
+    {"id": "<existing UUID or null for new>", "text": "<task text>", "status": "pending|in_progress|done|skipped|blocked"}
+  ],
   "report": "One sentence: what was set and for when."
 }
 ```
+Note: include the existing task `id` to preserve UUIDs and dependencies. Use `null` (or omit `id`) for new tasks.
 {% elif op == "update_context" %}
 ```json
 {
