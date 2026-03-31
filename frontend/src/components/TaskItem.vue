@@ -31,6 +31,7 @@ function updateText(e: Event) {
 
 <template>
   <li class="flex gap-2 items-center group">
+    <span class="drag-handle cursor-grab text-white/25 select-none opacity-0 group-hover:opacity-100 transition-opacity leading-none">⠿</span>
     <button
       @click="cycleStatus"
       :class="STATUS_COLORS[task.status]"
