@@ -51,13 +51,16 @@ Note: include the existing task `id` to preserve UUIDs and dependencies. Use `nu
 }
 ```
 {% elif op == "link_milestone_tasks" %}
+```json
 {
   "op": "link_milestone_tasks",
   "milestone_id": "<milestone_id from params>",
   "task_ids": ["<task_id>", ...],
   "report": "One sentence: which tasks were linked to which milestone."
 }
+```
 {% elif op == "create_milestone" %}
+```json
 {
   "op": "create_milestone",
   "context_subject": "<context_subject from params>",
@@ -66,10 +69,18 @@ Note: include the existing task `id` to preserve UUIDs and dependencies. Use `nu
   "target_date": "<target_date from params or null>",
   "report": "One sentence: what milestone was created and for which context."
 }
+```
 {% elif op == "patch_milestone" %}
+```json
 {
   "op": "patch_milestone",
   "milestone_id": "<milestone_id from params>",
+  "name": "<name from params, if being changed>",
+  "description": "<description from params, if being changed>",
+  "target_date": "<target_date from params, if being changed>",
+  "status": "<status from params, if being changed>",
   "report": "One sentence: what was changed on which milestone."
 }
+```
+Note: include only the fields actually being changed — omit fields not in params.
 {% endif %}
