@@ -624,7 +624,6 @@ def mark_followup_completed(db_path: Path, task_id: str, date: str) -> None:
 
 def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict | None:
     """Return resolved FollowupConfig: task overrides anchor, None if neither enabled."""
-    import json
     with get_db(db_path) as conn:
         task_row = conn.execute(
             "SELECT followup_config FROM tasks WHERE uuid=?", (task_id,)
