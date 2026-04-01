@@ -21,6 +21,17 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
 }
 
 const showFollowup = ref(false)
+const popoverStyle = ref({ top: '0px', right: '0px' })
+
+function openFollowup(e: MouseEvent) {
+  const btn = e.currentTarget as HTMLElement
+  const rect = btn.getBoundingClientRect()
+  popoverStyle.value = {
+    top: `${rect.bottom + window.scrollY + 4}px`,
+    right: `${window.innerWidth - rect.right}px`,
+  }
+  showFollowup.value = !showFollowup.value
+}
 
 function cycleStatus() {
   const idx = STATUS_CYCLE.indexOf(props.task.status)
@@ -64,14 +75,16 @@ function toggleFollowup(enabled: boolean) {
     <button
       @click="emit('remove')"
       class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
-    <div class="relative">
+    <div>
       <button
-        @click="showFollowup = !showFollowup"
+        @click="openFollowup"
         class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity ml-1">
         ⚙
       </button>
+      <Teleport to="body">
       <div v-if="showFollowup"
-           class="absolute right-0 top-5 z-50 bg-gray-800 border border-white/20 rounded-xl p-3 min-w-[200px] shadow-xl">
+           class="fixed z-50 bg-gray-800 border border-white/20 rounded-xl p-3 min-w-[200px] shadow-xl"
+           :style="popoverStyle">
         <label class="flex items-center gap-2 text-xs text-white/70 mb-2">
           <input type="checkbox"
                  :checked="task.followup_config?.enabled ?? false"
@@ -103,6 +116,7 @@ function toggleFollowup(enabled: boolean) {
           done
         </button>
       </div>
+      </Teleport>
     </div>
   </li>
 </template>
