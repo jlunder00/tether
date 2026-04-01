@@ -488,9 +488,13 @@ def call_meta_eval(
 ) -> dict:
     """Call the meta-evaluator. Returns parsed dict or error sentinel."""
     anchor_summary = "\n".join(f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors)
+    # Keep only last 2 turns — mutation_plan + fetched_context_log already carry
+    # the cumulative state, so older orchestrator turns are redundant context
+    # that inflates the prompt and causes Haiku timeouts.
+    recent_conv = orchestrator_conversation[-2:]
     template = _jinja.get_template("meta_eval.md")
     prompt = template.render(
-        orchestrator_conversation=_format_orchestrator_conversation(orchestrator_conversation),
+        orchestrator_conversation=_format_orchestrator_conversation(recent_conv),
         current_mutation_plan_human_readable=_format_mutation_plan_human_readable(current_mutation_plan),
         fetched_context_log="\n\n".join(fetched_context_log) if fetched_context_log else "(none)",
         anchors=anchor_summary,
@@ -512,7 +516,7 @@ def call_meta_eval(
 
     valid_anchor_ids = [a["id"] for a in anchors]
     repair_prompt = _build_repair_prompt(
-        raw, orchestrator_conversation, all_subjects, valid_anchor_ids, available_dates
+        raw, recent_conv, all_subjects, valid_anchor_ids, available_dates
     )
     for attempt in range(MAX_REPAIR_ATTEMPTS):
         role = "meta_eval_repair_escalate" if attempt == MAX_REPAIR_ATTEMPTS - 1 else "meta_eval_repair"
