@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader
 
 from bot.handler_utils import (
     get_current_anchor,
+    is_anchor_active,
     parse_check_in,
     parse_update_context,
     parse_update_plan,
@@ -294,7 +295,13 @@ def check_followups(db_path: Path, send_fn) -> None:
     pre_ack_due = []
     post_ack_due = []
 
+    # Only ping for anchors that are currently in their time window
+    all_anchors = get_anchors(db_path)
+    active_anchor_ids = {a["id"] for a in all_anchors if is_anchor_active(a, now)}
+
     for row in rows:
+        if row["anchor_id"] not in active_anchor_ids:
+            continue
         config = resolve_followup_config(db_path, row["anchor_id"], row["task_id"])
         if config is None:
             continue
@@ -914,7 +921,10 @@ def run_polling(token: str, chat_id: str) -> None:
             _send = lambda m: _send_telegram(token, chat_id, m)
             _today = str(_date.today())
             _current_anchor = get_current_anchor(get_anchors(DB_PATH))
-            if _current_anchor and _current_anchor.get("id") != last_anchor_id:
+            _anchor_running = _current_anchor and is_anchor_active(_current_anchor)
+            if not _anchor_running:
+                last_anchor_id = None
+            elif _current_anchor.get("id") != last_anchor_id:
                 last_anchor_id = _current_anchor["id"]
                 _plan = get_plan(DB_PATH, _today)
                 if _plan and _current_anchor["id"] in _plan.get("anchors", {}):
