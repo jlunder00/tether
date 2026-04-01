@@ -611,7 +611,8 @@ def test_check_followups_sends_pre_ack_message(db_path):
     from bot.message_handler import check_followups
     from db.queries import upsert_plan, init_followup_state
     from datetime import datetime, timedelta
-    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+    # Use 24h window so test isn't coupled to clock time
+    upsert_anchor(db_path, {**ANCHOR, "time": "00:00", "duration_minutes": 1440, "followup_config": {
         "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
         "post_ack_interval_min": 15, "post_ack_pings": 2,
     }})
@@ -630,7 +631,7 @@ def test_check_followups_no_message_when_too_early(db_path):
     from bot.message_handler import check_followups
     from db.queries import upsert_plan, init_followup_state
     from datetime import datetime, timedelta
-    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+    upsert_anchor(db_path, {**ANCHOR, "time": "00:00", "duration_minutes": 1440, "followup_config": {
         "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
         "post_ack_interval_min": 15, "post_ack_pings": 2,
     }})
@@ -647,7 +648,7 @@ def test_check_followups_sends_post_ack_after_ack(db_path):
     from bot.message_handler import check_followups
     from db.queries import upsert_plan, init_followup_state, acknowledge_followup
     from datetime import datetime, timedelta
-    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+    upsert_anchor(db_path, {**ANCHOR, "time": "00:00", "duration_minutes": 1440, "followup_config": {
         "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
         "post_ack_interval_min": 15, "post_ack_pings": 2,
     }})
