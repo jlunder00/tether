@@ -15,7 +15,6 @@ const props = defineProps<{
 const store = usePlanStore()
 const ulRef = ref<HTMLElement | null>(null)
 const dragOver = ref(false)
-const debugMsg = ref('')
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
@@ -95,20 +94,16 @@ function onDragLeave() {
 function onDrop(evt: DragEvent, toIndex: number) {
   dragOver.value = false
   const raw = evt.dataTransfer?.getData('text/plain')
-  debugMsg.value = `drop raw=${raw?.slice(0, 60)}`
-  setTimeout(() => { debugMsg.value = '' }, 3000)
   if (!raw) return
   try {
     const { taskId, fromAnchorId, fromDate } = JSON.parse(raw)
     if (!taskId) return
-    debugMsg.value = `move ${taskId.slice(0,8)} from=${fromAnchorId} to=${props.anchorId} idx=${toIndex}`
-    setTimeout(() => { debugMsg.value = '' }, 5000)
     if (fromAnchorId === props.anchorId && fromDate === effectiveDate.value) {
       store.reorderTask(taskId, effectiveDate.value, props.anchorId, toIndex)
     } else {
       store.moveTask(taskId, fromDate, fromAnchorId, effectiveDate.value, props.anchorId, toIndex)
     }
-  } catch (e) { debugMsg.value = `error: ${e}`; }
+  } catch { /* ignore malformed data from other drag sources */ }
 }
 </script>
 
@@ -120,7 +115,6 @@ function onDrop(evt: DragEvent, toIndex: number) {
       <span class="font-bold text-sm mt-0.5">{{ anchorName }}</span>
     </div>
     <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
-      <div v-if="debugMsg" class="text-xs text-yellow-300 mb-1">{{ debugMsg }}</div>
       <ul
         ref="ulRef"
         class="space-y-1 min-h-[2rem] rounded transition-colors"
