@@ -571,3 +571,70 @@ def unlink_milestone_task(db_path: Path, milestone_id: str, task_id: str) -> Non
             "DELETE FROM milestone_tasks WHERE milestone_id=? AND task_id=?",
             (milestone_id, task_id),
         )
+
+
+def init_followup_state(
+    db_path: Path, date: str, anchor_id: str, task_id: str, now: datetime,
+) -> None:
+    """INSERT OR IGNORE — idempotent, won't reset existing state."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO followup_state "
+            "(date, anchor_id, task_id, sequence_started_at) VALUES (?,?,?,?)",
+            (date, anchor_id, task_id, now.isoformat()),
+        )
+
+
+def get_active_followup_states(db_path: Path, date: str) -> list[dict]:
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM followup_state WHERE date=? AND completed=0 ORDER BY id",
+            (date,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def acknowledge_followup(db_path: Path, date: str, anchor_id: str, now: datetime) -> None:
+    """Set acknowledged_at on all unacked rows for this anchor today."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE followup_state SET acknowledged_at=? "
+            "WHERE date=? AND anchor_id=? AND acknowledged_at IS NULL AND completed=0",
+            (now.isoformat(), date, anchor_id),
+        )
+
+
+def record_ping(db_path: Path, row_id: int, phase: str, now: datetime) -> None:
+    """Increment pre_ack_pings_sent or post_ack_pings_sent and update last_ping_at."""
+    col = "pre_ack_pings_sent" if phase == "pre" else "post_ack_pings_sent"
+    with get_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE followup_state SET {col}={col}+1, last_ping_at=? WHERE id=?",
+            (now.isoformat(), row_id),
+        )
+
+
+def mark_followup_completed(db_path: Path, task_id: str, date: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE followup_state SET completed=1 WHERE task_id=? AND date=?",
+            (task_id, date),
+        )
+
+
+def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict | None:
+    """Return resolved FollowupConfig: task overrides anchor, None if neither enabled."""
+    import json
+    with get_db(db_path) as conn:
+        task_row = conn.execute(
+            "SELECT followup_config FROM tasks WHERE uuid=?", (task_id,)
+        ).fetchone()
+        anchor_row = conn.execute(
+            "SELECT followup_config FROM anchors WHERE id=?", (anchor_id,)
+        ).fetchone()
+    task_fc = json.loads(task_row["followup_config"]) if task_row and task_row["followup_config"] else None
+    anchor_fc = json.loads(anchor_row["followup_config"]) if anchor_row and anchor_row["followup_config"] else None
+    config = task_fc or anchor_fc
+    if not config or not config.get("enabled"):
+        return None
+    return config
