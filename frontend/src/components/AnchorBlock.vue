@@ -46,31 +46,54 @@ function onAddNewTask() {
   })
 }
 
-// ── Drag and drop ─────────────────────────────────────────────────────────────
+// ── Drag and drop (native HTML5 DnD) ─────────────────────────────────────────
+// The wrapper <div> is NOT draggable by default so inputs/buttons work normally.
+// Pressing the handle dynamically enables draggable on the wrapper, making the
+// entire row the drag ghost. Releasing the mouse removes draggable.
+
+let activeDragEl: HTMLElement | null = null
+
+function onHandleMouseDown(evt: MouseEvent) {
+  const row = (evt.currentTarget as HTMLElement).parentElement
+  if (!row) return
+  row.setAttribute('draggable', 'true')
+  activeDragEl = row
+  document.addEventListener('mouseup', clearDraggable, { once: true })
+}
+
+function clearDraggable() {
+  if (activeDragEl) {
+    activeDragEl.removeAttribute('draggable')
+    activeDragEl = null
+  }
+}
 
 function onDragStart(evt: DragEvent, task: Task) {
   if (!task.id) { evt.preventDefault(); return }
-  // Show the whole row as the drag ghost instead of just the handle
-  const row = (evt.currentTarget as HTMLElement)
-  evt.dataTransfer?.setDragImage(row, 20, row.offsetHeight / 2)
   evt.dataTransfer!.effectAllowed = 'move'
-  evt.dataTransfer!.setData('application/json', JSON.stringify({
+  evt.dataTransfer!.setData('text/plain', JSON.stringify({
     taskId: task.id,
     fromAnchorId: props.anchorId,
     fromDate: effectiveDate.value,
   }))
 }
 
+function onDragEnd() {
+  clearDraggable()
+}
+
 function onDrop(evt: DragEvent, toIndex: number) {
-  const raw = evt.dataTransfer?.getData('application/json')
+  const raw = evt.dataTransfer?.getData('text/plain')
   if (!raw) return
-  const { taskId, fromAnchorId, fromDate } = JSON.parse(raw)
-  if (!taskId) return
-  if (fromAnchorId === props.anchorId && fromDate === effectiveDate.value) {
-    store.reorderTask(taskId, effectiveDate.value, props.anchorId, toIndex)
-  } else {
-    store.moveTask(taskId, fromDate, fromAnchorId, effectiveDate.value, props.anchorId, toIndex)
-  }
+  try {
+    const { taskId, fromAnchorId, fromDate } = JSON.parse(raw)
+    if (!taskId) return
+    if (fromAnchorId === props.anchorId && fromDate === effectiveDate.value) {
+      store.reorderTask(taskId, effectiveDate.value, props.anchorId, toIndex)
+    } else {
+      store.moveTask(taskId, fromDate, fromAnchorId, effectiveDate.value, props.anchorId, toIndex)
+    }
+  } catch { /* ignore malformed data from other drag sources */ }
 }
 </script>
 
@@ -84,8 +107,6 @@ function onDrop(evt: DragEvent, toIndex: number) {
     <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
       <ul
         ref="ulRef"
-        :data-anchor-id="anchorId"
-        :data-date="effectiveDate"
         class="space-y-1"
         @dragover.prevent
         @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
@@ -94,12 +115,13 @@ function onDrop(evt: DragEvent, toIndex: number) {
           :key="task.id || i"
           :data-task-id="task.id"
           class="group flex items-center"
+          @dragstart="onDragStart($event, task)"
+          @dragend="onDragEnd"
           @dragover.prevent
           @drop.stop.prevent="onDrop($event, i)">
           <span
-            class="cursor-grab text-white/25 select-none opacity-0 group-hover:opacity-100 transition-opacity px-1 flex-shrink-0 leading-none"
-            draggable="true"
-            @dragstart="onDragStart($event, task)">⠿</span>
+            class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
+            @mousedown="onHandleMouseDown">⠿</span>
           <TaskItem
             class="flex-1 min-w-0"
             :task="task"
