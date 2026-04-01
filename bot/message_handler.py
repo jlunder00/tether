@@ -93,6 +93,7 @@ _MODEL_DEFAULTS: dict[str, str] = {
     "execution_subagent":        "claude-haiku-4-5-20251001",
     "satisfaction_eval":         "claude-haiku-4-5-20251001",
     "response_builder":          "claude-sonnet-4-6",
+    "quick_classifier":          "claude-haiku-4-5-20251001",
 }
 
 
@@ -488,9 +489,13 @@ def call_meta_eval(
 ) -> dict:
     """Call the meta-evaluator. Returns parsed dict or error sentinel."""
     anchor_summary = "\n".join(f"- {a['id']}: {a['name']} ({a['time']})" for a in anchors)
+    # Keep only last 2 turns — mutation_plan + fetched_context_log already carry
+    # the cumulative state, so older orchestrator turns are redundant context
+    # that inflates the prompt and causes Haiku timeouts.
+    recent_conv = orchestrator_conversation[-2:]
     template = _jinja.get_template("meta_eval.md")
     prompt = template.render(
-        orchestrator_conversation=_format_orchestrator_conversation(orchestrator_conversation),
+        orchestrator_conversation=_format_orchestrator_conversation(recent_conv),
         current_mutation_plan_human_readable=_format_mutation_plan_human_readable(current_mutation_plan),
         fetched_context_log="\n\n".join(fetched_context_log) if fetched_context_log else "(none)",
         anchors=anchor_summary,
@@ -512,7 +517,7 @@ def call_meta_eval(
 
     valid_anchor_ids = [a["id"] for a in anchors]
     repair_prompt = _build_repair_prompt(
-        raw, orchestrator_conversation, all_subjects, valid_anchor_ids, available_dates
+        raw, recent_conv, all_subjects, valid_anchor_ids, available_dates
     )
     for attempt in range(MAX_REPAIR_ATTEMPTS):
         role = "meta_eval_repair_escalate" if attempt == MAX_REPAIR_ATTEMPTS - 1 else "meta_eval_repair"
@@ -675,6 +680,28 @@ def call_response_builder(
 
 
 # ---------------------------------------------------------------------------
+# Quick-route classifier
+# ---------------------------------------------------------------------------
+
+def _classify_message(text: str, current_anchor: dict, today: str) -> str:
+    """Return 'quick' or 'full' based on whether the message needs the orchestrator."""
+    template = _jinja.get_template("quick_classifier.md")
+    prompt = template.render(
+        user_message=text,
+        current_anchor=current_anchor,
+        date=today,
+    )
+    try:
+        raw = call_claude(prompt, timeout=15, model_role="quick_classifier",
+                          stage="quick_classifier")
+        data = _parse_json(raw)
+        route = data.get("route", "full")
+        return route if route in ("quick", "full") else "full"
+    except Exception:
+        return "full"  # default to full pipeline on any error
+
+
+# ---------------------------------------------------------------------------
 # Slash-command path (deterministic, single Claude call)
 # ---------------------------------------------------------------------------
 
@@ -826,9 +853,18 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
             send_fn(str(e))
         return
 
-    # Free text: v2 orchestrator pipeline
+    # Quick-route classifier: skip the full orchestrator pipeline for simple messages
     history = get_recent_history(db_path, HISTORY_EXCHANGES)
+    route = _classify_message(text, current_anchor, today)
 
+    if route == "quick":
+        final = call_response_builder(text, [], [], history, db_path, anchors)
+        send_fn(final)
+        insert_conversation_turn(db_path, "user", text)
+        insert_conversation_turn(db_path, "assistant", final)
+        return
+
+    # Free text: v2 orchestrator pipeline
     try:
         mutation_plan, reports, chat_messages, orch_conv = _run_v2_planning_loop(
             text, anchors, history, db_path, today
