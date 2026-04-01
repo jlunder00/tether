@@ -56,6 +56,20 @@ CREATE TABLE IF NOT EXISTS milestone_tasks (
     PRIMARY KEY (milestone_id, task_id)
 );
 
+CREATE TABLE IF NOT EXISTS followup_state (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    date                 TEXT NOT NULL,
+    anchor_id            TEXT NOT NULL,
+    task_id              TEXT NOT NULL,
+    sequence_started_at  DATETIME NOT NULL,
+    acknowledged_at      DATETIME,
+    pre_ack_pings_sent   INTEGER DEFAULT 0,
+    post_ack_pings_sent  INTEGER DEFAULT 0,
+    last_ping_at         DATETIME,
+    completed            INTEGER DEFAULT 0,
+    UNIQUE (date, task_id)
+);
+
 CREATE TABLE IF NOT EXISTS acknowledgements (
     plan_date TEXT NOT NULL,
     anchor_id TEXT NOT NULL,

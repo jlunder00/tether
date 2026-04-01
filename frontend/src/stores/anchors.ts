@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
+export interface FollowupConfig {
+  enabled: boolean
+  pre_ack_interval_min: number
+  pre_ack_max_pings: number
+  post_ack_interval_min: number
+  post_ack_pings: number
+}
+
 export interface Anchor {
   id: string
   name: string
@@ -10,6 +18,7 @@ export interface Anchor {
   strictness: number
   color: string
   position: number
+  followup_config: FollowupConfig | null
 }
 
 export const useAnchorStore = defineStore('anchors', () => {
