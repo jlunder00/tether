@@ -315,9 +315,9 @@ def check_followups(db_path: Path, send_fn) -> None:
         for row in pre_ack_due:
             by_anchor[row["anchor_id"]].append(row)
         for anchor_id, anchor_rows in by_anchor.items():
+            plan = get_plan(db_path, today)
             task_lines = []
             for row in anchor_rows:
-                plan = get_plan(db_path, today)
                 task = None
                 if plan and anchor_id in plan.get("anchors", {}):
                     task = next(
@@ -340,9 +340,9 @@ def check_followups(db_path: Path, send_fn) -> None:
         for row in post_ack_due:
             by_anchor[row["anchor_id"]].append(row)
         for anchor_id, anchor_rows in by_anchor.items():
+            plan = get_plan(db_path, today)
             task_lines = []
             for row in anchor_rows:
-                plan = get_plan(db_path, today)
                 task = None
                 if plan and anchor_id in plan.get("anchors", {}):
                     task = next(
@@ -909,11 +909,9 @@ def run_polling(token: str, chat_id: str) -> None:
                 except Exception as e:
                     logger.error("Error handling message: %s", e)
                     _send_telegram(token, chat_id, f"[Tether error: {e}]")
-            # Run follow-up pings after processing incoming messages
-            _send = lambda m: _send_telegram(token, chat_id, m)
-            check_followups(DB_PATH, _send)
             # Detect anchor start and init followup state for its tasks
             from datetime import datetime as _dt, date as _date
+            _send = lambda m: _send_telegram(token, chat_id, m)
             _today = str(_date.today())
             _current_anchor = get_current_anchor(get_anchors(DB_PATH))
             if _current_anchor and _current_anchor.get("id") != last_anchor_id:
@@ -924,6 +922,8 @@ def run_polling(token: str, chat_id: str) -> None:
                         if _task.get("id"):
                             init_followup_state(DB_PATH, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
+            # Run follow-up pings after processing incoming messages
+            check_followups(DB_PATH, _send)
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
