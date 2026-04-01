@@ -8,22 +8,30 @@ from db.schema import get_db
 
 
 def upsert_anchor(db_path: Path, anchor: dict) -> None:
+    fc_json = json.dumps(anchor.get("followup_config")) if anchor.get("followup_config") is not None else None
     with get_db(db_path) as conn:
         conn.execute("""
-            INSERT INTO anchors (id, name, time, duration_minutes, flexibility, strictness, color, position)
-            VALUES (:id, :name, :time, :duration_minutes, :flexibility, :strictness, :color, :position)
+            INSERT INTO anchors (id, name, time, duration_minutes, flexibility, strictness, color, position, followup_config)
+            VALUES (:id, :name, :time, :duration_minutes, :flexibility, :strictness, :color, :position, :followup_config)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, time=excluded.time,
                 duration_minutes=excluded.duration_minutes,
                 flexibility=excluded.flexibility, strictness=excluded.strictness,
-                color=excluded.color, position=excluded.position
-        """, anchor)
+                color=excluded.color, position=excluded.position,
+                followup_config=excluded.followup_config
+        """, {**anchor, "followup_config": fc_json})
 
 
 def get_anchors(db_path: Path) -> list[dict]:
     with get_db(db_path) as conn:
         rows = conn.execute("SELECT * FROM anchors ORDER BY position").fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            fc = d.get("followup_config")
+            d["followup_config"] = json.loads(fc) if fc else None
+            result.append(d)
+        return result
 
 
 def upsert_plan(db_path: Path, date: str) -> None:
