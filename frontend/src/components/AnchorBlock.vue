@@ -14,6 +14,8 @@ const props = defineProps<{
 
 const store = usePlanStore()
 const ulRef = ref<HTMLElement | null>(null)
+const dragOver = ref(false)
+const debugMsg = ref('')
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
@@ -82,18 +84,31 @@ function onDragEnd() {
   clearDraggable()
 }
 
+function onDragOver() {
+  dragOver.value = true
+}
+
+function onDragLeave() {
+  dragOver.value = false
+}
+
 function onDrop(evt: DragEvent, toIndex: number) {
+  dragOver.value = false
   const raw = evt.dataTransfer?.getData('text/plain')
+  debugMsg.value = `drop raw=${raw?.slice(0, 60)}`
+  setTimeout(() => { debugMsg.value = '' }, 3000)
   if (!raw) return
   try {
     const { taskId, fromAnchorId, fromDate } = JSON.parse(raw)
     if (!taskId) return
+    debugMsg.value = `move ${taskId.slice(0,8)} from=${fromAnchorId} to=${props.anchorId} idx=${toIndex}`
+    setTimeout(() => { debugMsg.value = '' }, 5000)
     if (fromAnchorId === props.anchorId && fromDate === effectiveDate.value) {
       store.reorderTask(taskId, effectiveDate.value, props.anchorId, toIndex)
     } else {
       store.moveTask(taskId, fromDate, fromAnchorId, effectiveDate.value, props.anchorId, toIndex)
     }
-  } catch { /* ignore malformed data from other drag sources */ }
+  } catch (e) { debugMsg.value = `error: ${e}`; }
 }
 </script>
 
@@ -105,10 +120,13 @@ function onDrop(evt: DragEvent, toIndex: number) {
       <span class="font-bold text-sm mt-0.5">{{ anchorName }}</span>
     </div>
     <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
+      <div v-if="debugMsg" class="text-xs text-yellow-300 mb-1">{{ debugMsg }}</div>
       <ul
         ref="ulRef"
-        class="space-y-1"
-        @dragover.prevent
+        class="space-y-1 min-h-[2rem] rounded transition-colors"
+        :class="dragOver ? 'bg-white/10 ring-2 ring-white/30' : ''"
+        @dragover.prevent="onDragOver"
+        @dragleave="onDragLeave"
         @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
         <div
           v-for="(task, i) in anchorPlan.tasks"
@@ -117,7 +135,8 @@ function onDrop(evt: DragEvent, toIndex: number) {
           class="group flex items-center"
           @dragstart="onDragStart($event, task)"
           @dragend="onDragEnd"
-          @dragover.prevent
+          @dragover.prevent="onDragOver"
+          @dragleave="onDragLeave"
           @drop.stop.prevent="onDrop($event, i)">
           <span
             class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
