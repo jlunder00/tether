@@ -83,15 +83,19 @@ function toggleFollowup(enabled: boolean) {
           <div class="grid grid-cols-2 gap-2 text-xs text-white/50">
             <label class="flex flex-col gap-0.5">
               Pre interval
-              <input v-model.number="task.followup_config.pre_ack_interval_min" type="number" min="1"
-                     @change="emit('update', { ...task })"
-                     class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+              <input
+                :value="task.followup_config.pre_ack_interval_min"
+                type="number" min="1"
+                @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_interval_min: +($event.target as HTMLInputElement).value } })"
+                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
             <label class="flex flex-col gap-0.5">
               Max pings
-              <input v-model.number="task.followup_config.pre_ack_max_pings" type="number" min="1"
-                     @change="emit('update', { ...task })"
-                     class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+              <input
+                :value="task.followup_config.pre_ack_max_pings"
+                type="number" min="1"
+                @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_max_pings: +($event.target as HTMLInputElement).value } })"
+                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
           </div>
         </template>

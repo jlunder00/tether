@@ -1,15 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import type { FollowupConfig } from './anchors'
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
 
-export interface FollowupConfig {
-  enabled: boolean
-  pre_ack_interval_min: number
-  pre_ack_max_pings: number
-  post_ack_interval_min: number
-  post_ack_pings: number
-}
+export type { FollowupConfig }
 
 export interface Task {
   id: string
