@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import type { Task, TaskStatus } from '../stores/plan'
+import type { FollowupConfig } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 const milestoneStore = useMilestoneStore()
 
@@ -18,6 +20,8 @@ const STATUS_COLORS: Record<TaskStatus, string> = {
   blocked:     'bg-red-400 hover:bg-red-300',
 }
 
+const showFollowup = ref(false)
+
 function cycleStatus() {
   const idx = STATUS_CYCLE.indexOf(props.task.status)
   const next = STATUS_CYCLE[idx === -1 ? 0 : (idx + 1) % STATUS_CYCLE.length]
@@ -26,6 +30,17 @@ function cycleStatus() {
 
 function updateText(e: Event) {
   emit('update', { ...props.task, text: (e.target as HTMLInputElement).value })
+}
+
+function toggleFollowup(enabled: boolean) {
+  const fc: FollowupConfig = {
+    enabled,
+    pre_ack_interval_min: 5,
+    pre_ack_max_pings: 3,
+    post_ack_interval_min: 15,
+    post_ack_pings: 2,
+  }
+  emit('update', { ...props.task, followup_config: enabled ? fc : null })
 }
 </script>
 
@@ -49,5 +64,45 @@ function updateText(e: Event) {
     <button
       @click="emit('remove')"
       class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+    <div class="relative">
+      <button
+        @click="showFollowup = !showFollowup"
+        class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+        ⚙
+      </button>
+      <div v-if="showFollowup"
+           class="absolute right-0 top-5 z-50 bg-gray-800 border border-white/20 rounded-xl p-3 min-w-[200px] shadow-xl">
+        <label class="flex items-center gap-2 text-xs text-white/70 mb-2">
+          <input type="checkbox"
+                 :checked="task.followup_config?.enabled ?? false"
+                 @change="(e) => toggleFollowup((e.target as HTMLInputElement).checked)"
+                 class="accent-blue-400" />
+          Override anchor follow-up
+        </label>
+        <template v-if="task.followup_config?.enabled">
+          <div class="grid grid-cols-2 gap-2 text-xs text-white/50">
+            <label class="flex flex-col gap-0.5">
+              Pre interval
+              <input
+                :value="task.followup_config.pre_ack_interval_min"
+                type="number" min="1"
+                @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_interval_min: +($event.target as HTMLInputElement).value } })"
+                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+            </label>
+            <label class="flex flex-col gap-0.5">
+              Max pings
+              <input
+                :value="task.followup_config.pre_ack_max_pings"
+                type="number" min="1"
+                @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_max_pings: +($event.target as HTMLInputElement).value } })"
+                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+            </label>
+          </div>
+        </template>
+        <button @click="showFollowup = false" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-right">
+          done
+        </button>
+      </div>
+    </div>
   </li>
 </template>

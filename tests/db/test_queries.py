@@ -541,3 +541,128 @@ def test_rename_context_cascades_to_milestones(db_path):
     rename_context_subject(db_path, "OldProj", "NewProj")
     assert get_milestones(db_path, "OldProj") == []
     assert len(get_milestones(db_path, "NewProj")) == 1
+
+
+# ── Follow-up state tests ────────────────────────────────────────────────────
+
+ANCHOR = {"id": "grind_am", "name": "The Grind", "time": "08:00",
+          "duration_minutes": 120, "flexibility": "locked",
+          "strictness": 4, "color": "#e05c5c", "position": 1}
+
+
+def test_init_followup_state_creates_row(db_path):
+    from db.queries import init_followup_state, get_active_followup_states, upsert_plan
+    from datetime import datetime
+    upsert_anchor(db_path, ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    now = datetime(2026, 3, 30, 8, 0, 0)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    rows = get_active_followup_states(db_path, "2026-03-30")
+    assert len(rows) == 1
+    assert rows[0]["task_id"] == tasks[0]["id"]
+    assert rows[0]["pre_ack_pings_sent"] == 0
+    assert rows[0]["acknowledged_at"] is None
+
+
+def test_init_followup_state_is_idempotent(db_path):
+    from db.queries import init_followup_state, get_active_followup_states, upsert_plan
+    from datetime import datetime
+    upsert_anchor(db_path, ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    now = datetime(2026, 3, 30, 8, 0, 0)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    rows = get_active_followup_states(db_path, "2026-03-30")
+    assert len(rows) == 1
+
+
+def test_acknowledge_followup_sets_acknowledged_at(db_path):
+    from db.queries import init_followup_state, acknowledge_followup, get_active_followup_states, upsert_plan
+    from datetime import datetime
+    upsert_anchor(db_path, ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    now = datetime(2026, 3, 30, 8, 0, 0)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    ack_time = datetime(2026, 3, 30, 8, 7, 0)
+    acknowledge_followup(db_path, "2026-03-30", "grind_am", ack_time)
+    rows = get_active_followup_states(db_path, "2026-03-30")
+    assert rows[0]["acknowledged_at"] is not None
+
+
+def test_record_pings_increments_count(db_path):
+    from db.queries import init_followup_state, record_ping, get_active_followup_states, upsert_plan
+    from datetime import datetime
+    upsert_anchor(db_path, ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    now = datetime(2026, 3, 30, 8, 0, 0)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    rows = get_active_followup_states(db_path, "2026-03-30")
+    ping_time = datetime(2026, 3, 30, 8, 5, 0)
+    record_ping(db_path, rows[0]["id"], "pre", ping_time)
+    rows2 = get_active_followup_states(db_path, "2026-03-30")
+    assert rows2[0]["pre_ack_pings_sent"] == 1
+    assert rows2[0]["last_ping_at"] is not None
+
+
+def test_get_active_followup_states_excludes_completed(db_path):
+    from db.queries import init_followup_state, mark_followup_completed, get_active_followup_states, upsert_plan
+    from datetime import datetime
+    upsert_anchor(db_path, ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    now = datetime(2026, 3, 30, 8, 0, 0)
+    init_followup_state(db_path, "2026-03-30", "grind_am", tasks[0]["id"], now)
+    mark_followup_completed(db_path, tasks[0]["id"], "2026-03-30")
+    rows = get_active_followup_states(db_path, "2026-03-30")
+    assert rows == []
+
+
+def test_resolve_followup_config_returns_anchor_config_when_no_task_override(db_path):
+    from db.queries import resolve_followup_config, upsert_plan
+    fc = {"enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+          "post_ack_interval_min": 15, "post_ack_pings": 2}
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": fc})
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    result = resolve_followup_config(db_path, "grind_am", tasks[0]["id"])
+    assert result is not None
+    assert result["pre_ack_interval_min"] == 5
+
+
+def test_resolve_followup_config_task_overrides_anchor(db_path):
+    from db.queries import resolve_followup_config, upsert_plan
+    anchor_fc = {"enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+                 "post_ack_interval_min": 15, "post_ack_pings": 2}
+    task_fc = {"enabled": True, "pre_ack_interval_min": 2, "pre_ack_max_pings": 5,
+               "post_ack_interval_min": 10, "post_ack_pings": 3}
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": anchor_fc})
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "T1", "followup_config": task_fc}], notes="")
+    result = resolve_followup_config(db_path, "grind_am", tasks[0]["id"])
+    assert result is not None
+    assert result["pre_ack_interval_min"] == 2  # task's value, not anchor's
+
+
+def test_resolve_followup_config_returns_none_when_disabled(db_path):
+    from db.queries import resolve_followup_config, upsert_plan
+    fc = {"enabled": False, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+          "post_ack_interval_min": 15, "post_ack_pings": 2}
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": fc})
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    result = resolve_followup_config(db_path, "grind_am", tasks[0]["id"])
+    assert result is None
+
+
+def test_resolve_followup_config_returns_none_when_no_config(db_path):
+    from db.queries import resolve_followup_config, upsert_plan
+    upsert_anchor(db_path, ANCHOR)  # no followup_config
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
+    result = resolve_followup_config(db_path, "grind_am", tasks[0]["id"])
+    assert result is None

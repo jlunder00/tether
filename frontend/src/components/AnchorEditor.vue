@@ -52,6 +52,52 @@ async function save() {
       </label>
     </div>
 
+    <!-- Follow-up config section -->
+    <details class="text-sm">
+      <summary class="cursor-pointer text-white/50 hover:text-white/80 select-none py-1">
+        Follow-up config
+      </summary>
+      <div class="mt-2 space-y-3 bg-white/5 rounded-lg p-3">
+        <label class="flex items-center gap-2">
+          <input type="checkbox"
+                 :checked="draft.followup_config?.enabled ?? false"
+                 @change="(e) => {
+                   const en = (e.target as HTMLInputElement).checked
+                   draft.followup_config = draft.followup_config
+                     ? { ...draft.followup_config, enabled: en }
+                     : { enabled: en, pre_ack_interval_min: 5, pre_ack_max_pings: 3,
+                         post_ack_interval_min: 15, post_ack_pings: 2 }
+                 }"
+                 class="accent-blue-400" />
+          <span class="text-white/70">Enable follow-up pings</span>
+        </label>
+        <template v-if="draft.followup_config?.enabled">
+          <div class="grid grid-cols-2 gap-3">
+            <label class="flex flex-col gap-1 text-white/50 text-xs">
+              Pre-ack interval (min)
+              <input v-model.number="draft.followup_config.pre_ack_interval_min" type="number" min="1"
+                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+            </label>
+            <label class="flex flex-col gap-1 text-white/50 text-xs">
+              Max pre-ack pings
+              <input v-model.number="draft.followup_config.pre_ack_max_pings" type="number" min="1"
+                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+            </label>
+            <label class="flex flex-col gap-1 text-white/50 text-xs">
+              Post-ack interval (min)
+              <input v-model.number="draft.followup_config.post_ack_interval_min" type="number" min="1"
+                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+            </label>
+            <label class="flex flex-col gap-1 text-white/50 text-xs">
+              Post-ack pings
+              <input v-model.number="draft.followup_config.post_ack_pings" type="number" min="1"
+                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+            </label>
+          </div>
+        </template>
+      </div>
+    </details>
+
     <button @click="save" :disabled="saving"
             class="self-end px-4 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm disabled:opacity-50">
       {{ saving ? 'Saving…' : 'Save' }}

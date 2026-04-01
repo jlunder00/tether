@@ -16,6 +16,7 @@ class AnchorUpdate(BaseModel):
     strictness: int
     color: str
     position: int
+    followup_config: dict | None = None
 
 
 @router.get("/anchors")
