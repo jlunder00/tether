@@ -601,3 +601,67 @@ def test_apply_mutations_patch_milestone(db_path):
     assert ms[0]["name"] == "New Name"
     assert ms[0]["status"] == "in_progress"
     assert ms[0]["status_override"] is True
+
+
+# ---------------------------------------------------------------------------
+# check_followups
+# ---------------------------------------------------------------------------
+
+def test_check_followups_sends_pre_ack_message(db_path):
+    from bot.message_handler import check_followups
+    from db.queries import upsert_plan, init_followup_state
+    from datetime import datetime, timedelta
+    import json
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+        "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+        "post_ack_interval_min": 15, "post_ack_pings": 2,
+    }})
+    upsert_plan(db_path, TODAY)
+    tasks = upsert_tasks(db_path, TODAY, "grind_am", [{"text": "Apply to Adobe"}], notes="")
+    started = datetime.now() - timedelta(minutes=6)
+    init_followup_state(db_path, TODAY, "grind_am", tasks[0]["id"], started)
+    sent = []
+    check_followups(db_path, sent.append)
+    assert len(sent) == 1
+    assert "Apply to Adobe" in sent[0]
+    assert "/check-in" in sent[0]
+
+
+def test_check_followups_no_message_when_too_early(db_path):
+    from bot.message_handler import check_followups
+    from db.queries import upsert_plan, init_followup_state
+    from datetime import datetime, timedelta
+    import json
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+        "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+        "post_ack_interval_min": 15, "post_ack_pings": 2,
+    }})
+    upsert_plan(db_path, TODAY)
+    tasks = upsert_tasks(db_path, TODAY, "grind_am", [{"text": "T1"}], notes="")
+    started = datetime.now() - timedelta(minutes=2)
+    init_followup_state(db_path, TODAY, "grind_am", tasks[0]["id"], started)
+    sent = []
+    check_followups(db_path, sent.append)
+    assert len(sent) == 0
+
+
+def test_check_followups_sends_post_ack_after_ack(db_path):
+    from bot.message_handler import check_followups
+    from db.queries import upsert_plan, init_followup_state, acknowledge_followup
+    from datetime import datetime, timedelta
+    import json
+    upsert_anchor(db_path, {**ANCHOR, "followup_config": {
+        "enabled": True, "pre_ack_interval_min": 5, "pre_ack_max_pings": 3,
+        "post_ack_interval_min": 15, "post_ack_pings": 2,
+    }})
+    upsert_plan(db_path, TODAY)
+    tasks = upsert_tasks(db_path, TODAY, "grind_am", [{"text": "T1"}], notes="")
+    now = datetime.now()
+    started = now - timedelta(minutes=30)
+    init_followup_state(db_path, TODAY, "grind_am", tasks[0]["id"], started)
+    ack_time = now - timedelta(minutes=20)
+    acknowledge_followup(db_path, TODAY, "grind_am", ack_time)
+    sent = []
+    check_followups(db_path, sent.append)
+    assert len(sent) == 1
+    assert "check" in sent[0].lower()

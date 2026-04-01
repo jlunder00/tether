@@ -40,6 +40,12 @@ from db.queries import (
     link_milestone_task,
     create_milestone,
     patch_milestone,
+    init_followup_state,
+    get_active_followup_states,
+    acknowledge_followup,
+    record_ping,
+    mark_followup_completed,
+    resolve_followup_config,
 )
 from db.schema import init_db
 
@@ -264,6 +270,95 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
                 logger.warning("Unknown mutation op: %s", op)
         except Exception as e:
             logger.error("Failed to apply mutation %s: %s", m, e)
+
+
+def check_followups(db_path: Path, send_fn) -> None:
+    """Called every polling cycle. Sends batched pre/post-ack messages for due tasks."""
+    from datetime import datetime, date
+    now = datetime.now()
+    today = str(date.today())
+
+    def minutes_since(ts_str: str | None) -> float:
+        if not ts_str:
+            return float('inf')
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError:
+            return float('inf')
+        return (now - ts).total_seconds() / 60
+
+    rows = get_active_followup_states(db_path, today)
+    if not rows:
+        return
+
+    pre_ack_due = []
+    post_ack_due = []
+
+    for row in rows:
+        config = resolve_followup_config(db_path, row["anchor_id"], row["task_id"])
+        if config is None:
+            continue
+        if row["acknowledged_at"] is None:
+            ref_ts = row["last_ping_at"] or row["sequence_started_at"]
+            if (row["pre_ack_pings_sent"] < config["pre_ack_max_pings"]
+                    and minutes_since(ref_ts) >= config["pre_ack_interval_min"]):
+                pre_ack_due.append(row)
+        else:
+            ref_ts = row["last_ping_at"] or row["acknowledged_at"]
+            if (row["post_ack_pings_sent"] < config["post_ack_pings"]
+                    and minutes_since(ref_ts) >= config["post_ack_interval_min"]):
+                post_ack_due.append(row)
+
+    if pre_ack_due:
+        from collections import defaultdict
+        by_anchor: dict = defaultdict(list)
+        for row in pre_ack_due:
+            by_anchor[row["anchor_id"]].append(row)
+        for anchor_id, anchor_rows in by_anchor.items():
+            task_lines = []
+            for row in anchor_rows:
+                plan = get_plan(db_path, today)
+                task = None
+                if plan and anchor_id in plan.get("anchors", {}):
+                    task = next(
+                        (t for t in plan["anchors"][anchor_id]["tasks"]
+                         if t["id"] == row["task_id"]), None
+                    )
+                task_lines.append(f"• {task['text'] if task else row['task_id']}")
+            anchors = get_anchors(db_path)
+            anchor_name = next((a["name"] for a in anchors if a["id"] == anchor_id), anchor_id)
+            msg = (f"Your **{anchor_name}** block is underway. You haven't checked in yet on:\n"
+                   + "\n".join(task_lines)
+                   + "\n\n`/check-in` when you're on it.")
+            send_fn(msg)
+            for row in anchor_rows:
+                record_ping(db_path, row["id"], "pre", now)
+
+    if post_ack_due:
+        from collections import defaultdict
+        by_anchor: dict = defaultdict(list)
+        for row in post_ack_due:
+            by_anchor[row["anchor_id"]].append(row)
+        for anchor_id, anchor_rows in by_anchor.items():
+            task_lines = []
+            for row in anchor_rows:
+                plan = get_plan(db_path, today)
+                task = None
+                if plan and anchor_id in plan.get("anchors", {}):
+                    task = next(
+                        (t for t in plan["anchors"][anchor_id]["tasks"]
+                         if t["id"] == row["task_id"]), None
+                    )
+                status = f" ({task['status']})" if task else ""
+                task_lines.append(f"• {task['text'] if task else row['task_id']}{status}")
+            anchors = get_anchors(db_path)
+            anchor_name = next((a["name"] for a in anchors if a["id"] == anchor_id), anchor_id)
+            msg = (f"Quick check — progress on **{anchor_name}**:\n"
+                   + "\n".join(task_lines)
+                   + "\n\nWhat have you knocked out?")
+            send_fn(msg)
+            for row in anchor_rows:
+                record_ping(db_path, row["id"], "post", now)
 
 
 # ---------------------------------------------------------------------------
@@ -699,6 +794,8 @@ def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
     if text.startswith("/check-in"):
         accomplished, status = parse_check_in(text)
         insert_check_in(db_path, today, current_anchor["id"], accomplished, status)
+        from datetime import datetime as _dt
+        acknowledge_followup(db_path, today, current_anchor["id"], _dt.now())
 
     elif text.startswith("/tether-update-context"):
         try:
@@ -788,6 +885,7 @@ def _save_offset(offset: int) -> None:
 
 def run_polling(token: str, chat_id: str) -> None:
     offset = _load_offset()
+    last_anchor_id: str | None = None
     logger.info("Tether bot polling started (offset=%d)", offset)
     while True:
         try:
@@ -811,6 +909,21 @@ def run_polling(token: str, chat_id: str) -> None:
                 except Exception as e:
                     logger.error("Error handling message: %s", e)
                     _send_telegram(token, chat_id, f"[Tether error: {e}]")
+            # Run follow-up pings after processing incoming messages
+            _send = lambda m: _send_telegram(token, chat_id, m)
+            check_followups(DB_PATH, _send)
+            # Detect anchor start and init followup state for its tasks
+            from datetime import datetime as _dt, date as _date
+            _today = str(_date.today())
+            _current_anchor = get_current_anchor(get_anchors(DB_PATH))
+            if _current_anchor and _current_anchor.get("id") != last_anchor_id:
+                last_anchor_id = _current_anchor["id"]
+                _plan = get_plan(DB_PATH, _today)
+                if _plan and _current_anchor["id"] in _plan.get("anchors", {}):
+                    for _task in _plan["anchors"][_current_anchor["id"]]["tasks"]:
+                        if _task.get("id"):
+                            init_followup_state(DB_PATH, _today, _current_anchor["id"],
+                                                _task["id"], _dt.now())
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
