@@ -1,4 +1,5 @@
 import { ref, watch } from 'vue'
+import { api } from '../lib/api'
 
 export interface Link {
   id: number
@@ -14,13 +15,13 @@ export function useLinks(parentType: () => string, parentId: () => string) {
   const links = ref<Link[]>([])
 
   async function fetch() {
-    const resp = await window.fetch(`/api/${parentType()}/${parentId()}/links`, { credentials: 'include' })
+    const resp = await api(`/api/${parentType()}/${parentId()}/links`)
     links.value = resp.ok ? await resp.json() : []
   }
 
   async function create(url: string, label: string | null, category: string) {
-    await window.fetch(`/api/${parentType()}/${parentId()}/links`, {
-      method: 'POST', credentials: 'include',
+    await api(`/api/${parentType()}/${parentId()}/links`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, label, category }),
     })
@@ -28,7 +29,7 @@ export function useLinks(parentType: () => string, parentId: () => string) {
   }
 
   async function remove(id: number) {
-    await window.fetch(`/api/links/${id}`, { method: 'DELETE', credentials: 'include' })
+    await api(`/api/links/${id}`, { method: 'DELETE' })
     await fetch()
   }
 

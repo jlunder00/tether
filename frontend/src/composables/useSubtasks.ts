@@ -1,4 +1,5 @@
 import { ref, watch } from 'vue'
+import { api } from '../lib/api'
 
 export interface Subtask {
   id: number
@@ -14,15 +15,15 @@ export function useSubtasks(taskId: () => string) {
 
   async function fetch() {
     loading.value = true
-    const resp = await window.fetch(`/api/tasks/${taskId()}/subtasks`, { credentials: 'include' })
+    const resp = await api(`/api/tasks/${taskId()}/subtasks`)
     subtasks.value = resp.ok ? await resp.json() : []
     loading.value = false
   }
 
   async function create(text: string) {
     const position = subtasks.value.length
-    const resp = await window.fetch(`/api/tasks/${taskId()}/subtasks`, {
-      method: 'POST', credentials: 'include',
+    const resp = await api(`/api/tasks/${taskId()}/subtasks`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, position }),
     })
@@ -30,8 +31,8 @@ export function useSubtasks(taskId: () => string) {
   }
 
   async function update(id: number, fields: Partial<Subtask>) {
-    await window.fetch(`/api/tasks/${taskId()}/subtasks/${id}`, {
-      method: 'PATCH', credentials: 'include',
+    await api(`/api/tasks/${taskId()}/subtasks/${id}`, {
+      method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
@@ -39,15 +40,15 @@ export function useSubtasks(taskId: () => string) {
   }
 
   async function remove(id: number) {
-    await window.fetch(`/api/tasks/${taskId()}/subtasks/${id}`, {
-      method: 'DELETE', credentials: 'include',
+    await api(`/api/tasks/${taskId()}/subtasks/${id}`, {
+      method: 'DELETE',
     })
     await fetch()
   }
 
   async function reorder(idOrder: number[]) {
-    await window.fetch(`/api/tasks/${taskId()}/subtasks/reorder`, {
-      method: 'PUT', credentials: 'include',
+    await api(`/api/tasks/${taskId()}/subtasks/reorder`, {
+      method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id_order: idOrder }),
     })

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { api } from '../lib/api'
 
 export type MilestoneStatus = 'pending' | 'in_progress' | 'done' | 'blocked'
 
@@ -51,12 +52,12 @@ export const useMilestoneStore = defineStore('milestones', () => {
   })
 
   async function fetchAll() {
-    const resp = await fetch('/api/milestones')
+    const resp = await api('/api/milestones')
     all.value = await resp.json()
   }
 
   async function createMilestone(subject: string, name: string, description?: string, targetDate?: string) {
-    const resp = await fetch(`/api/context/${encodeURIComponent(subject)}/milestones`, {
+    const resp = await api(`/api/context/${encodeURIComponent(subject)}/milestones`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description: description ?? null, target_date: targetDate ?? null }),
@@ -67,7 +68,7 @@ export const useMilestoneStore = defineStore('milestones', () => {
   }
 
   async function patchMilestone(id: string, fields: Partial<Pick<Milestone, 'name' | 'description' | 'target_date' | 'status'>>) {
-    const resp = await fetch(`/api/milestones/${id}`, {
+    const resp = await api(`/api/milestones/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
@@ -78,12 +79,12 @@ export const useMilestoneStore = defineStore('milestones', () => {
   }
 
   async function deleteMilestone(id: string) {
-    await fetch(`/api/milestones/${id}`, { method: 'DELETE' })
+    await api(`/api/milestones/${id}`, { method: 'DELETE' })
     all.value = all.value.filter(m => m.id !== id)
   }
 
   async function linkTask(milestoneId: string, taskId: string) {
-    await fetch(`/api/milestones/${milestoneId}/tasks`, {
+    await api(`/api/milestones/${milestoneId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: taskId }),
@@ -92,7 +93,7 @@ export const useMilestoneStore = defineStore('milestones', () => {
   }
 
   async function unlinkTask(milestoneId: string, taskId: string) {
-    await fetch(`/api/milestones/${milestoneId}/tasks/${taskId}`, { method: 'DELETE' })
+    await api(`/api/milestones/${milestoneId}/tasks/${taskId}`, { method: 'DELETE' })
     await fetchAll()
   }
 

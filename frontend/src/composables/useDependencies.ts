@@ -1,4 +1,5 @@
 import { ref, watch } from 'vue'
+import { api } from '../lib/api'
 
 export interface Dependency {
   id: number
@@ -15,13 +16,13 @@ export function useDependencies(entityType: () => string, entityId: () => string
   const deps = ref<Dependencies>({ blocks: [], blocked_by: [] })
 
   async function fetch() {
-    const resp = await window.fetch(`/api/${entityType()}/${entityId()}/dependencies`, { credentials: 'include' })
+    const resp = await api(`/api/${entityType()}/${entityId()}/dependencies`)
     deps.value = resp.ok ? await resp.json() : { blocks: [], blocked_by: [] }
   }
 
   async function add(blockerType: string, blockerId: string, blockedType: string, blockedId: string) {
-    await window.fetch('/api/dependencies', {
-      method: 'POST', credentials: 'include',
+    await api('/api/dependencies', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ blocker_type: blockerType, blocker_id: blockerId, blocked_type: blockedType, blocked_id: blockedId }),
     })
@@ -29,7 +30,7 @@ export function useDependencies(entityType: () => string, entityId: () => string
   }
 
   async function remove(depId: number) {
-    await window.fetch(`/api/dependencies/${depId}`, { method: 'DELETE', credentials: 'include' })
+    await api(`/api/dependencies/${depId}`, { method: 'DELETE' })
     await fetch()
   }
 
