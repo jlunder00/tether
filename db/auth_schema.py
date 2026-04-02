@@ -34,6 +34,12 @@ CREATE TABLE IF NOT EXISTS telegram_connections (
     user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     telegram_chat_id TEXT UNIQUE NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS telegram_link_codes (
+    code TEXT PRIMARY KEY,
+    telegram_chat_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

@@ -16,6 +16,8 @@ from db.auth_queries import (
     get_invite_tokens,
     set_telegram_connection,
     get_user_by_telegram_chat_id,
+    store_link_code,
+    verify_and_consume_link_code,
 )
 
 
@@ -185,3 +187,41 @@ def test_set_telegram_connection_replace(auth_db):
     set_telegram_connection(auth_db, user["id"], "chat-new")
     assert get_user_by_telegram_chat_id(auth_db, "chat-new") is not None
     assert get_user_by_telegram_chat_id(auth_db, "chat-old") is None
+
+
+# ---------------------------------------------------------------------------
+# Telegram link codes
+# ---------------------------------------------------------------------------
+
+def test_store_and_verify_link_code(auth_db):
+    store_link_code(auth_db, "123456", "chat-abc")
+    result = verify_and_consume_link_code(auth_db, "123456")
+    assert result == "chat-abc"
+
+
+def test_verify_link_code_not_found(auth_db):
+    result = verify_and_consume_link_code(auth_db, "000000")
+    assert result is None
+
+
+def test_verify_link_code_expired(auth_db):
+    from unittest.mock import patch
+    from datetime import datetime, timezone, timedelta
+    # Insert a code with a created_at 6 minutes ago by manipulating the DB directly
+    from db.auth_schema import get_auth_db
+    old_ts = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+    with get_auth_db(auth_db) as conn:
+        conn.execute(
+            "INSERT INTO telegram_link_codes (code, telegram_chat_id, created_at) VALUES (?, ?, ?)",
+            ("999999", "chat-expired", old_ts),
+        )
+    result = verify_and_consume_link_code(auth_db, "999999")
+    assert result is None
+
+
+def test_verify_link_code_consumes(auth_db):
+    store_link_code(auth_db, "654321", "chat-xyz")
+    first = verify_and_consume_link_code(auth_db, "654321")
+    assert first == "chat-xyz"
+    second = verify_and_consume_link_code(auth_db, "654321")
+    assert second is None

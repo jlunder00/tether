@@ -25,7 +25,9 @@ from db.auth_queries import (
     get_user_by_oauth,
     get_user_by_username,
     get_user_count,
+    set_telegram_connection,
     use_invite_token,
+    verify_and_consume_link_code,
 )
 from db.auth_schema import init_auth_db
 from db.schema import init_db
@@ -333,3 +335,21 @@ async def list_invites(request: Request, _auth=Depends(auth_dependency)):
         raise HTTPException(status_code=403, detail="Admin only")
     tokens = get_invite_tokens(cfg.AUTH_DB_PATH, request.state.user_id)
     return tokens
+
+
+# ---------------------------------------------------------------------------
+# Telegram link verification
+# ---------------------------------------------------------------------------
+
+class TelegramLinkBody(BaseModel):
+    code: str
+
+
+@router.post("/auth/telegram-link")
+async def telegram_link(body: TelegramLinkBody, request: Request, _auth=Depends(auth_dependency)):
+    """Verify a 6-digit /link code from the Telegram bot and connect the user's account."""
+    chat_id = verify_and_consume_link_code(cfg.AUTH_DB_PATH, body.code)
+    if chat_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired link code")
+    set_telegram_connection(cfg.AUTH_DB_PATH, request.state.user_id, chat_id)
+    return {"ok": True, "telegram_chat_id": chat_id}

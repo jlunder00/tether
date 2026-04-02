@@ -1,6 +1,6 @@
 from __future__ import annotations
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from db.auth_schema import get_auth_db
 
@@ -151,3 +151,41 @@ def get_user_by_telegram_chat_id(db_path: Path, chat_id: str) -> dict | None:
             (chat_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def store_link_code(db_path: Path, code: str, chat_id: str) -> None:
+    """Store a Telegram link code associated with a chat_id."""
+    with get_auth_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO telegram_link_codes (code, telegram_chat_id) VALUES (?, ?)",
+            (code, chat_id),
+        )
+
+
+def verify_and_consume_link_code(db_path: Path, code: str) -> str | None:
+    """Verify a link code and return the chat_id if valid (not expired). Deletes the row."""
+    expires_before = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with get_auth_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT telegram_chat_id, created_at FROM telegram_link_codes WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if row is None:
+            return None
+        # created_at is stored as DATETIME in local time (SQLite default CURRENT_TIMESTAMP)
+        # Compare using naive UTC equivalent: check age > 5 minutes
+        try:
+            created = datetime.fromisoformat(row["created_at"])
+            # If no tzinfo, treat as UTC
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - created
+            if age > timedelta(minutes=5):
+                conn.execute("DELETE FROM telegram_link_codes WHERE code = ?", (code,))
+                return None
+        except Exception:
+            conn.execute("DELETE FROM telegram_link_codes WHERE code = ?", (code,))
+            return None
+        chat_id = row["telegram_chat_id"]
+        conn.execute("DELETE FROM telegram_link_codes WHERE code = ?", (code,))
+    return chat_id
