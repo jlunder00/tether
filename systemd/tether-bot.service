@@ -6,6 +6,7 @@ After=network.target tether-api.service
 Type=simple
 User=toast
 WorkingDirectory=/home/toast/tether
+EnvironmentFile=-%h/.tether-config/env
 ExecStart=/home/toast/tether/.venv/bin/python -m bot.message_handler
 Restart=on-failure
 RestartSec=10
