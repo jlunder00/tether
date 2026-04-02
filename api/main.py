@@ -8,6 +8,7 @@ from api.routes import context as context_routes
 from api.routes import logs as logs_routes
 from api.routes import tasks as tasks_routes
 from api.routes import milestones as milestones_routes
+from api.routes import auth as auth_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.auth_schema import init_auth_db
@@ -34,6 +35,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(auth_routes.router)  # No /api prefix — OAuth callbacks need clean /auth URLs
     app.include_router(plan_routes.router, prefix="/api")
     app.include_router(anchor_routes.router, prefix="/api")
     app.include_router(milestones_routes.router, prefix="/api")  # must be before context_routes (overlapping {subject:path} wildcard)
