@@ -38,7 +38,7 @@ function onAddNewTask() {
   }
   const tasks = effectivePlan.anchors[props.anchorId].tasks
   tasks.push({
-    id: '', text: '', status: 'pending' as const,
+    id: '', text: '', description: null, status: 'pending' as const,
     position: tasks.length, followup_config: null, blocks: [], blocked_by: [],
   })
   nextTick(() => {
