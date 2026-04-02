@@ -6,25 +6,64 @@ const router = createRouter({
   routes: [
     { path: '/login', name: 'login', component: () => import('./views/LoginView.vue') },
     { path: '/register', name: 'register', component: () => import('./views/RegisterView.vue') },
-    { path: '/', name: 'home', component: () => import('./components/DayView.vue') },
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
     { path: '/admin', name: 'admin', component: () => import('./views/AdminView.vue') },
-    // Catch-all redirect to home for now
-    { path: '/:pathMatch(.*)*', redirect: '/' },
+    {
+      path: '/plan/day/:date?',
+      name: 'day',
+      component: () => import('./views/PlanView.vue'),
+      props: route => ({ view: 'day', date: route.params.date }),
+      children: [
+        { path: 'task/:taskId', name: 'day-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'milestone/:milestoneId', name: 'day-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
+    {
+      path: '/plan/week/:date?',
+      name: 'week',
+      component: () => import('./views/PlanView.vue'),
+      props: route => ({ view: 'week', date: route.params.date }),
+      children: [
+        { path: 'task/:taskId', name: 'week-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'milestone/:milestoneId', name: 'week-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
+    {
+      path: '/plan/month/:date?',
+      name: 'month',
+      component: () => import('./views/PlanView.vue'),
+      props: route => ({ view: 'month', date: route.params.date }),
+      children: [
+        { path: 'task/:taskId', name: 'month-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'milestone/:milestoneId', name: 'month-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
+    {
+      path: '/context',
+      name: 'context',
+      component: () => import('./components/ContextEditor.vue'),
+      children: [
+        { path: 'milestone/:milestoneId', name: 'context-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
+    { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
+    { path: '/', redirect: '/plan/day' },
+    { path: '/:pathMatch(.*)*', redirect: '/plan/day' },
   ],
 })
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore()
   if (!auth.checked) await auth.checkAuth()
-  if (!auth.isAuthenticated && to.name !== 'login' && to.name !== 'register') {
+  const publicRoutes = ['login', 'register']
+  if (!auth.isAuthenticated && !publicRoutes.includes(to.name as string)) {
     return { name: 'login' }
   }
-  if (auth.isAuthenticated && (to.name === 'login' || to.name === 'register')) {
-    return { name: 'home' }
+  if (auth.isAuthenticated && publicRoutes.includes(to.name as string)) {
+    return { name: 'day' }
   }
-  if (to.name === 'admin' && auth.isAuthenticated && !auth.user?.is_admin) {
-    return { name: 'home' }
+  if (to.name === 'admin' && !auth.user?.is_admin) {
+    return { name: 'day' }
   }
 })
 
