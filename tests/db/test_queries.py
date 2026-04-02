@@ -14,6 +14,10 @@ from db.queries import (
     log_stage, get_invocation_log,
     create_milestone, get_milestones, patch_milestone, delete_milestone,
     link_milestone_task, unlink_milestone_task,
+    add_dependency, remove_dependency, get_dependencies_for,
+    get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
+    get_links, create_link, delete_link,
+    patch_task_fields,
 )
 
 
@@ -411,17 +415,17 @@ def test_move_task_atomic(db_path):
 
 
 def test_add_and_remove_task_dependency(db_path):
-    from db.queries import add_task_dependency, remove_task_dependency
     upsert_anchor(db_path, _ANCHOR)
     upsert_plan(db_path, "2026-03-30")
     tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
                          [{"text": "Task A"}, {"text": "Task B"}], notes="")
     uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
-    add_task_dependency(db_path, uid_b, uid_a)  # B blocked by A
+    # A blocks B (A is blocker, B is blocked)
+    dep_id = add_dependency(db_path, "task", uid_a, "task", uid_b)
     plan = get_plan(db_path, "2026-03-30")
     task_b = next(t for t in plan["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
     assert uid_a in task_b["blocked_by"]
-    remove_task_dependency(db_path, uid_b, uid_a)
+    remove_dependency(db_path, dep_id)
     plan2 = get_plan(db_path, "2026-03-30")
     task_b2 = next(t for t in plan2["anchors"]["grind_am"]["tasks"] if t["id"] == uid_b)
     assert task_b2["blocked_by"] == []
@@ -666,3 +670,175 @@ def test_resolve_followup_config_returns_none_when_no_config(db_path):
     tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "T1"}], notes="")
     result = resolve_followup_config(db_path, "grind_am", tasks[0]["id"])
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Dependencies (new table)
+# ---------------------------------------------------------------------------
+
+def _make_tasks(db_path, count=2, date="2026-03-30"):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, date)
+    return upsert_tasks(db_path, date, "grind_am",
+                        [{"text": f"Task {i}"} for i in range(count)], notes="")
+
+
+def test_add_and_get_dependency(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    dep_id = add_dependency(db_path, "task", uid_a, "task", uid_b)
+    assert isinstance(dep_id, int) and dep_id > 0
+
+    deps_a = get_dependencies_for(db_path, "task", uid_a)
+    assert len(deps_a["blocks"]) == 1
+    assert deps_a["blocks"][0]["entity_id"] == uid_b
+    assert deps_a["blocks"][0]["type"] == "task"
+    assert deps_a["blocked_by"] == []
+
+    deps_b = get_dependencies_for(db_path, "task", uid_b)
+    assert len(deps_b["blocked_by"]) == 1
+    assert deps_b["blocked_by"][0]["entity_id"] == uid_a
+    assert deps_b["blocked_by"][0]["type"] == "task"
+    assert deps_b["blocks"] == []
+
+
+def test_add_task_milestone_dependency(db_path):
+    tasks = _make_tasks(db_path, 1)
+    uid = tasks[0]["id"]
+    upsert_context_entry(db_path, "Proj", "body")
+    m = create_milestone(db_path, "Proj", "M1")
+    dep_id = add_dependency(db_path, "task", uid, "milestone", m["id"])
+    assert isinstance(dep_id, int) and dep_id > 0
+
+    deps = get_dependencies_for(db_path, "task", uid)
+    assert len(deps["blocks"]) == 1
+    assert deps["blocks"][0]["type"] == "milestone"
+    assert deps["blocks"][0]["entity_id"] == m["id"]
+
+
+def test_remove_dependency(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    dep_id = add_dependency(db_path, "task", uid_a, "task", uid_b)
+    remove_dependency(db_path, dep_id)
+    deps = get_dependencies_for(db_path, "task", uid_a)
+    assert deps["blocks"] == []
+    assert deps["blocked_by"] == []
+
+
+def test_get_plan_uses_dependencies_table(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    # Use new dependencies table (not task_dependencies)
+    add_dependency(db_path, "task", uid_a, "task", uid_b)
+    plan = get_plan(db_path, "2026-03-30")
+    plan_tasks = plan["anchors"]["grind_am"]["tasks"]
+    task_a = next(t for t in plan_tasks if t["id"] == uid_a)
+    task_b = next(t for t in plan_tasks if t["id"] == uid_b)
+    assert uid_b in task_a["blocks"]
+    assert uid_a in task_b["blocked_by"]
+
+
+# ---------------------------------------------------------------------------
+# Subtasks
+# ---------------------------------------------------------------------------
+
+def test_create_and_get_subtasks(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    s1 = create_subtask(db_path, tid, "Step one", 0)
+    s2 = create_subtask(db_path, tid, "Step two", 1)
+    assert s1["text"] == "Step one"
+    assert s2["text"] == "Step two"
+    subtasks = get_subtasks(db_path, tid)
+    assert len(subtasks) == 2
+    assert subtasks[0]["position"] == 0
+    assert subtasks[1]["position"] == 1
+    assert subtasks[0]["text"] == "Step one"
+
+
+def test_update_subtask_done(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    s = create_subtask(db_path, tid, "Do thing", 0)
+    assert s["done"] == 0
+    update_subtask(db_path, s["id"], done=1)
+    subtasks = get_subtasks(db_path, tid)
+    assert subtasks[0]["done"] == 1
+
+
+def test_delete_subtask(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    s = create_subtask(db_path, tid, "Temp step", 0)
+    delete_subtask(db_path, s["id"])
+    assert get_subtasks(db_path, tid) == []
+
+
+def test_reorder_subtasks(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    s1 = create_subtask(db_path, tid, "First", 0)
+    s2 = create_subtask(db_path, tid, "Second", 1)
+    s3 = create_subtask(db_path, tid, "Third", 2)
+    # Reverse the order
+    reorder_subtasks(db_path, tid, [s3["id"], s2["id"], s1["id"]])
+    subtasks = get_subtasks(db_path, tid)
+    assert subtasks[0]["id"] == s3["id"]
+    assert subtasks[1]["id"] == s2["id"]
+    assert subtasks[2]["id"] == s1["id"]
+
+
+# ---------------------------------------------------------------------------
+# Links
+# ---------------------------------------------------------------------------
+
+def test_create_and_get_links(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    link = create_link(db_path, "task", tid, "https://example.com", "Example", "reference")
+    assert link["url"] == "https://example.com"
+    assert link["label"] == "Example"
+    assert link["category"] == "reference"
+    assert link["parent_type"] == "task"
+    assert link["parent_id"] == tid
+
+    links = get_links(db_path, "task", tid)
+    assert len(links) == 1
+    assert links[0]["url"] == "https://example.com"
+
+
+def test_delete_link(db_path):
+    tasks = _make_tasks(db_path, 1)
+    tid = tasks[0]["id"]
+    link = create_link(db_path, "task", tid, "https://example.com", None, "other")
+    delete_link(db_path, link["id"])
+    assert get_links(db_path, "task", tid) == []
+
+
+def test_links_for_milestone(db_path):
+    upsert_context_entry(db_path, "Proj", "body")
+    m = create_milestone(db_path, "Proj", "M1")
+    link = create_link(db_path, "milestone", m["id"], "https://docs.example.com", "Docs", "docs")
+    links = get_links(db_path, "milestone", m["id"])
+    assert len(links) == 1
+    assert links[0]["parent_type"] == "milestone"
+    assert links[0]["label"] == "Docs"
+
+
+# ---------------------------------------------------------------------------
+# patch_task description
+# ---------------------------------------------------------------------------
+
+def test_patch_task_description(db_path):
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am", [{"text": "Task"}], notes="")
+    uid = tasks[0]["id"]
+    result = patch_task_fields(db_path, uid, {"description": "A detailed description."})
+    assert result is not None
+    assert result["description"] == "A detailed description."
+
+    plan = get_plan(db_path, "2026-03-30")
+    task = plan["anchors"]["grind_am"]["tasks"][0]
+    assert task["description"] == "A detailed description."
