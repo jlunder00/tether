@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import random
 import re
 import subprocess
 import time
@@ -52,9 +53,37 @@ from db.schema import init_db
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_db_path(chat_id: str) -> Path | None:
+    """Look up chat_id in auth.db and return per-user DB path, or None if not found."""
+    if not AUTH_DB_PATH.exists():
+        return None
+    try:
+        from db.auth_queries import get_user_by_telegram_chat_id
+        user = get_user_by_telegram_chat_id(AUTH_DB_PATH, chat_id)
+        if user:
+            return Path.home() / ".tether-config" / "users" / f"{user['id']}.db"
+    except Exception as e:
+        logger.warning("_resolve_db_path error: %s", e)
+    return None
+
+
+def verify_link_code(code: str) -> str | None:
+    """Verify a /link code against auth.db. Returns chat_id if valid, else None."""
+    try:
+        from db.auth_queries import verify_and_consume_link_code
+        return verify_and_consume_link_code(AUTH_DB_PATH, code)
+    except Exception as e:
+        logger.warning("verify_link_code error: %s", e)
+        return None
+
 DB_PATH = Path.home() / ".tether-config" / "tether.db"
+AUTH_DB_PATH = Path.home() / ".tether-config" / "auth.db"
 _CONFIG_PATH = Path.home() / ".tether-config" / "config.yaml"
 _OFFSET_PATH = Path.home() / ".tether-config" / "telegram_offset"
+
+# pending link codes: code -> (chat_id, timestamp) — in-memory cache; authoritative copy is auth.db
+_pending_links: dict[str, tuple[str, float]] = {}
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
@@ -815,9 +844,8 @@ def _run_v2_planning_loop(
 # Entry point
 # ---------------------------------------------------------------------------
 
-def handle_message(text: str, send_fn: Callable[[str], None]) -> None:
+def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB_PATH) -> None:
     today = str(date_type.today())
-    db_path = DB_PATH
     init_db(db_path)
     upsert_plan(db_path, today)
 
@@ -938,38 +966,73 @@ def run_polling(token: str, chat_id: str) -> None:
                 timeout=35,
             )
             data = resp.json()
+            last_message_db_path: Path | None = None
+            last_message_chat_id: str | None = None
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
                 _save_offset(offset)
                 msg = update.get("message", {})
                 text = msg.get("text", "")
+                incoming_chat_id = str(msg.get("chat", {}).get("id", chat_id))
                 if not text:
                     continue
+
+                send = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
+
+                # Handle /start and /link before auth check
+                if text.strip() in ("/start", "/link"):
+                    try:
+                        from db.auth_queries import store_link_code
+                        from db.auth_schema import init_auth_db
+                        if not AUTH_DB_PATH.exists():
+                            AUTH_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                            init_auth_db(AUTH_DB_PATH)
+                        code = f"{random.randint(0, 999999):06d}"
+                        store_link_code(AUTH_DB_PATH, code, incoming_chat_id)
+                        send(f"Your link code is: {code}. Enter this in Tether settings within 5 minutes.")
+                    except Exception as e:
+                        logger.error("Error handling /link: %s", e)
+                        send("[Tether error generating link code]")
+                    continue
+
+                # Resolve per-user DB path from chat_id
+                resolved_db = _resolve_db_path(incoming_chat_id)
+                if resolved_db is None:
+                    send(
+                        "I don't recognize you. Link your Tether account at your Tether URL, "
+                        "then use /link to connect."
+                    )
+                    continue
+
                 try:
-                    send = lambda m: _send_telegram(token, chat_id, m)
-                    handle_message(text, send)
+                    handle_message(text, send, db_path=resolved_db)
+                    last_message_db_path = resolved_db
+                    last_message_chat_id = incoming_chat_id
                     _notify_api()
                 except Exception as e:
                     logger.error("Error handling message: %s", e)
-                    _send_telegram(token, chat_id, f"[Tether error: {e}]")
-            # Detect anchor start and init followup state for its tasks
+                    send(f"[Tether error: {e}]")
+
+            # Detect anchor start and run follow-ups for the user who last messaged
             from datetime import datetime as _dt, date as _date
-            _send = lambda m: _send_telegram(token, chat_id, m)
             _today = str(_date.today())
-            _current_anchor = get_current_anchor(get_anchors(DB_PATH))
+            _active_db = last_message_db_path if last_message_db_path else DB_PATH
+            _active_chat = last_message_chat_id if last_message_chat_id else chat_id
+            _send = lambda m, cid=_active_chat: _send_telegram(token, cid, m)
+            _current_anchor = get_current_anchor(get_anchors(_active_db))
             _anchor_running = _current_anchor and is_anchor_active(_current_anchor)
             if not _anchor_running:
                 last_anchor_id = None
             elif _current_anchor.get("id") != last_anchor_id:
                 last_anchor_id = _current_anchor["id"]
-                _plan = get_plan(DB_PATH, _today)
+                _plan = get_plan(_active_db, _today)
                 if _plan and _current_anchor["id"] in _plan.get("anchors", {}):
                     for _task in _plan["anchors"][_current_anchor["id"]]["tasks"]:
                         if _task.get("id"):
-                            init_followup_state(DB_PATH, _today, _current_anchor["id"],
+                            init_followup_state(_active_db, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
-            # Run follow-up pings after processing incoming messages
-            check_followups(DB_PATH, _send)
+            # Run follow-up pings for the active user's DB
+            check_followups(_active_db, _send)
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)

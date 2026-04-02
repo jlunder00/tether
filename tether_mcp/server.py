@@ -24,6 +24,9 @@ def _db() -> Path:
     env = os.environ.get("TETHER_DB_PATH")
     if env:
         return Path(env)
+    user_id = os.environ.get("TETHER_USER_ID")
+    if user_id:
+        return Path.home() / ".tether-config" / "users" / f"{user_id}.db"
     return Path.home() / ".tether-config" / "tether.db"
 
 
