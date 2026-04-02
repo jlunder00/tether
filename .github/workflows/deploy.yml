@@ -63,6 +63,11 @@ jobs:
           npm ci
           npm run build
 
+      - name: Install systemd service files
+        run: |
+          sudo cp /home/toast/tether/systemd/tether-*.service /etc/systemd/system/
+          sudo systemctl daemon-reload
+
       - name: Restart API service
         run: sudo systemctl restart tether-api
 

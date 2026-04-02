@@ -73,7 +73,20 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             manager.disconnect(websocket, user_id)
 
     if FRONTEND_DIST.exists():
-        app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+        # Serve static assets (JS, CSS, images) directly
+        app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
+
+        # SPA fallback: serve index.html for all non-API routes
+        # so Vue Router can handle client-side routing
+        from fastapi.responses import FileResponse
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            # If it's a real file in dist (e.g., favicon.ico), serve it
+            file_path = FRONTEND_DIST / full_path
+            if full_path and file_path.is_file():
+                return FileResponse(file_path)
+            return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
 
