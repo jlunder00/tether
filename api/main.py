@@ -9,6 +9,8 @@ from api.routes import logs as logs_routes
 from api.routes import tasks as tasks_routes
 from api.routes import milestones as milestones_routes
 from api.routes import auth as auth_routes
+from api.routes import dependencies as dependencies_routes
+from api.routes import links as links_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.auth_schema import init_auth_db
@@ -42,6 +44,8 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(context_routes.router, prefix="/api")
     app.include_router(logs_routes.router, prefix="/api")
     app.include_router(tasks_routes.router, prefix="/api")
+    app.include_router(dependencies_routes.router, prefix="/api")
+    app.include_router(links_routes.router, prefix="/api")
 
     @app.post("/api/notify")
     async def notify():
