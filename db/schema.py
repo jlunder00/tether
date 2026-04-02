@@ -29,13 +29,41 @@ CREATE TABLE IF NOT EXISTS tasks (
     text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     followup_config TEXT,
-    notes TEXT NOT NULL DEFAULT ''
+    notes TEXT NOT NULL DEFAULT '',
+    description TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (
     task_id       TEXT NOT NULL,
     blocked_by_id TEXT NOT NULL,
     PRIMARY KEY (task_id, blocked_by_id)
+);
+
+CREATE TABLE IF NOT EXISTS dependencies (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    blocker_type TEXT NOT NULL,
+    blocker_id   TEXT NOT NULL,
+    blocked_type TEXT NOT NULL,
+    blocked_id   TEXT NOT NULL,
+    UNIQUE (blocker_type, blocker_id, blocked_type, blocked_id)
+);
+
+CREATE TABLE IF NOT EXISTS subtasks (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id  TEXT NOT NULL,
+    text     TEXT NOT NULL,
+    done     INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_type TEXT NOT NULL,
+    parent_id   TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    label       TEXT,
+    category    TEXT NOT NULL DEFAULT 'other',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS milestones (

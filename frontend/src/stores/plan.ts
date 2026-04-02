@@ -9,6 +9,7 @@ export type { FollowupConfig }
 export interface Task {
   id: string
   text: string
+  description: string | null
   status: TaskStatus
   position: number
   followup_config: FollowupConfig | null
