@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
+import { usePlanStore } from '../stores/plan'
 const milestoneStore = useMilestoneStore()
+const planStore = usePlanStore()
+const router = useRouter()
 
 const props = defineProps<{ task: Task }>()
 const emit = defineEmits<{
@@ -69,12 +73,17 @@ function toggleFollowup(enabled: boolean) {
       class="flex-1 bg-transparent border-b border-white/20 focus:border-white/60 outline-none text-sm py-0.5" />
     <span
       v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
-      class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/50 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      @click="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
+      class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/50 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-white/20">
       {{ m.name }}
     </span>
     <button
       @click="emit('remove')"
       class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+    <button
+      @click="router.push(`/plan/day/${planStore.activeDate}/task/${task.id}`)"
+      class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+      title="Open details">↗</button>
     <div>
       <button
         @click="openFollowup"
