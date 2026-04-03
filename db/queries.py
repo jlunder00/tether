@@ -45,11 +45,21 @@ def get_plan(db_path: Path, date: str) -> dict:
         if not plan_row:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
-        task_rows = conn.execute(
-            "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
-            "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
-            (date,)
-        ).fetchall()
+        # Try with description column; fall back for unmigrated DBs
+        try:
+            task_rows = conn.execute(
+                "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
+                "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+                (date,)
+            ).fetchall()
+            has_description = True
+        except Exception:
+            task_rows = conn.execute(
+                "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
+                "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+                (date,)
+            ).fetchall()
+            has_description = False
 
         anchors: dict = {}
         for row in task_rows:
@@ -63,7 +73,7 @@ def get_plan(db_path: Path, date: str) -> dict:
                 "status": row["status"] or "pending",
                 "position": row["position"],
                 "followup_config": json.loads(fc) if fc else None,
-                "description": row["description"],
+                "description": row["description"] if has_description else None,
                 "blocks": [],
                 "blocked_by": [],
             })
@@ -71,23 +81,25 @@ def get_plan(db_path: Path, date: str) -> dict:
         # Populate dependency fields from the dependencies table
         all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
         if all_uuids:
-            placeholders = ",".join("?" for _ in all_uuids)
-            dep_rows = conn.execute(
-                f"SELECT blocker_id, blocked_id FROM dependencies "
-                f"WHERE blocker_type='task' AND blocked_type='task' "
-                f"AND (blocker_id IN ({placeholders}) OR blocked_id IN ({placeholders}))",
-                all_uuids + all_uuids,
-            ).fetchall()
-            blocked_by_map: dict[str, list] = {}
-            blocks_map: dict[str, list] = {}
-            for dep in dep_rows:
-                # blocker_id blocks blocked_id
-                blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
-                blocks_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
-            for anchor_data in anchors.values():
-                for task in anchor_data["tasks"]:
-                    task["blocked_by"] = blocked_by_map.get(task["id"], [])
-                    task["blocks"] = blocks_map.get(task["id"], [])
+            try:
+                placeholders = ",".join("?" for _ in all_uuids)
+                dep_rows = conn.execute(
+                    f"SELECT blocker_id, blocked_id FROM dependencies "
+                    f"WHERE blocker_type='task' AND blocked_type='task' "
+                    f"AND (blocker_id IN ({placeholders}) OR blocked_id IN ({placeholders}))",
+                    all_uuids + all_uuids,
+                ).fetchall()
+                blocked_by_map: dict[str, list] = {}
+                blocks_map: dict[str, list] = {}
+                for dep in dep_rows:
+                    blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
+                    blocks_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
+                for anchor_data in anchors.values():
+                    for task in anchor_data["tasks"]:
+                        task["blocked_by"] = blocked_by_map.get(task["id"], [])
+                        task["blocks"] = blocks_map.get(task["id"], [])
+            except Exception:
+                pass  # dependencies table may not exist on unmigrated DBs
 
         ack_rows = conn.execute(
             "SELECT anchor_id, acknowledged_at FROM acknowledgements WHERE plan_date=?", (date,)
