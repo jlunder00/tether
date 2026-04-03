@@ -83,11 +83,15 @@ async def run_beacon(
       message: str | None — any message to send to the user
     """
     try:
-        change_summary = _format_change_summary(changes)
+        from bot.relationships import build_beacon_context
+
+        # Enrich change list with milestone/context relationships
+        enriched_context = build_beacon_context(db_path, changes)
 
         # --- Phase 1: Triage ---
         triage_prompt = (
-            f"These changes were detected in the user's task system:\n{change_summary}\n\n"
+            f"The following activity was detected in the user's task system:\n\n"
+            f"{enriched_context}\n\n"
             f"Does this warrant closer review and possible action? "
             f"Answer YES or NO and one sentence why."
         )
@@ -112,8 +116,10 @@ async def run_beacon(
             f"Limit yourself to at most {_MAX_BEACON_ACTIONS} actions."
         )
         action_prompt = (
-            f"Changes detected:\n{change_summary}\n\n"
+            f"Activity detected:\n\n{enriched_context}\n\n"
             f"Review the current state and take action if needed. "
+            f"You can update context entries to reflect completed work, "
+            f"adjust milestone status, or flag stale information. "
             f"If nothing needs doing, say so briefly."
         )
 
