@@ -25,7 +25,7 @@ async function handleRegister() {
   loading.value = true
   try {
     await auth.register(username.value, email.value, password.value, inviteToken.value || undefined)
-    router.push({ name: 'home' })
+    router.push({ name: 'day' })
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Registration failed'
   } finally {

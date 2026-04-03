@@ -1,0 +1,119 @@
+<h2>Task Detail Panel — Slide-out Layout</h2>
+<p class="subtitle">Slides in from the right, ~40% width. Plan view stays visible behind it.</p>
+
+<div class="mockup">
+  <div class="mockup-header">TaskDetailPanel.vue</div>
+  <div class="mockup-body" style="background: #1a1a2e; color: #e0e0e0; padding: 24px; font-family: system-ui; min-height: 700px;">
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+      <span style="font-size: 12px; color: #888; background: #2a2a3e; padding: 4px 10px; border-radius: 8px;">Launch Pad · Apr 1</span>
+      <span style="cursor: pointer; color: #666; font-size: 18px;">✕</span>
+    </div>
+
+    <div style="font-size: 22px; font-weight: 600; margin-bottom: 8px; padding: 4px 0;">
+      Prep thesis advisor meeting
+    </div>
+
+    <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 20px;">
+      <span style="display: inline-flex; align-items: center; gap: 6px; background: #2563eb33; color: #60a5fa; padding: 4px 12px; border-radius: 12px; font-size: 13px;">
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #60a5fa; display: inline-block;"></span>
+        In Progress
+      </span>
+      <span style="display: inline-flex; align-items: center; gap: 4px; background: #ffffff10; color: #888; padding: 4px 10px; border-radius: 12px; font-size: 12px;">
+        🔔 Follow-up on
+      </span>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Description</div>
+      <div style="background: #ffffff08; border: 1px solid #ffffff10; border-radius: 8px; padding: 12px; font-size: 14px; color: #bbb; min-height: 60px;">
+        Review D/E matching results and SemEval dataset D. Draft 3-4 talking points for noon meeting. Focus on what's changed since last advisor sync.
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Subtasks <span style="color: #555;">2/4</span></div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="width: 16px; height: 16px; border-radius: 4px; background: #22c55e; display: flex; align-items: center; justify-content: center; font-size: 11px; color: white;">✓</span>
+          <span style="text-decoration: line-through; color: #666; font-size: 14px;">Pull latest experiment results</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="width: 16px; height: 16px; border-radius: 4px; background: #22c55e; display: flex; align-items: center; justify-content: center; font-size: 11px; color: white;">✓</span>
+          <span style="text-decoration: line-through; color: #666; font-size: 14px;">Compare D/E matching accuracy</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #555; display: inline-block;"></span>
+          <span style="color: #ccc; font-size: 14px;">Draft talking points doc</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #555; display: inline-block;"></span>
+          <span style="color: #ccc; font-size: 14px;">Review previous meeting notes</span>
+        </div>
+        <div style="padding: 4px 8px; color: #555; font-size: 13px; cursor: pointer;">+ Add subtask</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Links</div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="font-size: 14px;">📄</span>
+          <span style="color: #60a5fa; font-size: 14px; text-decoration: underline;">Experiment results spreadsheet</span>
+          <span style="font-size: 11px; color: #555; margin-left: auto;">document</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05;">
+          <span style="font-size: 14px;">🔗</span>
+          <span style="color: #60a5fa; font-size: 14px; text-decoration: underline;">Zoom — advisor meeting</span>
+          <span style="font-size: 11px; color: #555; margin-left: auto;">meeting</span>
+        </div>
+        <div style="padding: 4px 8px; color: #555; font-size: 13px; cursor: pointer;">+ Add link</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Blocked by</div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05; cursor: pointer;">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block;"></span>
+          <span style="color: #ccc; font-size: 14px;">Run SemEval D experiments</span>
+          <span style="font-size: 11px; color: #555; margin-left: auto;">task · done</span>
+        </div>
+      </div>
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px; margin-top: 12px;">Blocks</div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05; cursor: pointer;">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: #f59e0b; display: inline-block;"></span>
+          <span style="color: #ccc; font-size: 14px;">Update thesis Chapter 4</span>
+          <span style="font-size: 11px; color: #555; margin-left: auto;">task · pending</span>
+        </div>
+        <div style="padding: 4px 8px; color: #555; font-size: 13px; cursor: pointer;">+ Add dependency</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Milestones</div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: #ffffff05; cursor: pointer;">
+          <span style="font-size: 14px;">◆</span>
+          <span style="color: #ccc; font-size: 14px;">Thesis advisor meeting prep</span>
+          <span style="font-size: 11px; color: #60a5fa; margin-left: auto;">3/5 tasks done</span>
+        </div>
+        <div style="padding: 4px 8px; color: #555; font-size: 13px; cursor: pointer;">+ Link milestone</div>
+      </div>
+    </div>
+
+    <div style="margin-bottom: 20px;">
+      <div style="font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.5px; margin-bottom: 6px;">Follow-up</div>
+      <div style="display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 6px; background: #ffffff05;">
+        <span style="color: #888; font-size: 13px;">🔔 Overrides anchor · Pre-ack every 5 min (max 3) · Post-ack every 15 min (2x)</span>
+      </div>
+    </div>
+
+    <div style="border-top: 1px solid #ffffff10; padding-top: 16px; margin-top: 24px;">
+      <span style="color: #ef4444; font-size: 13px; cursor: pointer;">Delete task</span>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 16px;">Each linked item (blocked-by tasks, milestones) is clickable — opens that item's panel via router push. Back button navigates through the drill-down history.</p>

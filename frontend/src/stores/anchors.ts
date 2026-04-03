@@ -26,8 +26,14 @@ export const useAnchorStore = defineStore('anchors', () => {
   const anchors = ref<Anchor[]>([])
 
   async function fetchAnchors() {
-    const resp = await api('/api/anchors')
-    anchors.value = await resp.json()
+    try {
+      const resp = await api('/api/anchors')
+      if (!resp.ok) throw new Error(`${resp.status}`)
+      anchors.value = await resp.json()
+    } catch (e) {
+      console.error('fetchAnchors error:', e)
+      anchors.value = []
+    }
   }
 
   async function updateAnchor(anchor: Anchor) {
