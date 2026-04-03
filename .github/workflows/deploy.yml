@@ -57,6 +57,14 @@ jobs:
           source .venv/bin/activate
           python -c "from bot.anchor_trigger import load_anchors; print('[ok] imports work')"
 
+      - name: Run DB migrations on user databases
+        run: |
+          cd /home/toast/tether
+          source .venv/bin/activate
+          for db in /home/toast/.tether-config/users/*.db; do
+            [ -f "$db" ] && python db/migrate_data_model.py "$db" && echo "Migrated $db" || true
+          done
+
       - name: Build Vue frontend
         run: |
           cd /home/toast/tether/frontend
