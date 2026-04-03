@@ -26,6 +26,8 @@ from db.queries import (
     delete_subtask,
     link_milestone_task,
     unlink_milestone_task,
+    create_milestone,
+    patch_milestone,
 )
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
@@ -270,6 +272,23 @@ def unlink_task_from_milestone(milestone_id: str, task_id: str) -> dict:
     """Unlink a task from a milestone."""
     unlink_milestone_task(_db(), milestone_id, task_id)
     return {"ok": True}
+
+
+@mcp.tool()
+def create_new_milestone(context_subject: str, name: str, description: str = "", target_date: str = "") -> dict:
+    """Create a milestone under a context subject. Returns the new milestone dict."""
+    return create_milestone(_db(), context_subject, name,
+                            description or None, target_date or None)
+
+
+@mcp.tool()
+def update_milestone(milestone_id: str, fields: dict) -> dict:
+    """Update a milestone. Allowed fields: name, description, target_date, status.
+    Setting status also sets status_override=true."""
+    result = patch_milestone(_db(), milestone_id, fields)
+    if result is None:
+        return {"error": "Milestone not found or no valid fields"}
+    return result
 
 
 if __name__ == "__main__":
