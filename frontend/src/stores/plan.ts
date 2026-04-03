@@ -45,13 +45,18 @@ export const usePlanStore = defineStore('plan', () => {
   const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
-    if (date) {
-      activeDate.value = date
-      loading.value = true
+    if (date) activeDate.value = date
+    loading.value = true
+    try {
+      const resp = await api(`/api/plan/${activeDate.value}`)
+      if (!resp.ok) throw new Error(`${resp.status}`)
+      plan.value = await resp.json()
+    } catch (e) {
+      console.error('fetchPlan error:', e)
+      plan.value = null
+    } finally {
+      loading.value = false
     }
-    const resp = await api(`/api/plan/${activeDate.value}`)
-    plan.value = await resp.json()
-    loading.value = false
   }
 
   async function fetchSavedDates() {

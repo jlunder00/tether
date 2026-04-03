@@ -98,6 +98,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <div class="min-h-screen bg-gray-900 text-white p-6">
   <div class="space-y-3">
     <template v-for="entry in topLevel" :key="entry.subject">
       <!-- Top-level entry -->
@@ -226,5 +227,7 @@ onMounted(() => {
              class="flex-1 bg-white/5 border border-white/20 rounded px-3 py-2 text-sm outline-none focus:border-white/50" />
       <button @click="addEntry" class="bg-white/10 hover:bg-white/20 px-4 py-2 rounded text-sm">Add</button>
     </div>
+  </div>
+  <router-view />
   </div>
 </template>

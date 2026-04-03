@@ -16,7 +16,7 @@ async function handleLogin() {
   loading.value = true
   try {
     await auth.login(login.value, password.value)
-    router.push({ name: 'home' })
+    router.push({ name: 'day' })
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : 'Login failed'
   } finally {
