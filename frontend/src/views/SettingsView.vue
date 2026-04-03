@@ -77,10 +77,6 @@ const telegramLinked = ref(false)
 
 onMounted(async () => {
   loadLLMConfig()
-})
-
-// Check if already linked
-onMounted(async () => {
   try {
     const resp = await fetch('/auth/me', { credentials: 'include' })
     if (resp.ok) {

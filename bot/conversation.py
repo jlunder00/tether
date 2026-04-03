@@ -120,7 +120,11 @@ async def conversation_loop(
       3. If stop_reason == "tool_use": execute each tool call,
          append assistant message + tool results, loop
     """
+    if max_rounds < 1:
+        raise ValueError("max_rounds must be >= 1")
+
     current_messages = list(messages)
+    response = None
 
     for round_num in range(max_rounds):
         response = await backend.complete(

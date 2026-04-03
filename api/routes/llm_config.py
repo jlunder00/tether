@@ -74,7 +74,12 @@ async def put_llm_config(request: Request, _auth=Depends(auth_dependency)):
             for role in _MODEL_ROLES
             if body["models"].get(role)
         }
+    _LLM_KEYS = {"preferred_backend", "thinking_enabled", "thinking_budget",
+                  "beacon_score_threshold", "beacon_cooldown_minutes"}
     if "llm" in body:
-        config["llm"] = {**config.get("llm", {}), **body["llm"]}
+        config["llm"] = {
+            **config.get("llm", {}),
+            **{k: v for k, v in body["llm"].items() if k in _LLM_KEYS},
+        }
     _write_config(config)
     return {"ok": True}

@@ -270,8 +270,9 @@ class TestGetValidToken:
         if not token:
             pytest.skip("No valid OAuth token available")
         try:
+            import anthropic  # noqa: F401
             from bot.llm import AnthropicBackend, LLMResponse
-        except ImportError:
+        except (ImportError, ModuleNotFoundError):
             pytest.skip("anthropic SDK not installed")
 
         backend = AnthropicBackend(credentials_path=creds_path)

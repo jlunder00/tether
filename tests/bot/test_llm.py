@@ -139,9 +139,10 @@ class TestAnthropicBackend:
         b = AnthropicBackend(credentials_path=str(tmp_path / "nonexistent.json"))
         assert b.is_available() is True
 
-    def test_available_when_valid_credentials_file_exists(self, tmp_path):
+    def test_available_when_valid_credentials_file_exists(self, tmp_path, monkeypatch):
         import json, time
         from bot.llm import AnthropicBackend
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         creds = {"claudeAiOauth": {
             "accessToken": "tok",
             "refreshToken": "ref",
@@ -152,8 +153,9 @@ class TestAnthropicBackend:
         b = AnthropicBackend(credentials_path=str(creds_file))
         assert b.is_available() is True
 
-    def test_unavailable_when_credentials_expired(self, tmp_path, monkeypatch):
+    def test_unavailable_when_credentials_expired_and_refresh_fails(self, tmp_path, monkeypatch):
         import json, time
+        import unittest.mock as mock
         from bot.llm import AnthropicBackend
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         creds = {"claudeAiOauth": {
@@ -163,8 +165,13 @@ class TestAnthropicBackend:
         }}
         creds_file = tmp_path / ".credentials.json"
         creds_file.write_text(json.dumps(creds))
-        b = AnthropicBackend(credentials_path=str(creds_file))
-        assert b.is_available() is False
+        # Mock refresh to fail so get_valid_token returns None
+        with mock.patch("requests.post") as mock_post:
+            mock_post.return_value.ok = False
+            mock_post.return_value.status_code = 401
+            mock_post.return_value.text = "Unauthorized"
+            b = AnthropicBackend(credentials_path=str(creds_file))
+            assert b.is_available() is False
 
 
 # ---------------------------------------------------------------------------
