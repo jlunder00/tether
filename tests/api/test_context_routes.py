@@ -1,8 +1,8 @@
 import pytest
-from httpx import AsyncClient, ASGITransport
 from db.schema import init_db
 from db.queries import upsert_context_entry
 from api.main import create_app
+from tests.api.conftest import make_authenticated_client
 
 
 @pytest.fixture
@@ -23,8 +23,8 @@ def app(db_path):
 
 
 @pytest.mark.asyncio
-async def test_get_context_entries(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_context_entries(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context")
     assert resp.status_code == 200
     subjects = [e["subject"] for e in resp.json()]
@@ -33,7 +33,7 @@ async def test_get_context_entries(app):
 
 @pytest.mark.asyncio
 async def test_put_context_entry(app, db_path):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.put(
             "/api/context/Job%20Applications",
             json={"body": "Updated body."}
@@ -47,7 +47,7 @@ async def test_put_context_entry(app, db_path):
 
 @pytest.mark.asyncio
 async def test_delete_context_entry(app, db_path):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.delete("/api/context/5D%20Multiverse")
     assert resp.status_code == 200
     from db.queries import get_context_entries
@@ -56,8 +56,8 @@ async def test_delete_context_entry(app, db_path):
 
 
 @pytest.mark.asyncio
-async def test_get_context_top_level_only(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_context_top_level_only(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context?top_level_only=true")
     assert resp.status_code == 200
     subjects = {e["subject"] for e in resp.json()}
@@ -66,8 +66,8 @@ async def test_get_context_top_level_only(app):
 
 
 @pytest.mark.asyncio
-async def test_get_context_prefix(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_context_prefix(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context?prefix=Intellipat")
     assert resp.status_code == 200
     subjects = {e["subject"] for e in resp.json()}
@@ -75,31 +75,31 @@ async def test_get_context_prefix(app):
 
 
 @pytest.mark.asyncio
-async def test_get_single_context_entry(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_single_context_entry(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context/Job%20Applications")
     assert resp.status_code == 200
     assert resp.json()["subject"] == "Job Applications"
 
 
 @pytest.mark.asyncio
-async def test_get_single_context_entry_with_slash(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_single_context_entry_with_slash(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context/Intellipat/Backend")
     assert resp.status_code == 200
     assert resp.json()["subject"] == "Intellipat/Backend"
 
 
 @pytest.mark.asyncio
-async def test_get_single_context_entry_not_found(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+async def test_get_single_context_entry_not_found(app, db_path):
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/context/Nonexistent")
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_rename_context_entry(app, db_path):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.post("/api/context/Intellipat/rename",
                                  json={"new_subject": "IntelliPat"})
     assert resp.status_code == 200
@@ -111,7 +111,7 @@ async def test_rename_context_entry(app, db_path):
 
 @pytest.mark.asyncio
 async def test_delete_cascades_to_children(app, db_path):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.delete("/api/context/Intellipat")
     assert resp.status_code == 200
     from db.queries import get_context_entries

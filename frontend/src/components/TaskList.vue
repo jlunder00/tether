@@ -11,7 +11,7 @@ function updateTask(index: number, task: Task) {
 function add() {
   emit('update', [
     ...props.tasks,
-    { id: '', text: '', status: 'pending', position: props.tasks.length,
+    { id: '', text: '', description: null, status: 'pending', position: props.tasks.length,
       followup_config: null, blocks: [], blocked_by: [] },
   ])
 }

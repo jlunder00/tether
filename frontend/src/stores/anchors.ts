@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { api } from '../lib/api'
 
 export interface FollowupConfig {
   enabled: boolean
@@ -25,13 +26,19 @@ export const useAnchorStore = defineStore('anchors', () => {
   const anchors = ref<Anchor[]>([])
 
   async function fetchAnchors() {
-    const resp = await fetch('/api/anchors')
-    anchors.value = await resp.json()
+    try {
+      const resp = await api('/api/anchors')
+      if (!resp.ok) throw new Error(`${resp.status}`)
+      anchors.value = await resp.json()
+    } catch (e) {
+      console.error('fetchAnchors error:', e)
+      anchors.value = []
+    }
   }
 
   async function updateAnchor(anchor: Anchor) {
     const { id, ...body } = anchor
-    await fetch(`/api/anchors/${id}`, {
+    await api(`/api/anchors/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

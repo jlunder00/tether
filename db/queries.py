@@ -46,7 +46,7 @@ def get_plan(db_path: Path, date: str) -> dict:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
         task_rows = conn.execute(
-            "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
+            "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
             "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
             (date,)
         ).fetchall()
@@ -63,24 +63,27 @@ def get_plan(db_path: Path, date: str) -> dict:
                 "status": row["status"] or "pending",
                 "position": row["position"],
                 "followup_config": json.loads(fc) if fc else None,
+                "description": row["description"],
                 "blocks": [],
                 "blocked_by": [],
             })
 
-        # Populate dependency fields
+        # Populate dependency fields from the dependencies table
         all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
         if all_uuids:
             placeholders = ",".join("?" for _ in all_uuids)
             dep_rows = conn.execute(
-                f"SELECT task_id, blocked_by_id FROM task_dependencies "
-                f"WHERE task_id IN ({placeholders}) OR blocked_by_id IN ({placeholders})",
+                f"SELECT blocker_id, blocked_id FROM dependencies "
+                f"WHERE blocker_type='task' AND blocked_type='task' "
+                f"AND (blocker_id IN ({placeholders}) OR blocked_id IN ({placeholders}))",
                 all_uuids + all_uuids,
             ).fetchall()
             blocked_by_map: dict[str, list] = {}
             blocks_map: dict[str, list] = {}
             for dep in dep_rows:
-                blocked_by_map.setdefault(dep["task_id"], []).append(dep["blocked_by_id"])
-                blocks_map.setdefault(dep["blocked_by_id"], []).append(dep["task_id"])
+                # blocker_id blocks blocked_id
+                blocked_by_map.setdefault(dep["blocked_id"], []).append(dep["blocker_id"])
+                blocks_map.setdefault(dep["blocker_id"], []).append(dep["blocked_id"])
             for anchor_data in anchors.values():
                 for task in anchor_data["tasks"]:
                     task["blocked_by"] = blocked_by_map.get(task["id"], [])
@@ -151,10 +154,14 @@ def upsert_tasks(
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
     """Update allowed fields on a task. Returns updated task dict or None if not found."""
-    allowed = {"text", "status", "position", "followup_config"}
+    allowed = {"text", "status", "position", "followup_config", "description"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
+    # JSON-encode followup_config before writing
+    if "followup_config" in updates:
+        fc = updates["followup_config"]
+        updates["followup_config"] = json.dumps(fc) if fc is not None else None
     set_clause = ", ".join(f"{k}=?" for k in updates)
     with get_db(db_path) as conn:
         conn.execute(
@@ -162,7 +169,7 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
             (*updates.values(), task_uuid),
         )
         row = conn.execute(
-            "SELECT uuid, text, status, position, followup_config FROM tasks WHERE uuid=?",
+            "SELECT uuid, text, status, position, followup_config, description FROM tasks WHERE uuid=?",
             (task_uuid,),
         ).fetchone()
     if not row:
@@ -172,6 +179,7 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
         "id": row["uuid"], "text": row["text"], "status": row["status"],
         "position": row["position"],
         "followup_config": json.loads(fc) if fc else None,
+        "description": row["description"],
         "blocks": [], "blocked_by": [],
     }
 
@@ -199,6 +207,49 @@ def move_task_atomic(
         )
 
 
+def add_dependency(db_path: Path, blocker_type: str, blocker_id: str,
+                   blocked_type: str, blocked_id: str) -> int:
+    """Add a dependency. Returns the new row id."""
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO dependencies (blocker_type, blocker_id, blocked_type, blocked_id)"
+            " VALUES (?,?,?,?)",
+            (blocker_type, blocker_id, blocked_type, blocked_id),
+        )
+        if cur.lastrowid:
+            return cur.lastrowid
+        row = conn.execute(
+            "SELECT id FROM dependencies WHERE blocker_type=? AND blocker_id=? AND blocked_type=? AND blocked_id=?",
+            (blocker_type, blocker_id, blocked_type, blocked_id),
+        ).fetchone()
+        return row["id"]
+
+
+def remove_dependency(db_path: Path, dep_id: int) -> None:
+    """Remove a dependency by id."""
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM dependencies WHERE id=?", (dep_id,))
+
+
+def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dict:
+    """Return {"blocks": [...], "blocked_by": [...]} for an entity.
+    Each item: {"id": dep_id, "type": blocker/blocked type, "entity_id": the other entity's id}"""
+    with get_db(db_path) as conn:
+        blocker_rows = conn.execute(
+            "SELECT id, blocked_type, blocked_id FROM dependencies WHERE blocker_type=? AND blocker_id=?",
+            (entity_type, entity_id),
+        ).fetchall()
+        blocked_rows = conn.execute(
+            "SELECT id, blocker_type, blocker_id FROM dependencies WHERE blocked_type=? AND blocked_id=?",
+            (entity_type, entity_id),
+        ).fetchall()
+    blocks = [{"id": r["id"], "type": r["blocked_type"], "entity_id": r["blocked_id"]}
+              for r in blocker_rows]
+    blocked_by = [{"id": r["id"], "type": r["blocker_type"], "entity_id": r["blocker_id"]}
+                  for r in blocked_rows]
+    return {"blocks": blocks, "blocked_by": blocked_by}
+
+
 def add_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
     with get_db(db_path) as conn:
         conn.execute(
@@ -213,6 +264,91 @@ def remove_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> N
             "DELETE FROM task_dependencies WHERE task_id=? AND blocked_by_id=?",
             (task_id, blocked_by_id),
         )
+
+
+def get_subtasks(db_path: Path, task_id: str) -> list[dict]:
+    """Return subtasks ordered by position."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, task_id, text, done, position FROM subtasks WHERE task_id=? ORDER BY position",
+            (task_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_subtask(db_path: Path, task_id: str, text: str, position: int) -> dict:
+    """Create a subtask. Returns the new subtask dict."""
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO subtasks (task_id, text, done, position) VALUES (?,?,0,?)",
+            (task_id, text, position),
+        )
+        row_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT id, task_id, text, done, position FROM subtasks WHERE id=?", (row_id,)
+        ).fetchone()
+    return dict(row)
+
+
+def update_subtask(db_path: Path, subtask_id: int, **fields) -> None:
+    """Update text, done, and/or position on a subtask. Only update provided fields."""
+    allowed = {"text", "done", "position"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE subtasks SET {set_clause} WHERE id=?",
+            (*updates.values(), subtask_id),
+        )
+
+
+def delete_subtask(db_path: Path, subtask_id: int) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM subtasks WHERE id=?", (subtask_id,))
+
+
+def reorder_subtasks(db_path: Path, task_id: str, id_order: list[int]) -> None:
+    """Set position of each subtask based on its index in id_order."""
+    with get_db(db_path) as conn:
+        for pos, subtask_id in enumerate(id_order):
+            conn.execute(
+                "UPDATE subtasks SET position=? WHERE id=? AND task_id=?",
+                (pos, subtask_id, task_id),
+            )
+
+
+def get_links(db_path: Path, parent_type: str, parent_id: str) -> list[dict]:
+    """Return links for a parent entity."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, parent_type, parent_id, url, label, category, created_at "
+            "FROM links WHERE parent_type=? AND parent_id=? ORDER BY id",
+            (parent_type, parent_id),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_link(db_path: Path, parent_type: str, parent_id: str,
+                url: str, label: str | None, category: str) -> dict:
+    """Create a link. Returns the new link dict."""
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            "INSERT INTO links (parent_type, parent_id, url, label, category) VALUES (?,?,?,?,?)",
+            (parent_type, parent_id, url, label, category),
+        )
+        row_id = cur.lastrowid
+        row = conn.execute(
+            "SELECT id, parent_type, parent_id, url, label, category, created_at FROM links WHERE id=?",
+            (row_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def delete_link(db_path: Path, link_id: int) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM links WHERE id=?", (link_id,))
 
 
 def upsert_context_entry(db_path: Path, subject: str, body: str) -> None:
@@ -637,3 +773,33 @@ def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict
     if not config or not config.get("enabled"):
         return None
     return config
+
+
+def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list[dict]:
+    """Search tasks and/or milestones by text. Returns [{id, label, sublabel, type}]."""
+    results = []
+    q = f"%{query}%"
+    with get_db(db_path) as conn:
+        if entity_type in ("all", "task"):
+            rows = conn.execute(
+                "SELECT uuid, text, anchor_id, plan_date FROM tasks WHERE text LIKE ? ORDER BY plan_date DESC LIMIT 20",
+                (q,),
+            ).fetchall()
+            for r in rows:
+                results.append({
+                    "id": r["uuid"], "label": r["text"],
+                    "sublabel": f"task · {r['anchor_id']} · {r['plan_date']}",
+                    "type": "task",
+                })
+        if entity_type in ("all", "milestone"):
+            rows = conn.execute(
+                "SELECT id, name, context_subject FROM milestones WHERE name LIKE ? ORDER BY name LIMIT 20",
+                (q,),
+            ).fetchall()
+            for r in rows:
+                results.append({
+                    "id": r["id"], "label": r["name"],
+                    "sublabel": f"milestone · {r['context_subject']}",
+                    "type": "milestone",
+                })
+    return results

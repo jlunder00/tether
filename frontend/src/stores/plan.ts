@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { FollowupConfig } from './anchors'
+import { api } from '../lib/api'
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
 
@@ -9,6 +10,7 @@ export type { FollowupConfig }
 export interface Task {
   id: string
   text: string
+  description: string | null
   status: TaskStatus
   position: number
   followup_config: FollowupConfig | null
@@ -43,17 +45,22 @@ export const usePlanStore = defineStore('plan', () => {
   const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
-    if (date) {
-      activeDate.value = date
-      loading.value = true
+    if (date) activeDate.value = date
+    loading.value = true
+    try {
+      const resp = await api(`/api/plan/${activeDate.value}`)
+      if (!resp.ok) throw new Error(`${resp.status}`)
+      plan.value = await resp.json()
+    } catch (e) {
+      console.error('fetchPlan error:', e)
+      plan.value = null
+    } finally {
+      loading.value = false
     }
-    const resp = await fetch(`/api/plan/${activeDate.value}`)
-    plan.value = await resp.json()
-    loading.value = false
   }
 
   async function fetchSavedDates() {
-    const resp = await fetch('/api/plans')
+    const resp = await api('/api/plans')
     savedDates.value = await resp.json()
   }
 
@@ -62,7 +69,7 @@ export const usePlanStore = defineStore('plan', () => {
   function goToToday()   { fetchPlan(today) }
 
   async function fetchPlanRange(startDate: string, endDate: string) {
-    const resp = await fetch(`/api/plan/range?start=${startDate}&end=${endDate}`)
+    const resp = await api(`/api/plan/range?start=${startDate}&end=${endDate}`)
     const data: Record<string, DayPlan> = await resp.json()
     plans.value = { ...plans.value, ...data }
   }
@@ -85,7 +92,7 @@ export const usePlanStore = defineStore('plan', () => {
         toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
       }
     }
-    await fetch(`/api/tasks/${taskUuid}/move`, {
+    await api(`/api/tasks/${taskUuid}/move`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ date: toDate, anchor_id: toAnchor, position }),
@@ -101,7 +108,7 @@ export const usePlanStore = defineStore('plan', () => {
     const [task] = tasks.splice(idx, 1)
     tasks.splice(newPosition, 0, task)
     tasks.forEach((t, i) => { t.position = i })
-    await fetch(`/api/tasks/${taskUuid}`, {
+    await api(`/api/tasks/${taskUuid}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ position: newPosition }),
@@ -118,7 +125,7 @@ export const usePlanStore = defineStore('plan', () => {
       anchor.tasks.splice(0, anchor.tasks.length, ...tasks)
       anchor.notes = notes
     }
-    const resp = await fetch(`/api/plan/${activeDate.value}/anchors/${anchorId}`, {
+    const resp = await api(`/api/plan/${activeDate.value}/anchors/${anchorId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tasks, notes }),
@@ -132,7 +139,7 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   async function updateTaskStatus(taskId: string, status: TaskStatus) {
-    await fetch(`/api/tasks/${taskId}`, {
+    await api(`/api/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),

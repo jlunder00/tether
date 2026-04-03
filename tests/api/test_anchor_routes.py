@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import patch
-from httpx import AsyncClient, ASGITransport
 from db.schema import init_db
 from db.queries import upsert_anchor, get_anchors
 from api.main import create_app
+from tests.api.conftest import make_authenticated_client
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def app(db_path):
 
 @pytest.mark.asyncio
 async def test_get_anchors_returns_list(app, db_path):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with make_authenticated_client(app, db_path) as client:
         resp = await client.get("/api/anchors")
     assert resp.status_code == 200
     assert any(a["id"] == "grind_am" for a in resp.json())
@@ -34,7 +34,7 @@ async def test_put_anchor_updates_time(app, db_path):
     payload = {"name": "The Grind", "time": "09:00", "duration_minutes": 120,
                "flexibility": "locked", "strictness": 4, "color": "#e05c5c", "position": 0}
     with patch("api.routes.anchors.sync_crontab"):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with make_authenticated_client(app, db_path) as client:
             resp = await client.put("/api/anchors/grind_am", json=payload)
     assert resp.status_code == 200
     anchors = get_anchors(db_path)
@@ -47,6 +47,6 @@ async def test_put_anchor_calls_sync_crontab(app, db_path):
     payload = {"name": "The Grind", "time": "09:00", "duration_minutes": 120,
                "flexibility": "locked", "strictness": 4, "color": "#e05c5c", "position": 0}
     with patch("api.routes.anchors.sync_crontab") as mock_sync:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        async with make_authenticated_client(app, db_path) as client:
             await client.put("/api/anchors/grind_am", json=payload)
     mock_sync.assert_called_once()

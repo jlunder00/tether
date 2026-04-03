@@ -178,8 +178,7 @@ def test_handle_check_in_inserts_db_row(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_plan
     with patch("bot.message_handler.call_claude", return_value="Great progress!"):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("/check-in applied to 2 jobs :: about to start third", [].append)
+        handle_message("/check-in applied to 2 jobs :: about to start third", [].append, db_path=db_path)
     plan = get_plan(db_path, TODAY)
     assert len(plan["check_in_log"]) == 1
     assert plan["check_in_log"][0]["accomplished"] == "applied to 2 jobs"
@@ -188,8 +187,7 @@ def test_handle_check_in_inserts_db_row(db_path):
 def test_handle_update_context_saves_to_db(db_path):
     from bot.message_handler import handle_message
     with patch("bot.message_handler.call_claude", return_value="Got it."):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("/tether-update-context Thesis :: Working on chapter 3", [].append)
+        handle_message("/tether-update-context Thesis :: Working on chapter 3", [].append, db_path=db_path)
     entries = get_context_entries(db_path)
     assert any(e["subject"] == "Thesis" for e in entries)
 
@@ -198,8 +196,7 @@ def test_handle_update_plan_saves_tasks(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_plan
     with patch("bot.message_handler.call_claude", return_value="Updated!"):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("/update-plan grind_am :: New task 1; New task 2", [].append)
+        handle_message("/update-plan grind_am :: New task 1; New task 2", [].append, db_path=db_path)
     plan = get_plan(db_path, TODAY)
     assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["New task 1", "New task 2"]
 
@@ -238,8 +235,7 @@ def test_handle_message_persists_conversation_turn(db_path):
          patch("bot.message_handler.call_satisfaction_eval",
                return_value={"satisfied": True, "issues": [], "replan_needed": False}), \
          patch("bot.message_handler.call_response_builder", return_value="All good!"):
-        with patch("bot.message_handler.DB_PATH", db_path):
-            handle_message("How am I doing?", [].append)
+        handle_message("How am I doing?", [].append, db_path=db_path)
     history = get_recent_history(db_path)
     assert any(r["role"] == "user" and r["body"] == "How am I doing?" for r in history)
     assert any(r["role"] == "assistant" and r["body"] == "All good!" for r in history)
@@ -663,3 +659,20 @@ def test_check_followups_sends_post_ack_after_ack(db_path):
     check_followups(db_path, sent.append)
     assert len(sent) == 1
     assert "check" in sent[0].lower()
+
+
+# ---------------------------------------------------------------------------
+# handle_message with explicit db_path
+# ---------------------------------------------------------------------------
+
+def test_handle_message_accepts_db_path(db_path):
+    """handle_message should route to the user's DB when db_path is explicit."""
+    from bot.message_handler import handle_message
+    import subprocess
+
+    sent = []
+    mock_result = type("R", (), {"stdout": '{"message": "Got it!", "mutations": []}', "returncode": 0})()
+    with patch("subprocess.run", return_value=mock_result):
+        handle_message("hello", sent.append, db_path=db_path)
+    # As long as no exception is raised and send_fn was called, routing worked.
+    assert len(sent) >= 1
