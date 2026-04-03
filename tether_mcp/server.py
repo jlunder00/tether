@@ -27,6 +27,10 @@ from db.queries import (
     link_milestone_task,
     unlink_milestone_task,
     create_milestone,
+    link_task_context,
+    unlink_task_context,
+    get_task_contexts,
+    get_context_tasks,
     patch_milestone,
 )
 
@@ -289,6 +293,32 @@ def update_milestone(milestone_id: str, fields: dict) -> dict:
     if result is None:
         return {"error": "Milestone not found or no valid fields"}
     return result
+
+
+@mcp.tool()
+def link_task_to_context(task_uuid: str, subject: str) -> dict:
+    """Link a task to a context entry by subject."""
+    link_task_context(_db(), task_uuid, subject)
+    return {"ok": True}
+
+
+@mcp.tool()
+def unlink_task_from_context(task_uuid: str, subject: str) -> dict:
+    """Unlink a task from a context entry."""
+    unlink_task_context(_db(), task_uuid, subject)
+    return {"ok": True}
+
+
+@mcp.tool()
+def get_task_context_links(task_uuid: str) -> list[str]:
+    """Get context subjects linked to a task."""
+    return get_task_contexts(_db(), task_uuid)
+
+
+@mcp.tool()
+def get_context_linked_tasks(subject: str) -> list[dict]:
+    """Get tasks linked to a context entry. Returns [{uuid, text, status, plan_date, anchor_id}]."""
+    return get_context_tasks(_db(), subject)
 
 
 if __name__ == "__main__":

@@ -815,3 +815,45 @@ def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list
                     "type": "milestone",
                 })
     return results
+
+
+# ---------------------------------------------------------------------------
+# Task-context linking
+# ---------------------------------------------------------------------------
+
+def link_task_context(db_path: Path, task_id: str, subject: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO task_context (task_id, subject) VALUES (?,?)",
+            (task_id, subject),
+        )
+
+
+def unlink_task_context(db_path: Path, task_id: str, subject: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM task_context WHERE task_id=? AND subject=?",
+            (task_id, subject),
+        )
+
+
+def get_task_contexts(db_path: Path, task_id: str) -> list[str]:
+    """Return list of context subjects linked to a task."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT subject FROM task_context WHERE task_id=? ORDER BY subject",
+            (task_id,),
+        ).fetchall()
+    return [r["subject"] for r in rows]
+
+
+def get_context_tasks(db_path: Path, subject: str) -> list[dict]:
+    """Return tasks linked to a context subject."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT t.uuid, t.text, t.status, t.plan_date, t.anchor_id "
+            "FROM tasks t JOIN task_context tc ON t.uuid = tc.task_id "
+            "WHERE tc.subject=? ORDER BY t.plan_date DESC",
+            (subject,),
+        ).fetchall()
+    return [dict(r) for r in rows]

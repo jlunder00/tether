@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS links (
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS task_context (
+    task_id  TEXT NOT NULL,
+    subject  TEXT NOT NULL REFERENCES context_entries(subject) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, subject)
+);
+
 CREATE TABLE IF NOT EXISTS milestones (
     id              TEXT PRIMARY KEY,
     context_subject TEXT NOT NULL REFERENCES context_entries(subject) ON DELETE CASCADE,
