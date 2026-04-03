@@ -10,6 +10,7 @@ import { useMilestoneStore } from '../stores/milestones'
 import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
+import { useTaskContexts } from '../composables/useTaskContexts'
 import type { TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 
@@ -35,6 +36,7 @@ const anchorId = computed(() => taskAndAnchor.value?.anchorId ?? '')
 const { subtasks, create: createSubtask, update: updateSubtask, remove: removeSubtask } = useSubtasks(() => props.taskId)
 const { links, create: createLink, remove: removeLink } = useLinks(() => 'tasks', () => props.taskId)
 const { deps, add: addDep, remove: removeDep } = useDependencies(() => 'task', () => props.taskId)
+const { contexts, link: linkContext, unlink: unlinkContext } = useTaskContexts(() => props.taskId)
 
 // Subtasks
 const newSubtaskText = ref('')
@@ -158,6 +160,21 @@ async function linkMilestoneFromSearch(item: SearchResult) {
     body: JSON.stringify({ task_id: props.taskId }),
   })
   await milestoneStore.fetchAll()
+}
+
+async function searchForContext(q: string): Promise<SearchResult[]> {
+  const resp = await api('/api/context')
+  if (!resp.ok) return []
+  const entries: Array<{ subject: string; body: string }> = await resp.json()
+  const lower = q.toLowerCase()
+  return entries
+    .filter(e => e.subject.toLowerCase().includes(lower))
+    .filter(e => !contexts.value.includes(e.subject))
+    .map(e => ({ id: e.subject, label: e.subject, type: 'context' }))
+}
+
+async function linkContextFromSearch(item: SearchResult) {
+  await linkContext(item.id)
 }
 
 // Navigate to dependency entity
@@ -351,6 +368,18 @@ onMounted(async () => {
             <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ m.status }}</span>
           </button>
           <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones..." @select="linkMilestoneFromSearch" />
+        </div>
+
+        <!-- Context entries -->
+        <div class="flex flex-col gap-2">
+          <span class="text-xs text-white/50 uppercase tracking-wide">Context</span>
+          <div v-if="!contexts.length" class="text-xs text-white/20 italic">None</div>
+          <div v-for="subject in contexts" :key="subject"
+               class="flex items-center justify-between text-sm">
+            <router-link :to="'/context'" class="text-white/70 hover:text-white">{{ subject }}</router-link>
+            <button @click="unlinkContext(subject)" class="text-white/20 hover:text-white/50 text-xs ml-2">✕</button>
+          </div>
+          <SearchAutocomplete :search-fn="searchForContext" placeholder="Link context entry..." @select="linkContextFromSearch" />
         </div>
 
         <!-- Follow-up config -->

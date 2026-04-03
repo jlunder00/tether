@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
-    search_entities
+    search_entities, link_task_context, unlink_task_context, get_task_contexts
 from api.auth import auth_dependency
 import api.config as cfg
 
@@ -68,4 +68,20 @@ async def delete_task_subtask(task_uuid: str, subtask_id: int, request: Request,
 @router.put("/tasks/{task_uuid}/subtasks/reorder")
 async def reorder_task_subtasks(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
     reorder_subtasks(request.state.db_path, task_uuid, body["id_order"])
+    return {"ok": True}
+
+
+# Task-context linking
+@router.get("/tasks/{task_uuid}/contexts")
+async def get_task_context_links(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
+    return get_task_contexts(request.state.db_path, task_uuid)
+
+@router.post("/tasks/{task_uuid}/contexts")
+async def link_task_to_context(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
+    link_task_context(request.state.db_path, task_uuid, body["subject"])
+    return {"ok": True}
+
+@router.delete("/tasks/{task_uuid}/contexts/{subject:path}")
+async def unlink_task_from_context(task_uuid: str, subject: str, request: Request, _auth=Depends(auth_dependency)):
+    unlink_task_context(request.state.db_path, task_uuid, subject)
     return {"ok": True}

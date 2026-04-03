@@ -35,6 +35,12 @@ def migrate(db_path: Path) -> None:
     # Add description column to tasks
     try_exec("ALTER TABLE tasks ADD COLUMN description TEXT")
 
+    # Task-context linking table
+    conn.execute("""CREATE TABLE IF NOT EXISTS task_context (
+        task_id  TEXT NOT NULL,
+        subject  TEXT NOT NULL,
+        PRIMARY KEY (task_id, subject))""")
+
     # Migrate task_dependencies → dependencies
     try:
         rows = conn.execute("SELECT task_id, blocked_by_id FROM task_dependencies").fetchall()

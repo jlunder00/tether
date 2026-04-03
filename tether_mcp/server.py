@@ -15,6 +15,23 @@ from db.queries import (
     upsert_context_entry,
     upsert_plan,
     upsert_tasks,
+    patch_task_fields,
+    search_entities,
+    add_dependency,
+    remove_dependency,
+    get_dependencies_for,
+    get_subtasks,
+    create_subtask,
+    update_subtask,
+    delete_subtask,
+    link_milestone_task,
+    unlink_milestone_task,
+    create_milestone,
+    link_task_context,
+    unlink_task_context,
+    get_task_contexts,
+    get_context_tasks,
+    patch_milestone,
 )
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
@@ -97,11 +114,10 @@ def _get_today_plan(date: str | None = None) -> dict:
     return get_plan(_db(), d)
 
 
-def _update_plan_tasks(anchor_id: str, tasks: list[str], date: str | None = None) -> dict:
+def _update_plan_tasks(anchor_id: str, tasks: list[str], date: str | None = None) -> list[dict]:
     d = date or str(date_type.today())
     upsert_plan(_db(), d)
-    upsert_tasks(_db(), d, anchor_id, tasks, notes="")
-    return {"ok": True}
+    return upsert_tasks(_db(), d, anchor_id, tasks, notes="")
 
 
 def _get_anchors() -> list[dict]:
@@ -183,6 +199,126 @@ async def get_milestones(context_subject: str | None = None) -> str:
     Returns list with id, name, status, task_count, done_count, task_ids."""
     from db.queries import get_milestones as _get_milestones
     return json.dumps(_get_milestones(_db(), context_subject), indent=2)
+
+
+@mcp.tool()
+def patch_task(task_uuid: str, fields: dict) -> dict:
+    """Update a task's fields. Allowed fields: text, status, description, followup_config, position.
+    Example: patch_task("uuid", {"status": "done"}) or patch_task("uuid", {"description": "Details..."})"""
+    result = patch_task_fields(_db(), task_uuid, fields)
+    if result is None:
+        return {"error": "Task not found or no valid fields"}
+    return result
+
+
+@mcp.tool()
+def search(query: str, type: str = "all") -> list[dict]:
+    """Search tasks and milestones by text. Type: 'task', 'milestone', or 'all'.
+    Returns [{id, label, sublabel, type}]."""
+    return search_entities(_db(), query, type)
+
+
+@mcp.tool()
+def get_task_dependencies(entity_type: str, entity_id: str) -> dict:
+    """Get dependencies for a task or milestone. Returns {blocks: [...], blocked_by: [...]}."""
+    return get_dependencies_for(_db(), entity_type, entity_id)
+
+
+@mcp.tool()
+def add_task_dependency(blocker_type: str, blocker_id: str, blocked_type: str, blocked_id: str) -> dict:
+    """Add a dependency. blocker blocks blocked. Types: 'task' or 'milestone'."""
+    dep_id = add_dependency(_db(), blocker_type, blocker_id, blocked_type, blocked_id)
+    return {"id": dep_id}
+
+
+@mcp.tool()
+def remove_task_dependency(dep_id: int) -> dict:
+    """Remove a dependency by its ID."""
+    remove_dependency(_db(), dep_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def get_task_subtasks(task_uuid: str) -> list[dict]:
+    """Get subtasks for a task. Returns [{id, task_id, text, done, position}]."""
+    return get_subtasks(_db(), task_uuid)
+
+
+@mcp.tool()
+def add_subtask(task_uuid: str, text: str, position: int = 0) -> dict:
+    """Add a subtask to a task."""
+    return create_subtask(_db(), task_uuid, text, position)
+
+
+@mcp.tool()
+def toggle_subtask(subtask_id: int, done: bool) -> dict:
+    """Mark a subtask as done or not done."""
+    update_subtask(_db(), subtask_id, done=int(done))
+    return {"ok": True}
+
+
+@mcp.tool()
+def remove_subtask(subtask_id: int) -> dict:
+    """Delete a subtask."""
+    delete_subtask(_db(), subtask_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def link_task_to_milestone(milestone_id: str, task_id: str) -> dict:
+    """Link a task to a milestone."""
+    link_milestone_task(_db(), milestone_id, task_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def unlink_task_from_milestone(milestone_id: str, task_id: str) -> dict:
+    """Unlink a task from a milestone."""
+    unlink_milestone_task(_db(), milestone_id, task_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def create_new_milestone(context_subject: str, name: str, description: str = "", target_date: str = "") -> dict:
+    """Create a milestone under a context subject. Returns the new milestone dict."""
+    return create_milestone(_db(), context_subject, name,
+                            description or None, target_date or None)
+
+
+@mcp.tool()
+def update_milestone(milestone_id: str, fields: dict) -> dict:
+    """Update a milestone. Allowed fields: name, description, target_date, status.
+    Setting status also sets status_override=true."""
+    result = patch_milestone(_db(), milestone_id, fields)
+    if result is None:
+        return {"error": "Milestone not found or no valid fields"}
+    return result
+
+
+@mcp.tool()
+def link_task_to_context(task_uuid: str, subject: str) -> dict:
+    """Link a task to a context entry by subject."""
+    link_task_context(_db(), task_uuid, subject)
+    return {"ok": True}
+
+
+@mcp.tool()
+def unlink_task_from_context(task_uuid: str, subject: str) -> dict:
+    """Unlink a task from a context entry."""
+    unlink_task_context(_db(), task_uuid, subject)
+    return {"ok": True}
+
+
+@mcp.tool()
+def get_task_context_links(task_uuid: str) -> list[str]:
+    """Get context subjects linked to a task."""
+    return get_task_contexts(_db(), task_uuid)
+
+
+@mcp.tool()
+def get_context_linked_tasks(subject: str) -> list[dict]:
+    """Get tasks linked to a context entry. Returns [{uuid, text, status, plan_date, anchor_id}]."""
+    return get_context_tasks(_db(), subject)
 
 
 if __name__ == "__main__":

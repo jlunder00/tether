@@ -22,40 +22,66 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_task_context(db_path: str, task_id: str) -> list[dict]:
-    """Given a task UUID, find all context entries linked via milestones.
+    """Given a task UUID, find all context entries linked to it.
+
+    Two link paths:
+      1. Direct: task_context table (task_id → subject)
+      2. Indirect: milestone_tasks → milestones → context_subject
 
     Returns a list of dicts with keys:
-        milestone_id, milestone_name, milestone_status,
-        context_subject, task_count, done_count
+        context_subject, source ("direct" | "milestone"),
+        milestone_id, milestone_name, milestone_status, task_count, done_count
+        (milestone fields are None for direct links)
     """
+    results = []
+    seen_subjects = set()
+
+    # --- Path 1: direct task_context links ---
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        # Find milestones this task is linked to
-        rows = conn.execute(
+        direct_rows = conn.execute(
+            "SELECT subject FROM task_context WHERE task_id = ?",
+            (task_id,),
+        ).fetchall()
+        for r in direct_rows:
+            subj = r["subject"]
+            seen_subjects.add(subj)
+            results.append({
+                "context_subject": subj,
+                "source": "direct",
+                "milestone_id": None,
+                "milestone_name": None,
+                "milestone_status": None,
+                "task_count": None,
+                "done_count": None,
+            })
+
+        # --- Path 2: via milestones ---
+        milestone_rows = conn.execute(
             "SELECT milestone_id FROM milestone_tasks WHERE task_id = ?",
             (task_id,),
         ).fetchall()
-        if not rows:
-            return []
-
-        milestone_ids = [r["milestone_id"] for r in rows]
+        milestone_ids = [r["milestone_id"] for r in milestone_rows]
     finally:
         conn.close()
 
-    # Get full milestone data (includes task counts and context_subject)
-    all_milestones = get_milestones(db_path)
-    results = []
-    for m in all_milestones:
-        if m["id"] in milestone_ids:
-            results.append({
-                "milestone_id": m["id"],
-                "milestone_name": m["name"],
-                "milestone_status": m["status"],
-                "context_subject": m["context_subject"],
-                "task_count": m["task_count"],
-                "done_count": m["done_count"],
-            })
+    if milestone_ids:
+        all_milestones = get_milestones(db_path)
+        for m in all_milestones:
+            if m["id"] in milestone_ids:
+                # Always include milestone links — they carry progress info
+                # even if the same subject is already linked directly
+                results.append({
+                    "context_subject": m["context_subject"],
+                    "source": "milestone",
+                    "milestone_id": m["id"],
+                    "milestone_name": m["name"],
+                    "milestone_status": m["status"],
+                    "task_count": m["task_count"],
+                    "done_count": m["done_count"],
+                })
+
     return results
 
 
@@ -84,7 +110,7 @@ def get_affected_context_subjects(db_path: str, changes: list[dict]) -> list[str
     """Given a list of change events, return deduplicated context subjects affected.
 
     Handles:
-    - task_done / task_blocked / task_created → trace via milestone links
+    - task_done / task_blocked / task_created → trace via direct task_context + milestone links
     - context_updated → the subject itself
     - plan_restructured → all milestones' context subjects
     """
@@ -139,14 +165,18 @@ def build_beacon_context(db_path: str, changes: list[dict]) -> str:
         sections.append("Affected context entries:\n" +
                          "\n".join(f"  - {s}" for s in affected))
 
-    # Milestone status for affected milestones
+    # Relationship details for affected tasks
     seen_milestones = set()
     task_change_types = {"task_done", "task_blocked", "task_created"}
     for change in changes:
         if change.get("change_type") in task_change_types:
             links = resolve_task_context(db_path, change.get("entity_id", ""))
             for link in links:
-                if link["milestone_id"] not in seen_milestones:
+                if link["source"] == "direct":
+                    sections.append(
+                        f"Direct link: task → context: {link['context_subject']}"
+                    )
+                elif link["milestone_id"] and link["milestone_id"] not in seen_milestones:
                     seen_milestones.add(link["milestone_id"])
                     summary = get_milestone_summary(db_path, link["milestone_id"])
                     if summary:
