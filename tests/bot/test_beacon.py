@@ -58,31 +58,41 @@ class TestRecordChange:
     def test_records_change_to_db(self, db_path):
         from bot.state_monitor import record_change, get_pending_score
         record_change(db_path, "task_done", "task-uuid-1")
-        score = get_pending_score(db_path)
+        # debounce_minutes=0 to see just-inserted changes
+        score = get_pending_score(db_path, debounce_minutes=0)
         assert score > 0
 
     def test_task_done_has_weight_2(self, db_path):
         from bot.state_monitor import record_change, get_pending_score, CHANGE_WEIGHTS
         record_change(db_path, "task_done", "t1")
-        assert get_pending_score(db_path) == CHANGE_WEIGHTS["task_done"]
+        assert get_pending_score(db_path, debounce_minutes=0) == CHANGE_WEIGHTS["task_done"]
 
     def test_context_updated_has_weight_3(self, db_path):
         from bot.state_monitor import record_change, get_pending_score, CHANGE_WEIGHTS
         record_change(db_path, "context_updated", "Work/Alpha")
-        assert get_pending_score(db_path) == CHANGE_WEIGHTS["context_updated"]
+        assert get_pending_score(db_path, debounce_minutes=0) == CHANGE_WEIGHTS["context_updated"]
 
     def test_multiple_changes_accumulate(self, db_path):
         from bot.state_monitor import record_change, get_pending_score
         record_change(db_path, "task_done", "t1")
         record_change(db_path, "context_updated", "Work/Alpha")
         record_change(db_path, "task_created", "t2")
-        score = get_pending_score(db_path)
+        score = get_pending_score(db_path, debounce_minutes=0)
         assert score >= 6  # 2 + 3 + 1
+
+    def test_duplicate_entity_deduplicates(self, db_path):
+        """3 updates to the same task count as 1 (max score)."""
+        from bot.state_monitor import record_change, get_pending_score, CHANGE_WEIGHTS
+        record_change(db_path, "task_done", "t1")
+        record_change(db_path, "task_done", "t1")
+        record_change(db_path, "task_done", "t1")
+        score = get_pending_score(db_path, debounce_minutes=0)
+        assert score == CHANGE_WEIGHTS["task_done"]  # deduped to 1
 
     def test_unknown_change_type_uses_default_weight(self, db_path):
         from bot.state_monitor import record_change, get_pending_score
         record_change(db_path, "unknown_type", "x")
-        assert get_pending_score(db_path) >= 1
+        assert get_pending_score(db_path, debounce_minutes=0) >= 1
 
 
 class TestConsumeChanges:
@@ -114,6 +124,36 @@ class TestConsumeChanges:
         assert second[0]["change_type"] == "task_created"
 
 
+class TestDebounceWindow:
+    def test_recent_changes_excluded_from_score(self, db_path):
+        """Changes within debounce window should not be counted."""
+        from bot.state_monitor import record_change, get_pending_score
+        record_change(db_path, "task_done", "t1")
+        # With default debounce, just-inserted changes aren't counted
+        assert get_pending_score(db_path, debounce_minutes=10) == 0
+
+    def test_old_changes_included_in_score(self, db_path):
+        from bot.state_monitor import record_change, get_pending_score
+        record_change(db_path, "task_done", "t1")
+        _backdate_changes(db_path, minutes=15)
+        assert get_pending_score(db_path, debounce_minutes=10) > 0
+
+    def test_window_not_settled_when_recent_changes(self, db_path):
+        from bot.state_monitor import record_change, is_window_settled
+        record_change(db_path, "task_done", "t1")
+        assert is_window_settled(db_path, debounce_minutes=10) is False
+
+    def test_window_settled_when_all_changes_old(self, db_path):
+        from bot.state_monitor import record_change, is_window_settled
+        record_change(db_path, "task_done", "t1")
+        _backdate_changes(db_path, minutes=15)
+        assert is_window_settled(db_path, debounce_minutes=10) is True
+
+    def test_window_not_settled_when_no_changes(self, db_path):
+        from bot.state_monitor import is_window_settled
+        assert is_window_settled(db_path) is False
+
+
 class TestChangeWeights:
     def test_all_expected_types_defined(self):
         from bot.state_monitor import CHANGE_WEIGHTS
@@ -131,28 +171,72 @@ class TestChangeWeights:
 # should_trigger_beacon
 # ---------------------------------------------------------------------------
 
+def _backdate_changes(db_path, minutes=15):
+    """Push all pending changes back in time so they're past the debounce window."""
+    import sqlite3
+    old_ts = (datetime.utcnow() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db_path)
+    conn.execute("UPDATE state_monitor_log SET ts = ? WHERE consumed = 0", (old_ts,))
+    conn.commit()
+    conn.close()
+
+
 class TestShouldTriggerBeacon:
     def test_false_when_score_below_threshold(self, db_path):
         from bot.state_monitor import record_change
         from bot.beacon import should_trigger_beacon
         record_change(db_path, "task_created", "t1")  # weight=1
+        _backdate_changes(db_path)
         assert should_trigger_beacon(db_path, score_threshold=8, cooldown_minutes=0) is False
 
-    def test_true_when_score_at_threshold(self, db_path):
+    def test_true_when_score_at_threshold_and_window_settled(self, db_path):
         from bot.state_monitor import record_change
         from bot.beacon import should_trigger_beacon
         # plan_restructured = 5, context_updated = 3 → total 8
         record_change(db_path, "plan_restructured", "today")
         record_change(db_path, "context_updated", "Work/Alpha")
+        _backdate_changes(db_path)  # settle the window
         assert should_trigger_beacon(db_path, score_threshold=8, cooldown_minutes=0) is True
+
+    def test_false_when_window_not_settled(self, db_path):
+        """Recent changes still within debounce window — don't trigger."""
+        from bot.state_monitor import record_change
+        from bot.beacon import should_trigger_beacon
+        record_change(db_path, "plan_restructured", "today")
+        record_change(db_path, "context_updated", "Work/Alpha")
+        # Don't backdate — changes are fresh
+        assert should_trigger_beacon(db_path, score_threshold=8, cooldown_minutes=0) is False
+
+    def test_anchor_transition_bypasses_score_threshold(self, db_path):
+        """Anchor transition triggers Beacon even with low score."""
+        from bot.state_monitor import record_change
+        from bot.beacon import should_trigger_beacon
+        record_change(db_path, "task_created", "t1")  # weight=1, below any threshold
+        assert should_trigger_beacon(
+            db_path, score_threshold=15, cooldown_minutes=0, is_anchor_transition=True
+        ) is True
+
+    def test_anchor_transition_respects_cooldown(self, db_path):
+        from bot.state_monitor import record_change
+        from bot.beacon import should_trigger_beacon, record_beacon_invocation
+        record_change(db_path, "task_done", "t1")
+        record_beacon_invocation(db_path)
+        assert should_trigger_beacon(
+            db_path, score_threshold=15, cooldown_minutes=30, is_anchor_transition=True
+        ) is False
+
+    def test_anchor_transition_false_when_no_pending_changes(self, db_path):
+        from bot.beacon import should_trigger_beacon
+        assert should_trigger_beacon(
+            db_path, score_threshold=15, cooldown_minutes=0, is_anchor_transition=True
+        ) is False
 
     def test_false_within_cooldown(self, db_path):
         from bot.state_monitor import record_change
         from bot.beacon import should_trigger_beacon, record_beacon_invocation
-        # Score is high enough
         record_change(db_path, "plan_restructured", "today")
         record_change(db_path, "context_updated", "Work/Alpha")
-        # But beacon was just invoked
+        _backdate_changes(db_path)
         record_beacon_invocation(db_path)
         assert should_trigger_beacon(db_path, score_threshold=8, cooldown_minutes=30) is False
 
@@ -162,6 +246,7 @@ class TestShouldTriggerBeacon:
         import sqlite3
         record_change(db_path, "plan_restructured", "today")
         record_change(db_path, "context_updated", "Work/Alpha")
+        _backdate_changes(db_path)
         # Record a beacon invocation 31 minutes ago
         old_ts = (datetime.utcnow() - timedelta(minutes=31)).isoformat()
         conn = sqlite3.connect(db_path)

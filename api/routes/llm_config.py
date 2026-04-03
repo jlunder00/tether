@@ -32,7 +32,7 @@ _DEFAULTS = {
         "preferred_backend": "anthropic",
         "thinking_enabled": True,
         "thinking_budget": 8000,
-        "beacon_score_threshold": 8,
+        "beacon_score_threshold": 15,
         "beacon_cooldown_minutes": 30,
     },
 }
