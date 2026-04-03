@@ -75,7 +75,10 @@ def refresh_tokens(tokens: OAuthTokens) -> OAuthTokens:
 
 
 def write_oauth_tokens(tokens: OAuthTokens, credentials_path: str = _DEFAULT_CREDENTIALS_PATH) -> None:
-    """Write tokens back to the credentials file, preserving other top-level keys."""
+    """Write tokens back to the credentials file, preserving other top-level keys.
+    Uses atomic write (tempfile + os.replace) to prevent data loss on crash."""
+    import tempfile
+
     try:
         with open(credentials_path) as f:
             data = json.load(f)
@@ -87,8 +90,15 @@ def write_oauth_tokens(tokens: OAuthTokens, credentials_path: str = _DEFAULT_CRE
         "refreshToken": tokens.refresh_token,
         "expiresAt": tokens.expires_at_ms,
     }
-    with open(credentials_path, "w") as f:
-        json.dump(data, f)
+    parent = os.path.dirname(credentials_path) or "."
+    fd, tmp = tempfile.mkstemp(dir=parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, credentials_path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
 
 
 def get_valid_token(credentials_path: str = _DEFAULT_CREDENTIALS_PATH) -> str | None:

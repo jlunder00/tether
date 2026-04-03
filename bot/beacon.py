@@ -4,19 +4,24 @@ Two-phase design inspired by the KAIROS pattern in claude-code:
   Phase 1 — Triage: cheap Haiku call (~200 tokens), YES/NO decision
   Phase 2 — Action: Haiku with tools, max 3 conservative actions
 
-Beacon is triggered by the state_monitor's weighted scoring ledger,
-not by a time ticker. This keeps LLM costs proportional to real
-activity rather than wall-clock time.
+Two trigger paths:
+  1. Anchor transition — always runs (natural checkpoint, bypasses score)
+  2. Bulk changes — score >= threshold between anchors (default 15,
+     roughly 5+ meaningful edits)
+
+Cooldown prevents Beacon from firing too often even when both triggers
+overlap.
 """
 import logging
 import sqlite3
 from datetime import datetime, timedelta
 
-from bot.state_monitor import get_pending_score
+from bot.state_monitor import get_pending_score, is_window_settled
 
 logger = logging.getLogger(__name__)
 
 _MAX_BEACON_ACTIONS = 3
+_DEFAULT_SCORE_THRESHOLD = 15  # ~5 task completions or ~3 tasks + context updates
 
 
 # ---------------------------------------------------------------------------
@@ -49,19 +54,36 @@ def _get_last_invocation(db_path: str) -> datetime | None:
 
 def should_trigger_beacon(
     db_path: str,
-    score_threshold: int = 8,
+    score_threshold: int = _DEFAULT_SCORE_THRESHOLD,
     cooldown_minutes: int = 30,
+    is_anchor_transition: bool = False,
 ) -> bool:
-    """Return True if accumulated score >= threshold AND cooldown has passed."""
-    score = get_pending_score(db_path)
-    if score < score_threshold:
+    """Return True if Beacon should run.
+
+    Two trigger paths:
+      1. Anchor transition — bypasses score threshold, only checks cooldown
+      2. Bulk changes — debounce window must be settled AND score >= threshold
+
+    Both paths respect the cooldown to prevent rapid re-firing.
+    """
+    # Cooldown check applies to both paths
+    last = _get_last_invocation(db_path)
+    if last is not None:
+        elapsed = datetime.utcnow() - last
+        if elapsed < timedelta(minutes=cooldown_minutes):
+            return False
+
+    # Path 1: anchor transition always triggers (if past cooldown)
+    if is_anchor_transition:
+        # Only if there are any pending changes worth reviewing
+        return get_pending_score(db_path, debounce_minutes=0) > 0
+
+    # Path 2: bulk changes — window must be settled and score must hit threshold
+    if not is_window_settled(db_path):
         return False
 
-    last = _get_last_invocation(db_path)
-    if last is None:
-        return True
-    elapsed = datetime.utcnow() - last
-    return elapsed >= timedelta(minutes=cooldown_minutes)
+    score = get_pending_score(db_path)
+    return score >= score_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +105,15 @@ async def run_beacon(
       message: str | None — any message to send to the user
     """
     try:
-        change_summary = _format_change_summary(changes)
+        from bot.relationships import build_beacon_context
+
+        # Enrich change list with milestone/context relationships
+        enriched_context = build_beacon_context(db_path, changes)
 
         # --- Phase 1: Triage ---
         triage_prompt = (
-            f"These changes were detected in the user's task system:\n{change_summary}\n\n"
+            f"The following activity was detected in the user's task system:\n\n"
+            f"{enriched_context}\n\n"
             f"Does this warrant closer review and possible action? "
             f"Answer YES or NO and one sentence why."
         )
@@ -112,8 +138,10 @@ async def run_beacon(
             f"Limit yourself to at most {_MAX_BEACON_ACTIONS} actions."
         )
         action_prompt = (
-            f"Changes detected:\n{change_summary}\n\n"
+            f"Activity detected:\n\n{enriched_context}\n\n"
             f"Review the current state and take action if needed. "
+            f"You can update context entries to reflect completed work, "
+            f"adjust milestone status, or flag stale information. "
             f"If nothing needs doing, say so briefly."
         )
 

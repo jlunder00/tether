@@ -4,6 +4,7 @@ Provides a vendor-agnostic interface for LLM completions.
 LLMRouter selects the best available backend at startup with
 PipelineBackend (claude -p) always available as fallback.
 """
+import asyncio
 import os
 import json
 import time
@@ -83,7 +84,9 @@ class PipelineBackend(LLMBackend):
         prompt = "\n".join(prompt_parts)
 
         cmd = ["claude", "-p", "--strict-mcp-config", "--model", model, prompt]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=180)
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True, text=True, check=True, timeout=180
+        )
         return LLMResponse(
             content=result.stdout.strip(),
             tool_calls=[],
@@ -104,21 +107,13 @@ class AnthropicBackend(LLMBackend):
     def __init__(self, credentials_path: str = _DEFAULT_CREDENTIALS_PATH):
         self._credentials_path = credentials_path
 
-    def _read_oauth_token(self) -> str | None:
-        try:
-            with open(self._credentials_path) as f:
-                data = json.load(f)
-            oauth = data.get("claudeAiOauth", {})
-            expires_at_ms = oauth.get("expiresAt", 0)
-            # Require 5-minute buffer before expiry
-            if time.time() * 1000 < expires_at_ms - 300_000:
-                return oauth.get("accessToken")
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
-        return None
+    def _get_oauth_token(self) -> str | None:
+        """Get a valid OAuth token, refreshing if needed."""
+        from bot.oauth import get_valid_token
+        return get_valid_token(self._credentials_path)
 
     def is_available(self) -> bool:
-        if self._read_oauth_token():
+        if self._get_oauth_token():
             return True
         return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -135,16 +130,16 @@ class AnthropicBackend(LLMBackend):
         import anthropic
         from bot.llm_adapters import to_anthropic_schema
 
-        oauth_token = self._read_oauth_token()
+        oauth_token = self._get_oauth_token()
         api_key = os.environ.get("ANTHROPIC_API_KEY")
 
         if oauth_token:
-            client = anthropic.Anthropic(
+            client = anthropic.AsyncAnthropic(
                 auth_token=oauth_token,
                 default_headers={"anthropic-beta": "oauth-2025-04-20"},
             )
         else:
-            client = anthropic.Anthropic(api_key=api_key)
+            client = anthropic.AsyncAnthropic(api_key=api_key)
 
         kwargs: dict = dict(
             model=model,
@@ -159,7 +154,7 @@ class AnthropicBackend(LLMBackend):
             kwargs.setdefault("betas", [])
             kwargs["betas"].append("interleaved-thinking-2025-05-14")
 
-        response = client.messages.create(**kwargs)
+        response = await client.messages.create(**kwargs)
 
         content_text = ""
         tool_calls = []
@@ -304,7 +299,7 @@ class AWSBedrockBackend(LLMBackend):
         if tools:
             kwargs["toolConfig"] = {"tools": [to_bedrock_schema(t) for t in tools]}
 
-        response = client.converse(**kwargs)
+        response = await asyncio.to_thread(client.converse, **kwargs)
         output = response["output"]["message"]
 
         content_text = ""

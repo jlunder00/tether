@@ -256,3 +256,36 @@ class TestGetValidToken:
         # Token will be None if expired AND refresh fails (e.g., no network).
         # Just verify the function returns without raising.
         assert result is None or isinstance(result, str)
+
+    def test_real_oauth_haiku_call(self):
+        """Integration test: OAuth token → AnthropicBackend → real Haiku call.
+        Skips if no credentials or anthropic SDK not installed."""
+        import os
+        import asyncio
+        from bot.oauth import get_valid_token
+        creds_path = os.path.expanduser("~/.claude/.credentials.json")
+        if not os.path.exists(creds_path):
+            pytest.skip("No real credentials file found")
+        token = get_valid_token(creds_path)
+        if not token:
+            pytest.skip("No valid OAuth token available")
+        try:
+            import anthropic  # noqa: F401
+            from bot.llm import AnthropicBackend, LLMResponse
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("anthropic SDK not installed")
+
+        backend = AnthropicBackend(credentials_path=creds_path)
+        if not backend.is_available():
+            pytest.skip("AnthropicBackend not available")
+
+        resp = asyncio.run(backend.complete(
+            messages=[{"role": "user", "content": "Reply with exactly: pong"}],
+            system="You are a test assistant. Follow instructions exactly.",
+            model="claude-haiku-4-5-20251001",
+        ))
+        assert isinstance(resp, LLMResponse)
+        assert "pong" in resp.content.lower()
+        assert resp.input_tokens > 0
+        assert resp.output_tokens > 0
+        assert resp.stop_reason == "end_turn"
