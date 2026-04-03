@@ -901,7 +901,9 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     config = load_config()
     llm_config = config.get("llm", {})
 
+    logger.info("v3: initializing LLMRouter...")
     router = LLMRouter()
+    logger.info("v3: backend=%s", type(router.active_backend).__name__)
     tools = load_tools()
     tool_schemas = [t.to_api_schema() for t in tools]
     executor = make_tool_executor(tools, db_path=str(db_path))
@@ -932,6 +934,7 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     model_quick = config.get("models", {}).get("quick_classifier", "claude-haiku-4-5-20251001")
     model_full = config.get("models", {}).get("orchestrator", "claude-sonnet-4-6")
 
+    logger.info("v3: calling conversation loop (model_full=%s, %d tools)", model_full, len(tool_schemas))
     result = asyncio.run(v3_handle(
         user_text=text,
         router=router,
@@ -1000,7 +1003,9 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
             insert_conversation_turn(db_path, "assistant", final)
             return
         except Exception as e:
-            logger.warning("v3 path failed, falling back to v2: %s", e)
+            import traceback
+            logger.error("v3 path failed (%s: %s), falling back to v2:\n%s",
+                         type(e).__name__, e, traceback.format_exc())
             # Fall through to v2 pipeline
 
     # --- v2 pipeline (default / fallback) ---
