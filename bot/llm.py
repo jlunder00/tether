@@ -133,13 +133,26 @@ class AnthropicBackend(LLMBackend):
         oauth_token = self._get_oauth_token()
         api_key = os.environ.get("ANTHROPIC_API_KEY")
 
+        betas = []
+        if oauth_token:
+            betas.append("oauth-2025-04-20")
+        if thinking:
+            betas.append("interleaved-thinking-2025-05-14")
+
+        default_headers = {}
+        if betas:
+            default_headers["anthropic-beta"] = ",".join(betas)
+
         if oauth_token:
             client = anthropic.AsyncAnthropic(
                 auth_token=oauth_token,
-                default_headers={"anthropic-beta": "oauth-2025-04-20"},
+                default_headers=default_headers,
             )
         else:
-            client = anthropic.AsyncAnthropic(api_key=api_key)
+            client = anthropic.AsyncAnthropic(
+                api_key=api_key,
+                default_headers=default_headers if default_headers else None,
+            )
 
         kwargs: dict = dict(
             model=model,
@@ -151,8 +164,6 @@ class AnthropicBackend(LLMBackend):
             kwargs["tools"] = [to_anthropic_schema(t) for t in tools]
         if thinking:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
-            kwargs.setdefault("betas", [])
-            kwargs["betas"].append("interleaved-thinking-2025-05-14")
 
         response = await client.messages.create(**kwargs)
 
