@@ -173,6 +173,22 @@ CREATE TABLE IF NOT EXISTS invocation_log (
     error       TEXT,
     ts          DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS state_monitor_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_type TEXT NOT NULL,
+    entity_id   TEXT NOT NULL DEFAULT '',
+    score       INTEGER NOT NULL DEFAULT 1,
+    consumed    INTEGER NOT NULL DEFAULT 0,
+    ts          DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS beacon_state (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    last_invoked_at  DATETIME
+);
+
+INSERT OR IGNORE INTO beacon_state (id, last_invoked_at) VALUES (1, NULL);
 """
 
 

@@ -1,8 +1,73 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { api } from '../lib/api'
 
 const auth = useAuthStore()
+
+// ---------------------------------------------------------------------------
+// LLM configuration
+// ---------------------------------------------------------------------------
+
+interface LLMConfig {
+  models: Record<string, string>
+  llm: {
+    preferred_backend: string
+    thinking_enabled: boolean
+    thinking_budget: number
+    beacon_score_threshold: number
+    beacon_cooldown_minutes: number
+  }
+  model_roles: string[]
+  defaults: { models: Record<string, string>; llm: Record<string, any> }
+}
+
+const llmConfig = ref<LLMConfig | null>(null)
+const llmStatus = ref<'idle' | 'loading' | 'saving' | 'saved' | 'error'>('idle')
+const llmMessage = ref('')
+const showAdvanced = ref(false)
+
+const backendOptions = ['anthropic', 'openai', 'openrouter', 'bedrock', 'pipeline']
+
+async function loadLLMConfig() {
+  try {
+    const resp = await api('/api/llm-config')
+    if (resp.ok) llmConfig.value = await resp.json()
+  } catch { /* ignore on load failure */ }
+}
+
+async function saveLLMConfig() {
+  if (!llmConfig.value) return
+  llmStatus.value = 'saving'
+  llmMessage.value = ''
+  try {
+    const resp = await api('/api/llm-config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        models: llmConfig.value.models,
+        llm: llmConfig.value.llm,
+      }),
+    })
+    if (resp.ok) {
+      llmStatus.value = 'saved'
+      llmMessage.value = 'LLM settings saved.'
+      setTimeout(() => { llmStatus.value = 'idle'; llmMessage.value = '' }, 2000)
+    } else {
+      llmStatus.value = 'error'
+      llmMessage.value = 'Failed to save.'
+    }
+  } catch {
+    llmStatus.value = 'error'
+    llmMessage.value = 'Network error.'
+  }
+}
+
+function resetLLMDefaults() {
+  if (!llmConfig.value) return
+  llmConfig.value.models = { ...llmConfig.value.defaults.models }
+  llmConfig.value.llm = { ...llmConfig.value.defaults.llm } as LLMConfig['llm']
+}
 
 // Telegram link
 const telegramCode = ref('')
@@ -10,9 +75,8 @@ const telegramStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
 const telegramMessage = ref('')
 const telegramLinked = ref(false)
 
-// Check if already linked by reading from /auth/me response (is_admin field present)
-// We'll just let user try — success/error from API handles it
 onMounted(async () => {
+  loadLLMConfig()
   try {
     const resp = await fetch('/auth/me', { credentials: 'include' })
     if (resp.ok) {
@@ -168,6 +232,126 @@ function connectGoogle() {
             </svg>
             Connect Google
           </button>
+        </div>
+      </section>
+
+      <!-- LLM Configuration -->
+      <section v-if="llmConfig" class="mb-8">
+        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">LLM Configuration</h2>
+        <div class="bg-gray-800 rounded-xl p-4 space-y-4">
+
+          <!-- Preferred Backend -->
+          <div>
+            <label class="text-xs text-gray-400 mb-1 block">Preferred Backend</label>
+            <select
+              v-model="llmConfig.llm.preferred_backend"
+              class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500"
+            >
+              <option v-for="b in backendOptions" :key="b" :value="b">{{ b }}</option>
+            </select>
+          </div>
+
+          <!-- Extended Thinking -->
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-sm text-white">Extended Thinking</div>
+              <div class="text-xs text-gray-400">Allows deeper reasoning before responding</div>
+            </div>
+            <button
+              @click="llmConfig.llm.thinking_enabled = !llmConfig.llm.thinking_enabled"
+              :class="llmConfig.llm.thinking_enabled ? 'bg-indigo-600' : 'bg-gray-600'"
+              class="relative w-11 h-6 rounded-full transition-colors"
+            >
+              <span
+                :class="llmConfig.llm.thinking_enabled ? 'translate-x-5' : 'translate-x-0.5'"
+                class="inline-block w-5 h-5 bg-white rounded-full transition-transform transform mt-0.5"
+              />
+            </button>
+          </div>
+
+          <!-- Thinking Budget -->
+          <div v-if="llmConfig.llm.thinking_enabled">
+            <label class="text-xs text-gray-400 mb-1 block">
+              Thinking Budget: {{ llmConfig.llm.thinking_budget.toLocaleString() }} tokens
+            </label>
+            <input
+              type="range"
+              v-model.number="llmConfig.llm.thinking_budget"
+              min="2000"
+              max="32000"
+              step="1000"
+              class="w-full accent-indigo-500"
+            />
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>2K</span><span>16K</span><span>32K</span>
+            </div>
+          </div>
+
+          <!-- Beacon Settings -->
+          <div class="border-t border-gray-700 pt-3 mt-3">
+            <div class="text-sm text-white mb-2">Beacon (Background Agent)</div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs text-gray-400 mb-1 block">Score Threshold</label>
+                <input
+                  type="number"
+                  v-model.number="llmConfig.llm.beacon_score_threshold"
+                  min="1" max="50"
+                  class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label class="text-xs text-gray-400 mb-1 block">Cooldown (min)</label>
+                <input
+                  type="number"
+                  v-model.number="llmConfig.llm.beacon_cooldown_minutes"
+                  min="5" max="120"
+                  class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Advanced: Model Roles -->
+          <div class="border-t border-gray-700 pt-3 mt-3">
+            <button
+              @click="showAdvanced = !showAdvanced"
+              class="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+            >
+              <span :class="showAdvanced ? 'rotate-90' : ''" class="transition-transform inline-block">&#9656;</span>
+              Advanced: Model Assignments
+            </button>
+            <div v-if="showAdvanced" class="mt-3 space-y-2">
+              <div v-for="role in llmConfig.model_roles" :key="role">
+                <label class="text-xs text-gray-400 mb-1 block">{{ role.replace(/_/g, ' ') }}</label>
+                <input
+                  type="text"
+                  v-model="llmConfig.models[role]"
+                  class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Save / Reset -->
+          <div class="flex gap-2 pt-2">
+            <button
+              @click="saveLLMConfig"
+              :disabled="llmStatus === 'saving'"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            >
+              {{ llmStatus === 'saving' ? 'Saving...' : 'Save' }}
+            </button>
+            <button
+              @click="resetLLMDefaults"
+              class="bg-gray-700 hover:bg-gray-600 text-white text-sm font-medium rounded-lg px-4 py-2 border border-gray-600 transition-colors"
+            >
+              Reset Defaults
+            </button>
+          </div>
+          <p v-if="llmMessage" :class="llmStatus === 'saved' ? 'text-green-400' : 'text-red-400'" class="text-sm">
+            {{ llmMessage }}
+          </p>
         </div>
       </section>
     </div>

@@ -126,6 +126,9 @@ _MODEL_DEFAULTS: dict[str, str] = {
 }
 
 
+_HISTORY_BODY_MAX = 500  # chars per message — prevents one long message dominating
+
+
 def _format_history(history: list[dict]) -> str:
     if not history:
         return "(none)"
@@ -133,7 +136,10 @@ def _format_history(history: list[dict]) -> str:
     for row in history:
         label = "User" if row["role"] == "user" else "Bot"
         ts = row["ts"][:16] if row["ts"] else ""
-        lines.append(f"[{ts}] {label}: {row['body']}")
+        body = row["body"]
+        if len(body) > _HISTORY_BODY_MAX:
+            body = body[:_HISTORY_BODY_MAX] + "…"
+        lines.append(f"[{ts}] {label}: {body}")
     return "\n".join(lines)
 
 
@@ -415,6 +421,34 @@ def _format_plan_human_readable(plan: dict) -> str:
     return "\n".join(lines)
 
 
+_STATUS_SYMBOL = {
+    "done": "✓", "in_progress": "▶", "skipped": "–",
+    "blocked": "✗", "pending": "○",
+}
+
+
+def _format_plan_compact(plan: dict) -> str:
+    """Compact single-line-per-anchor plan representation.
+
+    Example: morning: ✓ Exercise | ○ Breakfast | ▶ Review notes
+    Significantly fewer tokens than the verbose format for large plans.
+    """
+    if not plan.get("anchors"):
+        return "(no plan)"
+    lines = []
+    for anchor_id, anchor_data in plan["anchors"].items():
+        tasks = anchor_data.get("tasks", [])
+        if not tasks:
+            lines.append(f"{anchor_id}: (empty)")
+            continue
+        task_parts = []
+        for t in tasks:
+            sym = _STATUS_SYMBOL.get(t.get("status", "pending"), "○")
+            task_parts.append(f"{sym} {t.get('text', '?')}")
+        lines.append(f"{anchor_id}: {' | '.join(task_parts)}")
+    return "\n".join(lines)
+
+
 def _format_mutation_plan_human_readable(plan: list[dict]) -> str:
     if not plan:
         return "(Nothing staged yet)"
@@ -458,6 +492,7 @@ def call_orchestrator(
     fetched_context: str,
     anchors: list[dict],
     stage: str = "orchestrator",
+    session_notes: str | None = None,
 ) -> str:
     """Call the orchestrator. Returns raw plain-text reasoning (not JSON)."""
     current_anchor = get_current_anchor(anchors)
@@ -465,13 +500,14 @@ def call_orchestrator(
     prompt = template.render(
         date=str(date_type.today()),
         current_anchor=current_anchor,
-        plan_human_readable=_format_plan_human_readable(plan),
+        plan_human_readable=_format_plan_compact(plan),
         subjects_list="\n".join(f"- {s}" for s in subjects),
         history=_format_history(history),
         meta_eval_summary=meta_eval_summary,
         fetched_context=fetched_context,
         prior_conversation=_format_orchestrator_conversation(conversation),
         user_message=user_message,
+        session_notes=session_notes,
     )
     return call_claude(prompt, timeout=60, model_role="orchestrator", stage=stage)
 

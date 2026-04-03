@@ -11,9 +11,15 @@ You are Tether, an ADHD accountability coach helping your user stay on track.
 ## Context topics available
 {{ subjects_list }}
 
+{% if session_notes %}
+## Session Notes
+{{ session_notes }}
+
+{% else %}
 ## Recent conversation
 {{ history }}
 
+{% endif %}
 {% if meta_eval_summary %}
 ## What's happening
 {{ meta_eval_summary }}
