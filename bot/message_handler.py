@@ -877,6 +877,83 @@ def _run_v2_planning_loop(
 
 
 # ---------------------------------------------------------------------------
+# v3 SDK path
+# ---------------------------------------------------------------------------
+
+def _is_v3_enabled() -> bool:
+    """Check if v3 SDK conversation loop is enabled in config."""
+    try:
+        config = load_config()
+        return bool(config.get("llm", {}).get("use_v3", False))
+    except Exception:
+        return False
+
+
+def _handle_v3(text: str, db_path: Path, anchors: list[dict],
+               current_anchor: dict) -> str:
+    """Run the v3 SDK conversation loop. Returns the response text."""
+    import asyncio
+    from bot.conversation import handle_message as v3_handle
+    from bot.llm import LLMRouter
+    from bot.tools import load_tools, make_tool_executor
+    from bot.memory import read_session_notes
+
+    config = load_config()
+    llm_config = config.get("llm", {})
+
+    logger.info("v3: initializing LLMRouter...")
+    router = LLMRouter()
+    logger.info("v3: backend=%s", type(router.active_backend).__name__)
+    tools = load_tools()
+    tool_schemas = [t.to_api_schema() for t in tools]
+    executor = make_tool_executor(tools, db_path=str(db_path))
+
+    today = str(date_type.today())
+    plan = get_plan(db_path, today)
+    subjects = [e["subject"] for e in get_context_entries(db_path)]
+    history = get_recent_history(db_path, HISTORY_EXCHANGES)
+
+    # Compact plan for system prompt
+    plan_lines = []
+    for anchor_id, data in plan.get("anchors", {}).items():
+        tasks = data.get("tasks", [])
+        task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
+        plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
+
+    notes_path = str(Path.home() / ".tether-config" / ".session-notes.md")
+    session_notes = read_session_notes(notes_path)
+
+    # Convert history to messages format
+    conv_history = []
+    for h in history:
+        conv_history.append({
+            "role": "user" if h["role"] == "user" else "assistant",
+            "content": h["body"],
+        })
+
+    model_quick = config.get("models", {}).get("quick_classifier", "claude-haiku-4-5-20251001")
+    model_full = config.get("models", {}).get("orchestrator", "claude-sonnet-4-6")
+
+    logger.info("v3: calling conversation loop (model_full=%s, %d tools)", model_full, len(tool_schemas))
+    result = asyncio.run(v3_handle(
+        user_text=text,
+        router=router,
+        db_path=str(db_path),
+        anchor_name=current_anchor.get("name", "General"),
+        anchor_time=current_anchor.get("time", "00:00"),
+        plan_summary="\n".join(plan_lines) or "No plan data.",
+        context_subjects=subjects,
+        session_notes=session_notes,
+        conversation_history=conv_history,
+        tools=tool_schemas,
+        tool_executor=executor,
+        model_quick=model_quick,
+        model_full=model_full,
+    ))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -916,6 +993,22 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         except RuntimeError as e:
             send_fn(str(e))
         return
+
+    # --- v3 SDK path (if enabled) ---
+    if _is_v3_enabled():
+        try:
+            final = _handle_v3(text, db_path, anchors, current_anchor)
+            send_fn(final)
+            insert_conversation_turn(db_path, "user", text)
+            insert_conversation_turn(db_path, "assistant", final)
+            return
+        except Exception as e:
+            import traceback
+            logger.error("v3 path failed (%s: %s), falling back to v2:\n%s",
+                         type(e).__name__, e, traceback.format_exc())
+            # Fall through to v2 pipeline
+
+    # --- v2 pipeline (default / fallback) ---
 
     # Quick-route classifier: skip the full orchestrator pipeline for simple messages
     history = get_recent_history(db_path, HISTORY_EXCHANGES)
