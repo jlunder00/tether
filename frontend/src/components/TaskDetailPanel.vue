@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { api } from '../lib/api'
 import DetailPanel from './DetailPanel.vue'
+import SearchAutocomplete from './SearchAutocomplete.vue'
+import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import { useSubtasks } from '../composables/useSubtasks'
@@ -31,7 +34,7 @@ const anchorId = computed(() => taskAndAnchor.value?.anchorId ?? '')
 // Composables
 const { subtasks, create: createSubtask, update: updateSubtask, remove: removeSubtask } = useSubtasks(() => props.taskId)
 const { links, create: createLink, remove: removeLink } = useLinks(() => 'tasks', () => props.taskId)
-const { deps, remove: removeDep } = useDependencies(() => 'task', () => props.taskId)
+const { deps, add: addDep, remove: removeDep } = useDependencies(() => 'task', () => props.taskId)
 
 // Subtasks
 const newSubtaskText = ref('')
@@ -70,9 +73,8 @@ async function addLink() {
 
 // Task PATCH helper
 async function patchTask(fields: Record<string, unknown>) {
-  await window.fetch(`/api/tasks/${props.taskId}`, {
+  await api(`/api/tasks/${props.taskId}`, {
     method: 'PATCH',
-    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(fields),
   })
@@ -119,7 +121,7 @@ function patchFollowup(fields: Partial<FollowupConfig>) {
 // Delete
 async function deleteTask() {
   if (!confirm('Delete this task?')) return
-  await window.fetch(`/api/tasks/${props.taskId}`, { method: 'DELETE', credentials: 'include' })
+  await api(`/api/tasks/${props.taskId}`, { method: 'DELETE' })
   router.back()
   await planStore.fetchPlan()
 }
@@ -127,6 +129,35 @@ async function deleteTask() {
 // Navigate to milestone panel
 function openMilestone(milestoneId: string) {
   router.push(`/plan/day/${planStore.activeDate}/milestone/${milestoneId}`)
+}
+
+// Search functions for dependency and milestone linking
+async function searchForDependency(q: string): Promise<SearchResult[]> {
+  const resp = await api(`/api/search?q=${encodeURIComponent(q)}&type=all`)
+  if (!resp.ok) return []
+  const items = await resp.json()
+  // Exclude self
+  return items.filter((i: SearchResult) => i.id !== props.taskId)
+}
+
+async function searchForMilestone(q: string): Promise<SearchResult[]> {
+  const resp = await api(`/api/search?q=${encodeURIComponent(q)}&type=milestone`)
+  if (!resp.ok) return []
+  return resp.json()
+}
+
+async function addDependencyFromSearch(item: SearchResult) {
+  // This task is blocked by the selected item
+  await addDep(item.type ?? 'task', item.id, 'task', props.taskId)
+}
+
+async function linkMilestoneFromSearch(item: SearchResult) {
+  await api(`/api/milestones/${item.id}/tasks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ task_id: props.taskId }),
+  })
+  await milestoneStore.fetchAll()
 }
 
 // Navigate to dependency entity
@@ -305,7 +336,7 @@ onMounted(async () => {
             </button>
           </div>
 
-          <button class="text-xs text-white/30 text-left italic">+ Add dependency (search coming soon)</button>
+          <SearchAutocomplete :search-fn="searchForDependency" placeholder="Search tasks/milestones..." @select="addDependencyFromSearch" />
         </div>
 
         <!-- Milestones -->
@@ -319,7 +350,7 @@ onMounted(async () => {
             <span class="text-sm text-white/70 hover:text-white">{{ m.name }}</span>
             <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ m.status }}</span>
           </button>
-          <button class="text-xs text-white/30 text-left italic">+ Link milestone (search coming soon)</button>
+          <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones..." @select="linkMilestoneFromSearch" />
         </div>
 
         <!-- Follow-up config -->

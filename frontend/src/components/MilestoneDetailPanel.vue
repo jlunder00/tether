@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { api } from '../lib/api'
 import DetailPanel from './DetailPanel.vue'
+import SearchAutocomplete from './SearchAutocomplete.vue'
+import type { SearchResult } from './SearchAutocomplete.vue'
 import { useMilestoneStore } from '../stores/milestones'
 import { usePlanStore } from '../stores/plan'
 import { useLinks } from '../composables/useLinks'
@@ -15,7 +18,18 @@ const planStore = usePlanStore()
 const milestone = computed(() => milestoneStore.all.find(m => m.id === props.milestoneId) ?? null)
 
 const { links, create: createLink, remove: removeLink } = useLinks(() => 'milestones', () => props.milestoneId)
-const { deps, remove: removeDep } = useDependencies(() => 'milestone', () => props.milestoneId)
+const { deps, add: addDep, remove: removeDep } = useDependencies(() => 'milestone', () => props.milestoneId)
+
+async function searchForDependency(q: string): Promise<SearchResult[]> {
+  const resp = await api(`/api/search?q=${encodeURIComponent(q)}&type=all`)
+  if (!resp.ok) return []
+  const items = await resp.json()
+  return items.filter((i: SearchResult) => i.id !== props.milestoneId)
+}
+
+async function addDependencyFromSearch(item: SearchResult) {
+  await addDep(item.type ?? 'task', item.id, 'milestone', props.milestoneId)
+}
 
 // Links UI
 const showAddLink = ref(false)
@@ -263,7 +277,7 @@ onMounted(async () => {
             </button>
           </div>
 
-          <button class="text-xs text-white/30 text-left italic">+ Add dependency (search coming soon)</button>
+          <SearchAutocomplete :search-fn="searchForDependency" placeholder="Search tasks/milestones..." @select="addDependencyFromSearch" />
         </div>
 
         <!-- Delete -->
