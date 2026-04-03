@@ -97,13 +97,26 @@ async def run_beacon(
     model: str = "claude-haiku-4-5-20251001",
     tools: list | None = None,
     tool_executor=None,
+    notify=None,
 ) -> dict:
     """Run the two-phase Beacon agent.
 
+    Args:
+        notify: async callable(str) — sends a message to the user (e.g. Telegram).
+                Called twice if Beacon acts: once when triage starts ("reviewing..."),
+                once when done ("here's what I changed...").
+
     Returns a dict with keys:
       triggered: bool — whether Phase 2 ran
-      message: str | None — any message to send to the user
+      message: str | None — summary of actions taken
     """
+    async def _notify(text: str):
+        if notify:
+            try:
+                await notify(text)
+            except Exception as e:
+                logger.warning("Beacon notify failed: %s", e)
+
     try:
         from bot.relationships import build_beacon_context
 
@@ -128,21 +141,27 @@ async def run_beacon(
         if not triage_text.upper().startswith("YES"):
             return {"triggered": False, "message": None}
 
+        # --- Notify user that Beacon is reviewing ---
+        change_summary = ", ".join(
+            sorted({c.get("change_type", "change").replace("_", " ") for c in changes})
+        )
+        await _notify(f"🔍 Beacon reviewing recent changes: {change_summary}")
+
         # --- Phase 2: Investigation + action ---
         record_beacon_invocation(db_path)
 
         action_system = (
-            "You are a quiet background assistant reviewing the user's task system. "
+            "You are a background assistant reviewing the user's task system. "
             "Take conservative, targeted action only when clearly needed. "
-            "Do not send messages unless something genuinely needs the user's attention. "
-            f"Limit yourself to at most {_MAX_BEACON_ACTIONS} actions."
+            f"Limit yourself to at most {_MAX_BEACON_ACTIONS} actions. "
+            "After you're done, write a brief summary of what you changed and why. "
+            "If you took no action, say so. Keep it under 3 sentences."
         )
         action_prompt = (
             f"Activity detected:\n\n{enriched_context}\n\n"
             f"Review the current state and take action if needed. "
             f"You can update context entries to reflect completed work, "
-            f"adjust milestone status, or flag stale information. "
-            f"If nothing needs doing, say so briefly."
+            f"adjust milestone status, or flag stale information."
         )
 
         if tools and tool_executor:
@@ -166,6 +185,11 @@ async def run_beacon(
             )
 
         message = action_response.content.strip() or None
+
+        # --- Notify user what Beacon did ---
+        if message:
+            await _notify(f"✅ Beacon: {message}")
+
         return {"triggered": True, "message": message}
 
     except Exception as e:
