@@ -158,6 +158,10 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
+    # JSON-encode followup_config before writing
+    if "followup_config" in updates:
+        fc = updates["followup_config"]
+        updates["followup_config"] = json.dumps(fc) if fc is not None else None
     set_clause = ", ".join(f"{k}=?" for k in updates)
     with get_db(db_path) as conn:
         conn.execute(
@@ -769,3 +773,33 @@ def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict
     if not config or not config.get("enabled"):
         return None
     return config
+
+
+def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list[dict]:
+    """Search tasks and/or milestones by text. Returns [{id, label, sublabel, type}]."""
+    results = []
+    q = f"%{query}%"
+    with get_db(db_path) as conn:
+        if entity_type in ("all", "task"):
+            rows = conn.execute(
+                "SELECT uuid, text, anchor_id, plan_date FROM tasks WHERE text LIKE ? ORDER BY plan_date DESC LIMIT 20",
+                (q,),
+            ).fetchall()
+            for r in rows:
+                results.append({
+                    "id": r["uuid"], "label": r["text"],
+                    "sublabel": f"task · {r['anchor_id']} · {r['plan_date']}",
+                    "type": "task",
+                })
+        if entity_type in ("all", "milestone"):
+            rows = conn.execute(
+                "SELECT id, name, context_subject FROM milestones WHERE name LIKE ? ORDER BY name LIMIT 20",
+                (q,),
+            ).fetchall()
+            for r in rows:
+                results.append({
+                    "id": r["id"], "label": r["name"],
+                    "sublabel": f"milestone · {r['context_subject']}",
+                    "type": "milestone",
+                })
+    return results

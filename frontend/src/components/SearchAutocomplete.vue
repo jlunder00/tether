@@ -5,6 +5,7 @@ export interface SearchResult {
   id: string
   label: string
   sublabel?: string
+  type?: string
 }
 
 const props = defineProps<{

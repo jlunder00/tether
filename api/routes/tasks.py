@@ -1,11 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
-    get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks
+    get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
+    search_entities
 from api.auth import auth_dependency
 import api.config as cfg
 
 router = APIRouter()
+
+
+@router.get("/search")
+async def search(q: str = "", type: str = "all", request: Request = None, _auth=Depends(auth_dependency)):
+    if not q.strip():
+        return []
+    return search_entities(request.state.db_path, q.strip(), type)
 
 
 @router.patch("/tasks/{task_uuid}")
