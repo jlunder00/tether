@@ -226,7 +226,8 @@ async def handle_message(
     use_quick = force_quick or (not force_full and _classify_quick(user_text))
 
     if use_quick:
-        response = await router.complete(
+        # Quick path: use fast_backend (Haiku direct) for cheap, low-latency responses
+        response = await router.complete_fast(
             messages=history,
             system=system,
             model=model_quick,
@@ -235,7 +236,10 @@ async def handle_message(
         )
         return response.content
 
-    # Full path — tool loop with optional extended thinking
+    # Full path — use active_backend (AgentSDK for Sonnet, or Pipeline fallback).
+    # AgentSDKBackend handles tool use internally via MCP; conversation_loop
+    # exits after one round since tool_calls is always [] from that backend.
+    # If active_backend is AnthropicBackend (API key path), the loop runs normally.
     response = await conversation_loop(
         backend=router.active_backend,
         messages=history,

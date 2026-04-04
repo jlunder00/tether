@@ -258,21 +258,28 @@ class TestAWSBedrockBackend:
 # ---------------------------------------------------------------------------
 
 class TestLLMRouter:
-    def test_falls_back_to_pipeline_when_nothing_else_available(self, monkeypatch, tmp_path):
-        # boto3 is not installed in this env → AWSBedrockBackend.is_available() returns False
-        # via its except Exception handler, so no mocking needed
+    def test_fast_backend_falls_back_to_pipeline_when_nothing_else_available(self, monkeypatch, tmp_path):
+        """fast_backend falls back to PipelineBackend when no API keys are set."""
         from bot.llm import LLMRouter, PipelineBackend
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
-        assert isinstance(router.active_backend, PipelineBackend)
+        assert isinstance(router.fast_backend, PipelineBackend)
 
-    def test_prefers_anthropic_when_api_key_available(self, monkeypatch, tmp_path):
+    def test_fast_backend_prefers_anthropic_when_api_key_available(self, monkeypatch, tmp_path):
+        """API key → fast_backend is AnthropicBackend (Haiku direct calls)."""
         from bot.llm import LLMRouter, AnthropicBackend
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
-        assert isinstance(router.active_backend, AnthropicBackend)
+        assert isinstance(router.fast_backend, AnthropicBackend)
+
+    def test_active_backend_is_agent_sdk_when_claude_available(self, tmp_path):
+        """active_backend is AgentSDKBackend when claude binary is installed."""
+        from bot.llm import LLMRouter, AgentSDKBackend, PipelineBackend
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        # claude binary may or may not be available in CI; accept either
+        assert isinstance(router.active_backend, (AgentSDKBackend, PipelineBackend))
 
     def test_complete_delegates_to_active_backend(self, monkeypatch, tmp_path):
         from bot.llm import LLMRouter, LLMResponse

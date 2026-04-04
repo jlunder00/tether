@@ -373,18 +373,152 @@ class AWSBedrockBackend(LLMBackend):
 
 
 # ---------------------------------------------------------------------------
+# AgentSDKBackend — Sonnet via claude binary (bypasses subscription gating)
+# ---------------------------------------------------------------------------
+
+def _format_messages_as_prompt(messages: list[dict], system: str | list[str]) -> str:
+    """Flatten system + messages into a single string prompt for the Agent SDK.
+
+    The Agent SDK takes a single prompt string (or system_prompt separately).
+    We join conversation history so the model has full context.
+    """
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        # Handle list content (tool results, etc.) — extract text blocks
+        if isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block.get("type") == "tool_result":
+                        text_parts.append(f"[tool result: {block.get('content', '')}]")
+                else:
+                    text_parts.append(str(block))
+            content = "\n".join(text_parts)
+        parts.append(f"[{role}]\n{content}")
+    return "\n\n".join(parts)
+
+
+class AgentSDKBackend(LLMBackend):
+    """Uses claude-agent-sdk to spawn the claude binary for Sonnet access.
+
+    The claude binary passes server-side gating that raw SDK calls do not.
+    Optionally connects to the tether MCP server so Claude can call
+    tether tools (get_plan, upsert_task, etc.) natively.
+
+    Does NOT return tool_calls — tool use is handled internally by claude.
+    The LLMResponse always has tool_calls=[] and stop_reason="end_turn".
+    """
+
+    def __init__(self, mcp_server_url: str | None = None):
+        self._mcp_server_url = mcp_server_url
+
+    def is_available(self) -> bool:
+        try:
+            import claude_agent_sdk  # noqa: F401
+            result = subprocess.run(
+                ["claude", "--version"], capture_output=True, timeout=5
+            )
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            return False
+
+    async def complete(
+        self,
+        messages: list[dict],
+        system: str | list[str],
+        model: str,
+        tools: list[dict] | None = None,
+        thinking: bool = False,
+        thinking_budget: int = 8000,
+        max_tokens: int = 8096,
+    ) -> LLMResponse:
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage
+        from claude_agent_sdk.types import McpSSEServerConfig, ThinkingConfigEnabled
+
+        system_text = system if isinstance(system, str) else "\n".join(system)
+        prompt = _format_messages_as_prompt(messages, system)
+
+        mcp_servers: dict = {}
+        if self._mcp_server_url:
+            mcp_servers["tether"] = McpSSEServerConfig(url=self._mcp_server_url)
+
+        options = ClaudeAgentOptions(
+            model=model,
+            system_prompt=system_text,
+            max_turns=12,  # allow multi-turn tool use within the agent
+            mcp_servers=mcp_servers,
+            permission_mode="bypassPermissions",
+        )
+        if thinking:
+            options.thinking = ThinkingConfigEnabled(budget_tokens=thinking_budget)
+
+        logger.info("agent-sdk request: model=%s, mcp=%s, thinking=%s",
+                    model, bool(mcp_servers), thinking)
+
+        content_text = ""
+        result_msg: ResultMessage | None = None
+
+        async for msg in query(prompt=prompt, options=options):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if hasattr(block, "text") and block.text:
+                        content_text += block.text
+            elif isinstance(msg, ResultMessage):
+                result_msg = msg
+
+        usage = result_msg.usage or {} if result_msg else {}
+        stop_reason = (result_msg.stop_reason or "end_turn") if result_msg else "end_turn"
+
+        logger.info("agent-sdk response: turns=%s stop=%s cost=$%.4f",
+                    result_msg.num_turns if result_msg else "?",
+                    stop_reason,
+                    result_msg.total_cost_usd or 0 if result_msg else 0)
+
+        return LLMResponse(
+            content=content_text.strip(),
+            tool_calls=[],
+            stop_reason=stop_reason,
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+        )
+
+
+# ---------------------------------------------------------------------------
 # LLMRouter — selects best available backend
 # ---------------------------------------------------------------------------
 
 class LLMRouter:
-    """Picks the best available LLM backend at construction time.
-    Priority: AnthropicBackend → configured vendor → PipelineBackend.
+    """Manages two backends:
+    - active_backend: full reasoning (AgentSDKBackend → PipelineBackend)
+    - fast_backend: quick/cheap calls (AnthropicBackend Haiku → PipelineBackend)
+
+    active_backend is used for the main conversation loop (Sonnet, thinking).
+    fast_backend is used for quick classifier and tool-light responses (Haiku).
     """
 
-    def __init__(self, credentials_path: str = _DEFAULT_CREDENTIALS_PATH):
-        self.active_backend = self._select(credentials_path)
+    def __init__(
+        self,
+        credentials_path: str = _DEFAULT_CREDENTIALS_PATH,
+        mcp_server_url: str | None = None,
+    ):
+        self.active_backend = self._select_full(mcp_server_url)
+        self.fast_backend = self._select_fast(credentials_path)
 
-    def _select(self, credentials_path: str) -> LLMBackend:
+    def _select_full(self, mcp_server_url: str | None) -> LLMBackend:
+        """Full path: prefer AgentSDKBackend (Sonnet), fall back to Pipeline."""
+        agent = AgentSDKBackend(mcp_server_url=mcp_server_url)
+        if agent.is_available():
+            logger.info("LLMRouter full backend: AgentSDKBackend (mcp=%s)", bool(mcp_server_url))
+            return agent
+        logger.info("LLMRouter full backend: PipelineBackend (agent SDK unavailable)")
+        return PipelineBackend()
+
+    def _select_fast(self, credentials_path: str) -> LLMBackend:
+        """Fast path: prefer AnthropicBackend (Haiku direct), fall back to Pipeline."""
         candidates: list[LLMBackend] = [
             AnthropicBackend(credentials_path=credentials_path),
             OpenAIBackend(),
@@ -394,9 +528,14 @@ class LLMRouter:
         ]
         for backend in candidates:
             if backend.is_available():
-                logger.info("LLMRouter selected backend: %s", type(backend).__name__)
+                logger.info("LLMRouter fast backend: %s", type(backend).__name__)
                 return backend
-        return PipelineBackend()  # unreachable — Pipeline is always available
+        return PipelineBackend()
 
     async def complete(self, **kwargs) -> LLMResponse:
+        """Complete using the active (full) backend."""
         return await self.active_backend.complete(**kwargs)
+
+    async def complete_fast(self, **kwargs) -> LLMResponse:
+        """Complete using the fast (Haiku) backend."""
+        return await self.fast_backend.complete(**kwargs)

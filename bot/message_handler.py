@@ -910,9 +910,14 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     config = load_config()
     llm_config = config.get("llm", {})
 
-    logger.info("v3: initializing LLMRouter...")
-    router = LLMRouter()
-    logger.info("v3: backend=%s", type(router.active_backend).__name__)
+    # Pass MCP server URL so AgentSDKBackend can call tether tools natively.
+    # Falls back gracefully if the MCP server isn't running.
+    mcp_url = llm_config.get("mcp_server_url", "http://localhost:5001/sse")
+    logger.info("v3: initializing LLMRouter (mcp=%s)...", mcp_url)
+    router = LLMRouter(mcp_server_url=mcp_url)
+    logger.info("v3: full=%s fast=%s",
+                type(router.active_backend).__name__,
+                type(router.fast_backend).__name__)
     tools = load_tools()
     tool_schemas = [t.to_api_schema() for t in tools]
     executor = make_tool_executor(tools, db_path=str(db_path))

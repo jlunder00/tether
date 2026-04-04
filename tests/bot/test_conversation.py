@@ -275,7 +275,7 @@ class TestFormatToolResultMessage:
 
 class TestHandleMessage:
     def _make_mock_router(self, response_content="I updated your tasks."):
-        """Returns a mock LLMRouter whose backend returns a fixed response."""
+        """Returns a mock LLMRouter whose backends return a fixed response."""
         from bot.llm import LLMResponse
         fake_resp = LLMResponse(
             content=response_content,
@@ -286,8 +286,11 @@ class TestHandleMessage:
         )
         router = mock.MagicMock()
         router.complete = mock.AsyncMock(return_value=fake_resp)
+        router.complete_fast = mock.AsyncMock(return_value=fake_resp)
         router.active_backend = mock.MagicMock()
         router.active_backend.complete = mock.AsyncMock(return_value=fake_resp)
+        router.fast_backend = mock.MagicMock()
+        router.fast_backend.complete = mock.AsyncMock(return_value=fake_resp)
         return router
 
     def test_returns_string_response(self, tmp_path):
@@ -302,17 +305,9 @@ class TestHandleMessage:
         assert len(result) > 0
 
     def test_uses_quick_path_for_simple_message(self, tmp_path):
-        """Quick path should skip tool loop and return faster."""
+        """Quick path should use complete_fast (Haiku), not the full backend."""
         from bot.conversation import handle_message
         router = self._make_mock_router("Hi there!")
-        # complete should be called exactly once for a quick response
-        call_count = 0
-        original = router.complete
-        async def counting_complete(**kwargs):
-            nonlocal call_count
-            call_count += 1
-            return await original(**kwargs)
-        router.complete = counting_complete
 
         result = asyncio.run(handle_message(
             user_text="hi",
@@ -321,7 +316,9 @@ class TestHandleMessage:
             force_quick=True,
         ))
         assert isinstance(result, str)
-        assert call_count == 1
+        # complete_fast called once; full backend NOT called
+        router.complete_fast.assert_called_once()
+        router.active_backend.complete.assert_not_called()
 
     def test_full_path_invoked_when_forced(self, tmp_path):
         from bot.conversation import handle_message
