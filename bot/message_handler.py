@@ -889,6 +889,15 @@ def _is_v3_enabled() -> bool:
         return False
 
 
+def _is_v2_fallback_enabled() -> bool:
+    """Check if v2 pipeline fallback is enabled when v3 fails. Default: True."""
+    try:
+        config = load_config()
+        return bool(config.get("llm", {}).get("v2_fallback", True))
+    except Exception:
+        return True
+
+
 def _handle_v3(text: str, db_path: Path, anchors: list[dict],
                current_anchor: dict) -> str:
     """Run the v3 SDK conversation loop. Returns the response text."""
@@ -1004,8 +1013,13 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
             return
         except Exception as e:
             import traceback
-            logger.error("v3 path failed (%s: %s), falling back to v2:\n%s",
+            logger.error("v3 path failed (%s: %s):\n%s",
                          type(e).__name__, e, traceback.format_exc())
+            if not _is_v2_fallback_enabled():
+                send_fn(f"[Tether error: {type(e).__name__}: {e}]")
+                insert_conversation_turn(db_path, "user", text)
+                return
+            logger.info("Falling back to v2 pipeline")
             # Fall through to v2 pipeline
 
     # --- v2 pipeline (default / fallback) ---

@@ -30,6 +30,7 @@ _DEFAULTS = {
     },
     "llm": {
         "use_v3": False,
+        "v2_fallback": True,
         "preferred_backend": "anthropic",
         "thinking_enabled": True,
         "thinking_budget": 8000,
@@ -75,8 +76,8 @@ async def put_llm_config(request: Request, _auth=Depends(auth_dependency)):
             for role in _MODEL_ROLES
             if body["models"].get(role)
         }
-    _LLM_KEYS = {"preferred_backend", "thinking_enabled", "thinking_budget",
-                  "beacon_score_threshold", "beacon_cooldown_minutes"}
+    _LLM_KEYS = {"use_v3", "v2_fallback", "preferred_backend", "thinking_enabled",
+                  "thinking_budget", "beacon_score_threshold", "beacon_cooldown_minutes"}
     if "llm" in body:
         config["llm"] = {
             **config.get("llm", {}),

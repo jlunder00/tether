@@ -101,7 +101,7 @@ class PipelineBackend(LLMBackend):
 # ---------------------------------------------------------------------------
 
 _MAX_RETRIES = 3
-_RETRY_BASE_DELAY = 2.0  # seconds, doubles each retry
+_RETRY_BASE_DELAY = 15.0  # seconds — subscription rate limits need real waits
 
 
 class AnthropicBackend(LLMBackend):
@@ -175,11 +175,13 @@ class AnthropicBackend(LLMBackend):
             client = anthropic.AsyncAnthropic(
                 auth_token=oauth_token,
                 default_headers=default_headers,
+                max_retries=0,  # we handle retries ourselves
             )
         else:
             client = anthropic.AsyncAnthropic(
                 api_key=api_key,
                 default_headers=default_headers if default_headers else None,
+                max_retries=0,
             )
 
         kwargs: dict = dict(
