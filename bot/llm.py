@@ -521,27 +521,55 @@ class AgentSDKBackend(LLMBackend):
         if thinking:
             options.thinking = ThinkingConfigEnabled(budget_tokens=thinking_budget)
 
-        logger.info("agent-sdk request: model=%s, mcp=%s, thinking=%s",
-                    model, bool(mcp_servers), thinking)
+        logger.info(
+            "agent-sdk START: model=%s mcp_url=%s mcp_connected=%s thinking=%s",
+            model, self._mcp_server_url or "none", bool(mcp_servers), thinking,
+        )
 
         content_text = ""
         result_msg: ResultMessage | None = None
+        tool_calls_seen: list[str] = []
 
         async for msg in query(prompt=prompt, options=options):
+            msg_type = type(msg).__name__
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
+                    block_type = type(block).__name__
                     if hasattr(block, "text") and block.text:
                         content_text += block.text
+                        logger.debug("agent-sdk text block: %d chars", len(block.text))
+                    elif block_type == "ToolUseBlock" or hasattr(block, "name"):
+                        tool_name = getattr(block, "name", "unknown")
+                        tool_calls_seen.append(tool_name)
+                        logger.info("agent-sdk tool_use: %s input=%s",
+                                    tool_name,
+                                    str(getattr(block, "input", {}))[:120])
+                    elif block_type == "ThinkingBlock":
+                        logger.debug("agent-sdk thinking block: %d chars",
+                                     len(getattr(block, "thinking", "") or ""))
+                    else:
+                        logger.debug("agent-sdk assistant block type=%s", block_type)
             elif isinstance(msg, ResultMessage):
                 result_msg = msg
+            else:
+                logger.debug("agent-sdk msg type=%s", msg_type)
 
         usage = result_msg.usage or {} if result_msg else {}
         stop_reason = (result_msg.stop_reason or "end_turn") if result_msg else "end_turn"
 
-        logger.info("agent-sdk response: turns=%s stop=%s cost=$%.4f",
-                    result_msg.num_turns if result_msg else "?",
-                    stop_reason,
-                    result_msg.total_cost_usd or 0 if result_msg else 0)
+        logger.info(
+            "agent-sdk DONE: turns=%s stop=%s tools_called=%s "
+            "content_chars=%d in_tok=%d out_tok=%d cost=$%.4f",
+            result_msg.num_turns if result_msg else "?",
+            stop_reason,
+            tool_calls_seen or "none",
+            len(content_text),
+            usage.get("input_tokens", 0),
+            usage.get("output_tokens", 0),
+            result_msg.total_cost_usd or 0 if result_msg else 0,
+        )
+        if not tool_calls_seen and not content_text.strip():
+            logger.warning("agent-sdk: empty response — no tools called and no text output")
 
         return LLMResponse(
             content=content_text.strip(),
@@ -613,11 +641,16 @@ class LLMRouter:
         model = cfg.get("model", "claude-sonnet-4-6")
         return vendor, model
 
-    def _build_chain(self, vendor: str) -> list[tuple[LLMBackend, ToolMode]]:
-        """Build the ordered fallback chain for a given vendor."""
+    def _build_chain(self, vendor: str, model: str = "") -> list[tuple[LLMBackend, ToolMode]]:
+        """Build the ordered fallback chain for a given vendor and model.
+
+        Direct SDK (NATIVE) is skipped for Sonnet/Opus on Anthropic — those
+        models 429 on direct API calls due to subscription gating. Haiku works fine.
+        """
         if vendor == "anthropic":
             chain: list[tuple[LLMBackend, ToolMode]] = []
-            if self._anthropic.is_available():
+            native_works = not ("sonnet" in model or "opus" in model)
+            if native_works and self._anthropic.is_available():
                 chain.append((self._anthropic, ToolMode.NATIVE))
             if self._agent_sdk.is_available():
                 chain.append((self._agent_sdk, ToolMode.MCP))
@@ -650,16 +683,20 @@ class LLMRouter:
     ) -> LLMResponse:
         """Complete a request for a named role, trying each backend in the fallback chain."""
         vendor, model = self._resolve_role(role)
-        chain = self._build_chain(vendor)
+        chain = self._build_chain(vendor, model)
         if not chain:
             raise RuntimeError(f"No backend available for vendor={vendor!r}, role={role!r}")
+
+        chain_names = [(type(b).__name__, tm.name) for b, tm in chain]
+        logger.info("router.complete START: role=%s vendor=%s model=%s chain=%s",
+                    role, vendor, model, chain_names)
 
         # Auto-enable thinking for Sonnet-tier models unless caller overrides
         if thinking is None:
             thinking = "sonnet" in model or "opus" in model
 
         last_exc: Exception | None = None
-        for backend, tool_mode in chain:
+        for attempt, (backend, tool_mode) in enumerate(chain, 1):
             effective_tools = tools
             effective_system = system
 
@@ -670,10 +707,14 @@ class LLMRouter:
                 effective_system = _add_structured_output_hint(system, tools)
                 thinking = False  # Pipeline doesn't support extended thinking
 
-            logger.info("router.complete: role=%s vendor=%s model=%s backend=%s tool_mode=%s",
-                        role, vendor, model, type(backend).__name__, tool_mode.name)
+            logger.info(
+                "router.complete attempt %d/%d: role=%s backend=%s tool_mode=%s "
+                "thinking=%s tools=%s",
+                attempt, len(chain), role, type(backend).__name__, tool_mode.name,
+                thinking, [t["name"] for t in (effective_tools or [])],
+            )
             try:
-                return await backend.complete(
+                resp = await backend.complete(
                     messages=messages or [],
                     system=effective_system,
                     model=model,
@@ -682,15 +723,32 @@ class LLMRouter:
                     thinking_budget=thinking_budget,
                     max_tokens=max_tokens,
                 )
+                logger.info(
+                    "router.complete OK: role=%s backend=%s stop=%s "
+                    "in_tok=%d out_tok=%d content_chars=%d",
+                    role, type(backend).__name__, resp.stop_reason,
+                    resp.input_tokens, resp.output_tokens, len(resp.content),
+                )
+                return resp
             except Exception as exc:
                 if _is_retriable(exc):
-                    logger.warning("router: %s failed for role=%s (%s) — trying next backend",
-                                   type(backend).__name__, role, exc)
+                    logger.warning(
+                        "router.complete: attempt %d FAILED (retriable) role=%s "
+                        "backend=%s error=%s — trying next",
+                        attempt, role, type(backend).__name__, exc,
+                    )
                     last_exc = exc
                     continue
+                logger.error(
+                    "router.complete: attempt %d FAILED (non-retriable) role=%s "
+                    "backend=%s error=%s — propagating",
+                    attempt, role, type(backend).__name__, exc,
+                )
                 raise  # Non-retriable errors propagate immediately
 
         # All backends in chain exhausted
+        logger.error("router.complete: all %d backends exhausted for role=%s vendor=%s",
+                     len(chain), role, vendor)
         if last_exc:
             raise last_exc
         raise RuntimeError(f"All backends exhausted for vendor={vendor!r}, role={role!r}")
