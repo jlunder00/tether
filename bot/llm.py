@@ -53,19 +53,22 @@ class ToolMode(Enum):
 
 
 def _add_structured_output_hint(system: str | list[str], tools: list[dict] | None) -> str:
-    """Inject tool-name hints into the system prompt for Pipeline (STRUCTURED) mode.
+    """Augment the system prompt for Pipeline (STRUCTURED) mode.
 
-    The pipeline can't call tools natively, so we tell the model which operations
-    are available and ask it to output structured JSON describing mutations.
+    In this degraded mode the MCP tools are not reachable — the model cannot
+    fetch live plan data, tasks, or context.  We tell it that clearly so it
+    doesn't hallucinate tool calls or output unparseable mutations JSON.
     """
     system_text = system if isinstance(system, str) else "\n".join(system)
     if not tools:
         return system_text
-    tool_names = ", ".join(t.get("name", "") for t in tools)
     hint = (
-        f"\n\nAvailable operations: {tool_names}. "
-        "If you need to make changes, describe them as a JSON list under the key "
-        '"mutations": [{"op": "<operation>", ...}] at the end of your response.'
+        "\n\nIMPORTANT: Live tool access is currently unavailable "
+        "(MCP server unreachable or Agent SDK not installed). "
+        "You cannot fetch or mutate plan data, tasks, milestones, or context entries. "
+        "Do your best with the conversation context you already have. "
+        "If the user's request requires live data, tell them clearly that tools are "
+        "offline and ask them to check the MCP server / Agent SDK setup."
     )
     return system_text + hint
 
