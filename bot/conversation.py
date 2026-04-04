@@ -127,6 +127,8 @@ async def conversation_loop(
     response = None
 
     for round_num in range(max_rounds):
+        logger.info("conversation round %d/%d (%d messages in context)",
+                    round_num + 1, max_rounds, len(current_messages))
         response = await backend.complete(
             messages=current_messages,
             system=system,
@@ -137,6 +139,8 @@ async def conversation_loop(
         )
 
         if response.stop_reason == "end_turn" or not response.tool_calls:
+            logger.info("conversation done after %d rounds (stop=%s)",
+                        round_num + 1, response.stop_reason)
             return response
 
         # Append the assistant's message (with tool_use blocks)

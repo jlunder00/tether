@@ -112,15 +112,25 @@ class AnthropicBackend(LLMBackend):
         self._credentials_path = credentials_path
 
     async def _call_with_retry(self, client, kwargs: dict):
-        """Call client.messages.create with exponential backoff on 429s."""
+        """Call client.messages.create with exponential backoff on 429s.
+        Respects retry-after header from the API if present."""
         import anthropic
         for attempt in range(_MAX_RETRIES):
             try:
                 return await client.messages.create(**kwargs)
-            except anthropic.RateLimitError:
+            except anthropic.RateLimitError as e:
                 if attempt == _MAX_RETRIES - 1:
                     raise
-                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                # Check for retry-after header
+                retry_after = None
+                if hasattr(e, 'response') and e.response is not None:
+                    retry_after = e.response.headers.get("retry-after")
+                    logger.warning("Rate limit response headers: %s",
+                                   dict(e.response.headers))
+                if retry_after:
+                    delay = float(retry_after)
+                else:
+                    delay = _RETRY_BASE_DELAY * (2 ** attempt)
                 logger.warning("Rate limited, retrying in %.1fs (attempt %d/%d)",
                                delay, attempt + 1, _MAX_RETRIES)
                 await asyncio.sleep(delay)
@@ -183,6 +193,11 @@ class AnthropicBackend(LLMBackend):
         if thinking:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
 
+        logger.info("anthropic request: model=%s, messages=%d, tools=%d, thinking=%s, max_tokens=%d",
+                    kwargs.get("model"), len(kwargs.get("messages", [])),
+                    len(kwargs.get("tools", []) or []), bool(kwargs.get("thinking")),
+                    kwargs.get("max_tokens", 0))
+
         response = await self._call_with_retry(client, kwargs)
 
         content_text = ""
@@ -196,6 +211,11 @@ class AnthropicBackend(LLMBackend):
                     name=block.name,
                     input=block.input,
                 ))
+
+        logger.info("anthropic response: in=%d out=%d stop=%s tool_calls=%d (%s)",
+                    response.usage.input_tokens, response.usage.output_tokens,
+                    response.stop_reason, len(tool_calls),
+                    ", ".join(tc.name for tc in tool_calls) or "none")
 
         return LLMResponse(
             content=content_text,

@@ -29,6 +29,7 @@ _DEFAULTS = {
         "quick_classifier": "claude-haiku-4-5-20251001",
     },
     "llm": {
+        "use_v3": False,
         "preferred_backend": "anthropic",
         "thinking_enabled": True,
         "thinking_budget": 8000,
