@@ -503,7 +503,7 @@ class AgentSDKBackend(LLMBackend):
         max_tokens: int = 8096,
     ) -> LLMResponse:
         from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, ResultMessage
-        from claude_agent_sdk.types import McpSSEServerConfig, ThinkingConfigEnabled
+        from claude_agent_sdk.types import McpSSEServerConfig
 
         system_text = system if isinstance(system, str) else "\n".join(system)
         prompt = _format_messages_as_prompt(messages, system)
@@ -521,12 +521,13 @@ class AgentSDKBackend(LLMBackend):
             # Disable all Claude Code native tools — only tether MCP tools are allowed
             disallowed_tools=_CLAUDE_CODE_NATIVE_TOOLS,
         )
-        if thinking:
-            options.thinking = ThinkingConfigEnabled(budget_tokens=thinking_budget)
+        # Do NOT set options.thinking — the bundled claude binary handles extended
+        # thinking internally for Sonnet/Opus. Explicit ThinkingConfigEnabled causes
+        # a KeyError in subprocess_cli._build_command on some SDK versions.
 
         logger.info(
-            "agent-sdk START: model=%s mcp_url=%s mcp_connected=%s thinking=%s",
-            model, self._mcp_server_url or "none", bool(mcp_servers), thinking,
+            "agent-sdk START: model=%s mcp_url=%s mcp_connected=%s",
+            model, self._mcp_server_url or "none", bool(mcp_servers),
         )
 
         content_text = ""
