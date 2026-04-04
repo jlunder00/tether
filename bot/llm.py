@@ -510,7 +510,7 @@ class AgentSDKBackend(LLMBackend):
 
         mcp_servers: dict = {}
         if self._mcp_server_url:
-            mcp_servers["tether"] = McpSSEServerConfig(url=self._mcp_server_url)
+            mcp_servers["tether"] = McpSSEServerConfig(type="sse", url=self._mcp_server_url)
 
         options = ClaudeAgentOptions(
             model=model,
