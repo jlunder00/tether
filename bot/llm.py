@@ -100,12 +100,30 @@ class PipelineBackend(LLMBackend):
 # AnthropicBackend — native tool_use via SDK, OAuth or API key
 # ---------------------------------------------------------------------------
 
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2.0  # seconds, doubles each retry
+
+
 class AnthropicBackend(LLMBackend):
     """Uses the Anthropic Python SDK. Prefers OAuth subscription billing,
     falls back to ANTHROPIC_API_KEY env var."""
 
     def __init__(self, credentials_path: str = _DEFAULT_CREDENTIALS_PATH):
         self._credentials_path = credentials_path
+
+    async def _call_with_retry(self, client, kwargs: dict):
+        """Call client.messages.create with exponential backoff on 429s."""
+        import anthropic
+        for attempt in range(_MAX_RETRIES):
+            try:
+                return await client.messages.create(**kwargs)
+            except anthropic.RateLimitError:
+                if attempt == _MAX_RETRIES - 1:
+                    raise
+                delay = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning("Rate limited, retrying in %.1fs (attempt %d/%d)",
+                               delay, attempt + 1, _MAX_RETRIES)
+                await asyncio.sleep(delay)
 
     def _get_oauth_token(self) -> str | None:
         """Get a valid OAuth token, refreshing if needed."""
@@ -165,7 +183,7 @@ class AnthropicBackend(LLMBackend):
         if thinking:
             kwargs["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
 
-        response = await client.messages.create(**kwargs)
+        response = await self._call_with_retry(client, kwargs)
 
         content_text = ""
         tool_calls = []
