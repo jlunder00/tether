@@ -272,7 +272,6 @@ class TestRunBeacon:
             router=router,
             db_path=seeded_db,
             changes=changes,
-            model="claude-haiku-4-5-20251001",
         ))
         # Only one LLM call (triage), no action phase
         assert router.complete.call_count == 1
@@ -289,7 +288,6 @@ class TestRunBeacon:
             router=router,
             db_path=seeded_db,
             changes=changes,
-            model="claude-haiku-4-5-20251001",
         ))
         # Two calls: triage + action
         assert router.complete.call_count >= 2
@@ -302,7 +300,6 @@ class TestRunBeacon:
             router=router,
             db_path=seeded_db,
             changes=[{"change_type": "task_done", "entity_id": "t1", "score": 2}],
-            model="claude-haiku-4-5-20251001",
         ))
         assert isinstance(result, dict)
         assert "triggered" in result
@@ -317,7 +314,6 @@ class TestRunBeacon:
             router=router,
             db_path=seeded_db,
             changes=[{"change_type": "task_done", "entity_id": "t1", "score": 2}],
-            model="claude-haiku-4-5-20251001",
         ))
         assert isinstance(result, dict)
         assert result.get("triggered") is False
@@ -330,6 +326,5 @@ class TestRunBeacon:
             router=router,
             db_path=seeded_db,
             changes=changes,
-            model="claude-haiku-4-5-20251001",
         ))
         assert router.complete.call_count >= 2

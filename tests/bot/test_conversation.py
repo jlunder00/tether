@@ -93,53 +93,74 @@ class TestBuildSystemPrompt:
 # conversation_loop
 # ---------------------------------------------------------------------------
 
+def _make_mock_router_for_loop(response_content="Done!", tool_calls=None, stop_reason="end_turn"):
+    """Build a mock LLMRouter for conversation_loop tests."""
+    from bot.llm import LLMResponse
+    resp = LLMResponse(
+        content=response_content,
+        tool_calls=tool_calls or [],
+        stop_reason=stop_reason,
+        input_tokens=10,
+        output_tokens=5,
+    )
+    router = mock.MagicMock()
+    router.complete = mock.AsyncMock(return_value=resp)
+    return router
+
+
 class TestConversationLoop:
     def test_returns_content_on_end_turn(self):
         from bot.conversation import conversation_loop
-
-        async def fake_complete(**kwargs):
-            return make_llm_response(content="Done!", stop_reason="end_turn")
-
-        backend = mock.MagicMock()
-        backend.complete = fake_complete
-
+        router = _make_mock_router_for_loop("Done!")
         result = asyncio.run(conversation_loop(
-            backend=backend,
+            router=router,
+            role="main_agent",
             messages=[{"role": "user", "content": "hello"}],
             system="sys",
-            model="claude-haiku-4-5-20251001",
             tools=[],
             tool_executor=None,
         ))
         assert result.content == "Done!"
+        router.complete.assert_called_once()
+
+    def test_loop_calls_router_complete_with_role(self):
+        """conversation_loop must call router.complete(role=...) not backend.complete(model=...)."""
+        from bot.conversation import conversation_loop
+        router = _make_mock_router_for_loop("ok")
+        asyncio.run(conversation_loop(
+            router=router,
+            role="subagent",
+            messages=[{"role": "user", "content": "hi"}],
+            system="sys",
+            tools=[],
+            tool_executor=None,
+        ))
+        call_kwargs = router.complete.call_args[1]
+        assert call_kwargs.get("role") == "subagent"
+        assert "model" not in call_kwargs  # model resolved inside router
 
     def test_executes_tool_and_continues(self):
         from bot.conversation import conversation_loop
+        from bot.llm import LLMResponse
 
         call_sequence = [
-            make_llm_response(
-                content="",
-                tool_calls=[make_tool_call("get_plan", {})],
-                stop_reason="tool_use",
-            ),
+            make_llm_response(content="", tool_calls=[make_tool_call("get_plan", {})],
+                              stop_reason="tool_use"),
             make_llm_response(content="Plan fetched!", stop_reason="end_turn"),
         ]
         responses = iter(call_sequence)
 
-        async def fake_complete(**kwargs):
-            return next(responses)
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=lambda **kw: responses.__next__())
 
         async def fake_executor(tool_call):
             return {"ok": True, "content": "[ ] task one"}
 
-        backend = mock.MagicMock()
-        backend.complete = fake_complete
-
         result = asyncio.run(conversation_loop(
-            backend=backend,
+            router=router,
+            role="main_agent",
             messages=[{"role": "user", "content": "what's my plan?"}],
             system="sys",
-            model="claude-haiku-4-5-20251001",
             tools=[{"name": "get_plan", "description": "get plan", "input_schema": {}}],
             tool_executor=fake_executor,
         ))
@@ -147,99 +168,69 @@ class TestConversationLoop:
 
     def test_tool_result_appended_to_messages(self):
         from bot.conversation import conversation_loop
-
         captured_messages = []
-
         call_sequence = [
-            make_llm_response(
-                content="",
-                tool_calls=[make_tool_call("get_plan", {}, id="c1")],
-                stop_reason="tool_use",
-            ),
+            make_llm_response(content="", tool_calls=[make_tool_call("get_plan", {}, id="c1")],
+                              stop_reason="tool_use"),
             make_llm_response(content="done", stop_reason="end_turn"),
         ]
         responses = iter(call_sequence)
 
-        async def fake_complete(**kwargs):
+        async def capture_and_return(**kwargs):
             captured_messages.append(kwargs["messages"])
             return next(responses)
 
-        async def fake_executor(tc):
-            return {"ok": True, "content": "plan data"}
-
-        backend = mock.MagicMock()
-        backend.complete = fake_complete
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=capture_and_return)
 
         asyncio.run(conversation_loop(
-            backend=backend,
+            router=router,
+            role="main_agent",
             messages=[{"role": "user", "content": "hi"}],
             system="sys",
-            model="claude-haiku-4-5-20251001",
             tools=[],
-            tool_executor=fake_executor,
+            tool_executor=lambda tc: asyncio.coroutine(lambda: {"ok": True, "content": "plan data"})(),
         ))
-
-        # Second call should have tool result in messages
         second_call_msgs = captured_messages[1]
         roles = [m["role"] for m in second_call_msgs]
-        assert "tool" in roles or "user" in roles  # tool result added
+        assert "tool" in roles or "user" in roles
 
     def test_stops_at_max_rounds(self):
         from bot.conversation import conversation_loop
-
-        async def fake_complete(**kwargs):
-            return make_llm_response(
-                content="",
-                tool_calls=[make_tool_call("get_plan", {})],
-                stop_reason="tool_use",
-            )
-
-        async def fake_executor(tc):
-            return {"ok": True, "content": "data"}
-
-        backend = mock.MagicMock()
-        backend.complete = fake_complete
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(return_value=make_llm_response(
+            content="", tool_calls=[make_tool_call("get_plan", {})], stop_reason="tool_use"))
 
         result = asyncio.run(conversation_loop(
-            backend=backend,
+            router=router,
+            role="main_agent",
             messages=[{"role": "user", "content": "hi"}],
             system="sys",
-            model="claude-haiku-4-5-20251001",
             tools=[],
-            tool_executor=fake_executor,
+            tool_executor=lambda tc: asyncio.coroutine(lambda: {"ok": True, "content": "data"})(),
             max_rounds=3,
         ))
-        # Should return whatever content exists rather than looping forever
         assert isinstance(result.content, str)
 
     def test_handles_failed_tool_gracefully(self):
         from bot.conversation import conversation_loop
-
         call_sequence = [
-            make_llm_response(
-                content="",
-                tool_calls=[make_tool_call("bad_tool", {})],
-                stop_reason="tool_use",
-            ),
+            make_llm_response(content="", tool_calls=[make_tool_call("bad_tool", {})],
+                              stop_reason="tool_use"),
             make_llm_response(content="recovered", stop_reason="end_turn"),
         ]
         responses = iter(call_sequence)
-
-        async def fake_complete(**kwargs):
-            return next(responses)
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=lambda **kw: responses.__next__())
 
         async def failing_executor(tc):
             raise RuntimeError("tool exploded")
 
-        backend = mock.MagicMock()
-        backend.complete = fake_complete
-
-        # Should not propagate the tool error — loop continues with error result
         result = asyncio.run(conversation_loop(
-            backend=backend,
+            router=router,
+            role="main_agent",
             messages=[{"role": "user", "content": "hi"}],
             system="sys",
-            model="claude-haiku-4-5-20251001",
             tools=[],
             tool_executor=failing_executor,
         ))
@@ -304,8 +295,8 @@ class TestHandleMessage:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_uses_quick_path_for_simple_message(self, tmp_path):
-        """Quick path should use complete_fast (Haiku), not the full backend."""
+    def test_uses_quick_path_with_classifier_role(self, tmp_path):
+        """Quick path calls router.complete(role='classifier')."""
         from bot.conversation import handle_message
         router = self._make_mock_router("Hi there!")
 
@@ -316,11 +307,12 @@ class TestHandleMessage:
             force_quick=True,
         ))
         assert isinstance(result, str)
-        # complete_fast called once; full backend NOT called
-        router.complete_fast.assert_called_once()
+        call_kwargs = router.complete.call_args[1]
+        assert call_kwargs.get("role") == "classifier"
         router.active_backend.complete.assert_not_called()
 
-    def test_full_path_invoked_when_forced(self, tmp_path):
+    def test_full_path_uses_main_agent_role(self, tmp_path):
+        """Full path calls router.complete(role='main_agent') via conversation_loop."""
         from bot.conversation import handle_message
         router = self._make_mock_router("Processed.")
         result = asyncio.run(handle_message(
@@ -330,3 +322,19 @@ class TestHandleMessage:
             force_full=True,
         ))
         assert isinstance(result, str)
+        call_kwargs = router.complete.call_args[1]
+        assert call_kwargs.get("role") == "main_agent"
+
+    def test_custom_roles_forwarded(self, tmp_path):
+        """role_quick and role_full are forwarded to router.complete()."""
+        from bot.conversation import handle_message
+        router = self._make_mock_router("ok")
+        asyncio.run(handle_message(
+            user_text="hi",
+            router=router,
+            db_path=str(tmp_path / "test.db"),
+            force_full=True,
+            role_full="subagent",
+        ))
+        call_kwargs = router.complete.call_args[1]
+        assert call_kwargs.get("role") == "subagent"

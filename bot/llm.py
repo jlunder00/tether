@@ -1,8 +1,17 @@
 """LLM abstraction layer for Tether v3.
 
 Provides a vendor-agnostic interface for LLM completions.
-LLMRouter selects the best available backend at startup with
-PipelineBackend (claude -p) always available as fallback.
+LLMRouter.complete(role=...) resolves the role to a (vendor, model) pair,
+builds a fallback chain, and tries each backend in order.
+
+Fallback chains:
+  Anthropic: AnthropicBackend (NATIVE) → AgentSDKBackend (MCP) → PipelineBackend (STRUCTURED)
+  Other vendors: direct backend only — failures propagate
+
+ToolMode captures what each tier can do:
+  NATIVE    — tool_calls returned in LLMResponse; callers run tool loop
+  MCP       — claude binary calls tether MCP tools internally; tool_calls=[] always
+  STRUCTURED — no tools; tool names injected into system prompt for structured output
 """
 import asyncio
 import os
@@ -12,10 +21,64 @@ import subprocess
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum, auto
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
+
+# Default role → (vendor, model) assignments. Overridable via roles_config in LLMRouter.
+_DEFAULT_ROLES: dict[str, dict[str, str]] = {
+    "main_agent":    {"vendor": "anthropic", "model": "claude-sonnet-4-6"},
+    "classifier":    {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "subagent":      {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "memory":        {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "summarizer":    {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "beacon_triage": {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "beacon_action": {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+    "dream":         {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+}
+
+# Claude Code native tools to disable in AgentSDKBackend (only tether MCP tools should be usable).
+_CLAUDE_CODE_NATIVE_TOOLS = [
+    "bash", "computer", "read", "write", "edit", "glob", "grep",
+    "ls", "agent", "todo_write", "web_fetch", "web_search",
+]
+
+
+class ToolMode(Enum):
+    NATIVE     = auto()  # Direct SDK — tool_calls in LLMResponse; caller runs the loop
+    MCP        = auto()  # Agent SDK — tools via MCP internally; tool_calls=[] always
+    STRUCTURED = auto()  # Pipeline — no tools; tool names injected into system prompt
+
+
+def _add_structured_output_hint(system: str | list[str], tools: list[dict] | None) -> str:
+    """Inject tool-name hints into the system prompt for Pipeline (STRUCTURED) mode.
+
+    The pipeline can't call tools natively, so we tell the model which operations
+    are available and ask it to output structured JSON describing mutations.
+    """
+    system_text = system if isinstance(system, str) else "\n".join(system)
+    if not tools:
+        return system_text
+    tool_names = ", ".join(t.get("name", "") for t in tools)
+    hint = (
+        f"\n\nAvailable operations: {tool_names}. "
+        "If you need to make changes, describe them as a JSON list under the key "
+        '"mutations": [{"op": "<operation>", ...}] at the end of your response.'
+    )
+    return system_text + hint
+
+
+def _is_retriable(exc: Exception) -> bool:
+    """Return True for errors that warrant trying the next backend in the chain."""
+    try:
+        import anthropic
+        if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError)):
+            return True
+    except ImportError:
+        pass
+    return False
 
 
 @dataclass
@@ -449,9 +512,11 @@ class AgentSDKBackend(LLMBackend):
         options = ClaudeAgentOptions(
             model=model,
             system_prompt=system_text,
-            max_turns=12,  # allow multi-turn tool use within the agent
+            max_turns=12,
             mcp_servers=mcp_servers,
             permission_mode="bypassPermissions",
+            # Disable all Claude Code native tools — only tether MCP tools are allowed
+            disallowed_tools=_CLAUDE_CODE_NATIVE_TOOLS,
         )
         if thinking:
             options.thinking = ThinkingConfigEnabled(budget_tokens=thinking_budget)
@@ -488,54 +553,148 @@ class AgentSDKBackend(LLMBackend):
 
 
 # ---------------------------------------------------------------------------
-# LLMRouter — selects best available backend
+# LLMRouter — role-based routing with per-vendor fallback chains
 # ---------------------------------------------------------------------------
 
 class LLMRouter:
-    """Manages two backends:
-    - active_backend: full reasoning (AgentSDKBackend → PipelineBackend)
-    - fast_backend: quick/cheap calls (AnthropicBackend Haiku → PipelineBackend)
+    """Routes LLM calls by role → (vendor, model) → fallback chain.
 
-    active_backend is used for the main conversation loop (Sonnet, thinking).
-    fast_backend is used for quick classifier and tool-light responses (Haiku).
+    Fallback chains:
+      anthropic: AnthropicBackend (NATIVE) → AgentSDKBackend (MCP) → PipelineBackend (STRUCTURED)
+      openai / openrouter / bedrock: direct SDK only — failures propagate
+
+    Usage:
+      response = await router.complete(role="classifier", messages=[...], system="...")
+      response = await router.complete(role="main_agent", messages=[...], system="...", tools=[...])
+
+    Backward-compat attributes:
+      router.active_backend — AgentSDKBackend or PipelineBackend (full reasoning)
+      router.fast_backend   — AnthropicBackend or PipelineBackend (cheap calls)
     """
 
     def __init__(
         self,
         credentials_path: str = _DEFAULT_CREDENTIALS_PATH,
         mcp_server_url: str | None = None,
+        roles_config: dict | None = None,
     ):
-        self.active_backend = self._select_full(mcp_server_url)
-        self.fast_backend = self._select_fast(credentials_path)
+        # Pre-build all vendor backends (cheap — no network calls)
+        self._anthropic = AnthropicBackend(credentials_path=credentials_path)
+        self._agent_sdk = AgentSDKBackend(mcp_server_url=mcp_server_url)
+        self._openai = OpenAIBackend()
+        self._openrouter = OpenRouterBackend()
+        self._bedrock = AWSBedrockBackend()
+        self._pipeline = PipelineBackend()
 
-    def _select_full(self, mcp_server_url: str | None) -> LLMBackend:
-        """Full path: prefer AgentSDKBackend (Sonnet), fall back to Pipeline."""
-        agent = AgentSDKBackend(mcp_server_url=mcp_server_url)
-        if agent.is_available():
-            logger.info("LLMRouter full backend: AgentSDKBackend (mcp=%s)", bool(mcp_server_url))
-            return agent
-        logger.info("LLMRouter full backend: PipelineBackend (agent SDK unavailable)")
-        return PipelineBackend()
+        # Merge caller-supplied roles over defaults
+        self._roles: dict[str, dict[str, str]] = {**_DEFAULT_ROLES, **(roles_config or {})}
 
-    def _select_fast(self, credentials_path: str) -> LLMBackend:
-        """Fast path: prefer AnthropicBackend (Haiku direct), fall back to Pipeline."""
-        candidates: list[LLMBackend] = [
-            AnthropicBackend(credentials_path=credentials_path),
-            OpenAIBackend(),
-            OpenRouterBackend(),
-            AWSBedrockBackend(),
-            PipelineBackend(),
-        ]
-        for backend in candidates:
-            if backend.is_available():
-                logger.info("LLMRouter fast backend: %s", type(backend).__name__)
-                return backend
-        return PipelineBackend()
+        # Backward-compat attributes
+        self.active_backend: LLMBackend = (
+            self._agent_sdk if self._agent_sdk.is_available() else self._pipeline
+        )
+        self.fast_backend: LLMBackend = (
+            self._anthropic if self._anthropic.is_available() else self._pipeline
+        )
 
-    async def complete(self, **kwargs) -> LLMResponse:
-        """Complete using the active (full) backend."""
-        return await self.active_backend.complete(**kwargs)
+        logger.info("LLMRouter ready: active=%s fast=%s roles=%d",
+                    type(self.active_backend).__name__,
+                    type(self.fast_backend).__name__,
+                    len(self._roles))
 
-    async def complete_fast(self, **kwargs) -> LLMResponse:
-        """Complete using the fast (Haiku) backend."""
-        return await self.fast_backend.complete(**kwargs)
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_role(self, role: str) -> tuple[str, str]:
+        """Return (vendor, model) for a role. Falls back to main_agent defaults."""
+        cfg = self._roles.get(role) or self._roles.get("main_agent") or {}
+        vendor = cfg.get("vendor", "anthropic")
+        model = cfg.get("model", "claude-sonnet-4-6")
+        return vendor, model
+
+    def _build_chain(self, vendor: str) -> list[tuple[LLMBackend, ToolMode]]:
+        """Build the ordered fallback chain for a given vendor."""
+        if vendor == "anthropic":
+            chain: list[tuple[LLMBackend, ToolMode]] = []
+            if self._anthropic.is_available():
+                chain.append((self._anthropic, ToolMode.NATIVE))
+            if self._agent_sdk.is_available():
+                chain.append((self._agent_sdk, ToolMode.MCP))
+            chain.append((self._pipeline, ToolMode.STRUCTURED))
+            return chain
+        elif vendor == "openai":
+            return [(self._openai, ToolMode.NATIVE)] if self._openai.is_available() else []
+        elif vendor == "openrouter":
+            return [(self._openrouter, ToolMode.NATIVE)] if self._openrouter.is_available() else []
+        elif vendor == "bedrock":
+            return [(self._bedrock, ToolMode.NATIVE)] if self._bedrock.is_available() else []
+        # Unknown vendor — fall through to pipeline
+        return [(self._pipeline, ToolMode.STRUCTURED)]
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self,
+        role: str = "main_agent",
+        messages: list[dict] | None = None,
+        system: str | list[str] = "",
+        tools: list[dict] | None = None,
+        thinking: bool | None = None,
+        thinking_budget: int = 8000,
+        max_tokens: int = 8096,
+        # Backward-compat: accept but ignore bare model/kwargs from old callers
+        **_ignored,
+    ) -> LLMResponse:
+        """Complete a request for a named role, trying each backend in the fallback chain."""
+        vendor, model = self._resolve_role(role)
+        chain = self._build_chain(vendor)
+        if not chain:
+            raise RuntimeError(f"No backend available for vendor={vendor!r}, role={role!r}")
+
+        # Auto-enable thinking for Sonnet-tier models unless caller overrides
+        if thinking is None:
+            thinking = "sonnet" in model or "opus" in model
+
+        last_exc: Exception | None = None
+        for backend, tool_mode in chain:
+            effective_tools = tools
+            effective_system = system
+
+            if tool_mode == ToolMode.MCP:
+                effective_tools = None  # Agent SDK calls tools via MCP internally
+            elif tool_mode == ToolMode.STRUCTURED:
+                effective_tools = None
+                effective_system = _add_structured_output_hint(system, tools)
+                thinking = False  # Pipeline doesn't support extended thinking
+
+            logger.info("router.complete: role=%s vendor=%s model=%s backend=%s tool_mode=%s",
+                        role, vendor, model, type(backend).__name__, tool_mode.name)
+            try:
+                return await backend.complete(
+                    messages=messages or [],
+                    system=effective_system,
+                    model=model,
+                    tools=effective_tools,
+                    thinking=thinking,
+                    thinking_budget=thinking_budget,
+                    max_tokens=max_tokens,
+                )
+            except Exception as exc:
+                if _is_retriable(exc):
+                    logger.warning("router: %s failed for role=%s (%s) — trying next backend",
+                                   type(backend).__name__, role, exc)
+                    last_exc = exc
+                    continue
+                raise  # Non-retriable errors propagate immediately
+
+        # All backends in chain exhausted
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"All backends exhausted for vendor={vendor!r}, role={role!r}")
+
+    async def complete_fast(self, role: str = "classifier", **kwargs) -> LLMResponse:
+        """Convenience: complete with fast backend for simple/cheap calls."""
+        return await self.complete(role=role, **kwargs)

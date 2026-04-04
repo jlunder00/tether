@@ -12,7 +12,7 @@ import logging
 from datetime import date
 from typing import Callable, Awaitable
 
-from bot.llm import LLMBackend, LLMResponse, LLMRouter, ToolCall
+from bot.llm import LLMResponse, LLMRouter, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -102,20 +102,18 @@ def format_tool_result_message(
 # ---------------------------------------------------------------------------
 
 async def conversation_loop(
-    backend: LLMBackend,
+    router: LLMRouter,
+    role: str,
     messages: list[dict],
     system: str,
-    model: str,
     tools: list[dict],
     tool_executor: Callable[[ToolCall], Awaitable[dict]] | None,
     max_rounds: int = MAX_CONVERSATION_ROUNDS,
-    thinking: bool = False,
-    thinking_budget: int = 8000,
 ) -> LLMResponse:
     """Run the tool-use conversation loop until end_turn or max_rounds.
 
     Each round:
-      1. Call the LLM backend with current messages
+      1. Call router.complete(role=...) with current messages
       2. If stop_reason == "end_turn": return the response
       3. If stop_reason == "tool_use": execute each tool call,
          append assistant message + tool results, loop
@@ -129,13 +127,11 @@ async def conversation_loop(
     for round_num in range(max_rounds):
         logger.info("conversation round %d/%d (%d messages in context)",
                     round_num + 1, max_rounds, len(current_messages))
-        response = await backend.complete(
+        response = await router.complete(
+            role=role,
             messages=current_messages,
             system=system,
-            model=model,
             tools=tools if tools else None,
-            thinking=thinking,
-            thinking_budget=thinking_budget,
         )
 
         if response.stop_reason == "end_turn" or not response.tool_calls:
@@ -194,8 +190,8 @@ async def handle_message(
     db_path: str,
     force_quick: bool = False,
     force_full: bool = False,
-    model_quick: str = "claude-haiku-4-5-20251001",
-    model_full: str = "claude-sonnet-4-6",
+    role_quick: str = "classifier",
+    role_full: str = "main_agent",
     tools: list[dict] | None = None,
     tool_executor: Callable[[ToolCall], Awaitable[dict]] | None = None,
     anchor_name: str = "General",
@@ -207,8 +203,8 @@ async def handle_message(
 ) -> str:
     """Route an incoming message through quick or full conversation path.
 
-    Quick path: single complete() call, no tools, returns text directly.
-    Full path: conversation_loop() with tools + extended thinking.
+    Quick path: single router.complete(role=role_quick) call, no tools.
+    Full path: conversation_loop() with role=role_full and tools.
 
     Returns the final text response to send to the user.
     """
@@ -226,28 +222,23 @@ async def handle_message(
     use_quick = force_quick or (not force_full and _classify_quick(user_text))
 
     if use_quick:
-        # Quick path: use fast_backend (Haiku direct) for cheap, low-latency responses
-        response = await router.complete_fast(
+        response = await router.complete(
+            role=role_quick,
             messages=history,
             system=system,
-            model=model_quick,
             tools=None,
-            thinking=False,
         )
         return response.content
 
-    # Full path — use active_backend (AgentSDK for Sonnet, or Pipeline fallback).
-    # AgentSDKBackend handles tool use internally via MCP; conversation_loop
-    # exits after one round since tool_calls is always [] from that backend.
-    # If active_backend is AnthropicBackend (API key path), the loop runs normally.
+    # Full path — router resolves role to (vendor, model) and picks the best
+    # available backend in the fallback chain (NATIVE → MCP → STRUCTURED).
     response = await conversation_loop(
-        backend=router.active_backend,
+        router=router,
+        role=role_full,
         messages=history,
         system=system,
-        model=model_full,
         tools=tools or [],
         tool_executor=tool_executor,
-        thinking=True,
     )
     return response.content
 

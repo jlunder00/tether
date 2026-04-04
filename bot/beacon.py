@@ -94,7 +94,8 @@ async def run_beacon(
     router,
     db_path: str,
     changes: list[dict],
-    model: str = "claude-haiku-4-5-20251001",
+    role_triage: str = "beacon_triage",
+    role_action: str = "beacon_action",
     tools: list | None = None,
     tool_executor=None,
     notify=None,
@@ -131,10 +132,9 @@ async def run_beacon(
             f"Answer YES or NO and one sentence why."
         )
         triage_response = await router.complete(
+            role=role_triage,
             messages=[{"role": "user", "content": triage_prompt}],
             system="You are a background monitoring assistant. Be conservative.",
-            model=model,
-            thinking=False,
         )
 
         triage_text = triage_response.content.strip()
@@ -167,21 +167,19 @@ async def run_beacon(
         if tools and tool_executor:
             from bot.conversation import conversation_loop
             action_response = await conversation_loop(
-                backend=router.active_backend,
+                router=router,
+                role=role_action,
                 messages=[{"role": "user", "content": action_prompt}],
                 system=action_system,
-                model=model,
                 tools=tools,
                 tool_executor=tool_executor,
                 max_rounds=_MAX_BEACON_ACTIONS + 1,
-                thinking=False,
             )
         else:
             action_response = await router.complete(
+                role=role_action,
                 messages=[{"role": "user", "content": action_prompt}],
                 system=action_system,
-                model=model,
-                thinking=False,
             )
 
         message = action_response.content.strip() or None

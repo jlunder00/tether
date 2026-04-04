@@ -106,7 +106,7 @@ class TestUpdateSessionNotes:
             router=router,
             db_path=seeded_db,
             notes_path=notes_path,
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         content = Path(notes_path).read_text()
@@ -120,7 +120,7 @@ class TestUpdateSessionNotes:
             router=router,
             db_path=seeded_db,
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         assert router.complete.called
@@ -139,7 +139,7 @@ class TestUpdateSessionNotes:
             router=router,
             db_path=seeded_db,
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
 
@@ -158,7 +158,7 @@ class TestCommitAnchorTransition:
             db_path=seeded_db,
             anchor_id="morning",
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         entries = {e["subject"]: e for e in get_context_entries(seeded_db)}
@@ -178,7 +178,7 @@ class TestCommitAnchorTransition:
             db_path=seeded_db,
             anchor_id="morning",
             notes_path=notes_path,
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         # Notes should be reset/updated for the new anchor
@@ -194,7 +194,7 @@ class TestCommitAnchorTransition:
             db_path=db_path,
             anchor_id="nonexistent",
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
 
@@ -219,7 +219,7 @@ class TestCommitSignificantMutations:
             db_path=seeded_db,
             changes=changes,
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         # LLM should have been called
@@ -236,7 +236,7 @@ class TestCommitSignificantMutations:
             db_path=seeded_db,
             changes=changes,
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         # With only 1 change, should skip the LLM call
@@ -256,7 +256,7 @@ class TestCommitSignificantMutations:
             db_path=seeded_db,
             changes=changes,
             notes_path=str(tmp_path / "notes.md"),
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
             threshold=2,
         ))
 
@@ -313,7 +313,7 @@ class TestCompactConversation:
         result = asyncio.run(compact_conversation(
             messages=messages,
             router=router,
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         assert len(result) < len(messages)
@@ -328,7 +328,7 @@ class TestCompactConversation:
         result = asyncio.run(compact_conversation(
             messages=messages,
             router=router,
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         all_content = " ".join(
@@ -346,7 +346,7 @@ class TestCompactConversation:
         result = asyncio.run(compact_conversation(
             messages=messages,
             router=router,
-            model="claude-haiku-4-5-20251001",
+            role="summarizer",
         ))
 
         # Fallback: return original messages unchanged
