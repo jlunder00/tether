@@ -530,29 +530,37 @@ class AgentSDKBackend(LLMBackend):
         result_msg: ResultMessage | None = None
         tool_calls_seen: list[str] = []
 
-        async for msg in query(prompt=prompt, options=options):
-            msg_type = type(msg).__name__
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    block_type = type(block).__name__
-                    if hasattr(block, "text") and block.text:
-                        content_text += block.text
-                        logger.debug("agent-sdk text block: %d chars", len(block.text))
-                    elif block_type == "ToolUseBlock" or hasattr(block, "name"):
-                        tool_name = getattr(block, "name", "unknown")
-                        tool_calls_seen.append(tool_name)
-                        logger.info("agent-sdk tool_use: %s input=%s",
-                                    tool_name,
-                                    str(getattr(block, "input", {}))[:120])
-                    elif block_type == "ThinkingBlock":
-                        logger.debug("agent-sdk thinking block: %d chars",
-                                     len(getattr(block, "thinking", "") or ""))
-                    else:
-                        logger.debug("agent-sdk assistant block type=%s", block_type)
-            elif isinstance(msg, ResultMessage):
-                result_msg = msg
-            else:
-                logger.debug("agent-sdk msg type=%s", msg_type)
+        try:
+            async for msg in query(prompt=prompt, options=options):
+                msg_type = type(msg).__name__
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        block_type = type(block).__name__
+                        if hasattr(block, "text") and block.text:
+                            content_text += block.text
+                            logger.debug("agent-sdk text block: %d chars", len(block.text))
+                        elif block_type == "ToolUseBlock" or hasattr(block, "name"):
+                            tool_name = getattr(block, "name", "unknown")
+                            tool_calls_seen.append(tool_name)
+                            logger.info("agent-sdk tool_use: %s input=%s",
+                                        tool_name,
+                                        str(getattr(block, "input", {}))[:120])
+                        elif block_type == "ThinkingBlock":
+                            logger.debug("agent-sdk thinking block: %d chars",
+                                         len(getattr(block, "thinking", "") or ""))
+                        else:
+                            logger.debug("agent-sdk assistant block type=%s", block_type)
+                elif isinstance(msg, ResultMessage):
+                    result_msg = msg
+                else:
+                    logger.debug("agent-sdk msg type=%s", msg_type)
+        except Exception as exc:
+            import traceback
+            logger.error(
+                "agent-sdk FAILED: model=%s mcp_url=%s error=%s\n%s",
+                model, self._mcp_server_url or "none", exc, traceback.format_exc(),
+            )
+            raise
 
         usage = result_msg.usage or {} if result_msg else {}
         stop_reason = (result_msg.stop_reason or "end_turn") if result_msg else "end_turn"

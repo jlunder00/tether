@@ -1021,7 +1021,8 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
                 send_fn(f"[Tether error: {type(e).__name__}: {e}]")
                 insert_conversation_turn(db_path, "user", text)
                 return
-            logger.info("Falling back to v2 pipeline")
+            logger.warning("v3 FAILED — falling back to v2 pipeline (error: %s: %s)",
+                           type(e).__name__, e)
             # Fall through to v2 pipeline
 
     # --- v2 pipeline (default / fallback) ---
