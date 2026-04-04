@@ -39,10 +39,12 @@ _DEFAULT_ROLES: dict[str, dict[str, str]] = {
     "dream":         {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
 }
 
-# Claude Code native tools to disable in AgentSDKBackend (only tether MCP tools should be usable).
-_CLAUDE_CODE_NATIVE_TOOLS = [
-    "bash", "computer", "read", "write", "edit", "glob", "grep",
-    "ls", "agent", "todo_write", "web_fetch", "web_search",
+# Tools the agent SDK is allowed to use. Whitelist approach — anything not listed
+# is blocked. ToolSearch is required because MCP tools are "deferred" in Claude Code
+# and their schemas must be fetched before calling them.
+_AGENT_SDK_ALLOWED_TOOLS = [
+    "ToolSearch",       # Required: fetches deferred MCP tool schemas
+    "mcp__tether__*",   # All tether MCP tools (wildcard)
 ]
 
 
@@ -524,8 +526,8 @@ class AgentSDKBackend(LLMBackend):
             max_turns=12,
             mcp_servers=mcp_servers,
             permission_mode="bypassPermissions",
-            # Disable all Claude Code native tools — only tether MCP tools are allowed
-            disallowed_tools=_CLAUDE_CODE_NATIVE_TOOLS,
+            # Whitelist: only tether MCP tools + ToolSearch (for schema discovery)
+            allowed_tools=_AGENT_SDK_ALLOWED_TOOLS,
         )
         # Do NOT set options.thinking — the bundled claude binary handles extended
         # thinking internally for Sonnet/Opus. Explicit ThinkingConfigEnabled causes

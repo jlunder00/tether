@@ -217,26 +217,30 @@ class TestAgentSDKBackendConfig:
         assert mcp_servers["tether"]["type"] == "sse"
         assert mcp_servers["tether"]["url"] == "http://localhost:5001/sse"
 
-    def test_disallowed_tools_list(self):
-        """Verify the CLAUDE_CODE_NATIVE_TOOLS list is non-empty and reasonable."""
-        from bot.llm import _CLAUDE_CODE_NATIVE_TOOLS
+    def test_allowed_tools_list(self):
+        """Verify the allowed tools whitelist contains MCP tools + ToolSearch."""
+        from bot.llm import _AGENT_SDK_ALLOWED_TOOLS
 
-        assert len(_CLAUDE_CODE_NATIVE_TOOLS) > 5
-        assert "bash" in _CLAUDE_CODE_NATIVE_TOOLS
-        assert "read" in _CLAUDE_CODE_NATIVE_TOOLS
-        assert "edit" in _CLAUDE_CODE_NATIVE_TOOLS
+        assert "ToolSearch" in _AGENT_SDK_ALLOWED_TOOLS
+        assert any("mcp__tether__" in t for t in _AGENT_SDK_ALLOWED_TOOLS)
 
     def test_is_available_with_mcp_url(self):
-        """AgentSDKBackend.is_available() returns True when SDK is installed."""
+        """AgentSDKBackend.is_available() returns True when SDK + CLI are present."""
+        import shutil
         from bot.llm import AgentSDKBackend
 
+        if not shutil.which("claude"):
+            pytest.skip("claude CLI not installed")
         backend = AgentSDKBackend(mcp_server_url="http://localhost:5001/sse")
         assert backend.is_available() is True
 
     def test_is_available_without_mcp_url(self):
         """AgentSDKBackend.is_available() returns True even without MCP URL."""
+        import shutil
         from bot.llm import AgentSDKBackend
 
+        if not shutil.which("claude"):
+            pytest.skip("claude CLI not installed")
         backend = AgentSDKBackend(mcp_server_url=None)
         assert backend.is_available() is True
 
@@ -253,7 +257,7 @@ class TestFullRoundTrip:
         from claude_agent_sdk import ClaudeAgentOptions
         from claude_agent_sdk.types import McpSSEServerConfig
         from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
-        from bot.llm import _CLAUDE_CODE_NATIVE_TOOLS
+        from bot.llm import _AGENT_SDK_ALLOWED_TOOLS
 
         # Reproduce exactly what AgentSDKBackend.complete() builds
         mcp_url = "http://localhost:5001/sse"
@@ -266,7 +270,7 @@ class TestFullRoundTrip:
             max_turns=12,
             mcp_servers=mcp_servers,
             permission_mode="bypassPermissions",
-            disallowed_tools=_CLAUDE_CODE_NATIVE_TOOLS,
+            allowed_tools=_AGENT_SDK_ALLOWED_TOOLS,
         )
 
         transport = SubprocessCLITransport(prompt=iter([]), options=options)
@@ -285,11 +289,12 @@ class TestFullRoundTrip:
             }
         }
 
-        # Verify disallowed tools
-        idx = cmd.index("--disallowedTools")
+        # Verify allowed tools whitelist
+        idx = cmd.index("--allowedTools")
         tools = cmd[idx + 1].split(",")
-        assert "bash" in tools
-        assert "read" in tools
+        assert "ToolSearch" in tools
+        assert "mcp__tether__*" in tools
+        assert "--disallowedTools" not in cmd  # whitelist, not blocklist
 
         # Verify permission mode
         idx = cmd.index("--permission-mode")
