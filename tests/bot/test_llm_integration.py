@@ -227,16 +227,22 @@ class TestAgentSDKBackendConfig:
         assert "edit" in _CLAUDE_CODE_NATIVE_TOOLS
 
     def test_is_available_with_mcp_url(self):
-        """AgentSDKBackend.is_available() returns True when SDK is installed."""
+        """AgentSDKBackend.is_available() returns True when SDK + CLI are present."""
+        import shutil
         from bot.llm import AgentSDKBackend
 
+        if not shutil.which("claude"):
+            pytest.skip("claude CLI not installed")
         backend = AgentSDKBackend(mcp_server_url="http://localhost:5001/sse")
         assert backend.is_available() is True
 
     def test_is_available_without_mcp_url(self):
         """AgentSDKBackend.is_available() returns True even without MCP URL."""
+        import shutil
         from bot.llm import AgentSDKBackend
 
+        if not shutil.which("claude"):
+            pytest.skip("claude CLI not installed")
         backend = AgentSDKBackend(mcp_server_url=None)
         assert backend.is_available() is True
 
