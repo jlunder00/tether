@@ -338,3 +338,75 @@ class TestHandleMessage:
         ))
         call_kwargs = router.complete.call_args[1]
         assert call_kwargs.get("role") == "subagent"
+
+    def test_classifier_called_on_normal_path(self, tmp_path):
+        """Normal path (no force flags) calls classifier first, then routes."""
+        from bot.conversation import handle_message
+        from bot.llm import LLMResponse
+
+        call_log = []
+        async def mock_complete(**kwargs):
+            call_log.append(kwargs.get("role"))
+            # First call is the classifier — return FULL to trigger the agent path
+            return LLMResponse("FULL", [], "end_turn", 1, 1) if len(call_log) == 1 \
+                else LLMResponse("Done.", [], "end_turn", 1, 1)
+
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=mock_complete)
+
+        asyncio.run(handle_message(
+            user_text="Organize my tasks for the week",
+            router=router,
+            db_path=str(tmp_path / "test.db"),
+        ))
+        assert call_log[0] == "classifier"
+        assert call_log[-1] == "main_agent"
+
+    def test_classifier_quick_response_routes_to_quick_path(self, tmp_path):
+        """When classifier returns QUICK, response uses role_quick not main_agent."""
+        from bot.conversation import handle_message
+        from bot.llm import LLMResponse
+
+        call_log = []
+        async def mock_complete(**kwargs):
+            call_log.append(kwargs.get("role"))
+            return LLMResponse("QUICK", [], "end_turn", 1, 1) if len(call_log) == 1 \
+                else LLMResponse("Hey!", [], "end_turn", 1, 1)
+
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=mock_complete)
+
+        result = asyncio.run(handle_message(
+            user_text="hi",
+            router=router,
+            db_path=str(tmp_path / "test.db"),
+        ))
+        assert call_log[0] == "classifier"
+        assert call_log[1] == "classifier"  # role_quick default is "classifier"
+        assert len(call_log) == 2
+        assert result == "Hey!"
+
+    def test_classifier_fallback_on_llm_error(self, tmp_path):
+        """If classifier LLM call raises, heuristic fallback is used."""
+        from bot.conversation import handle_message
+        from bot.llm import LLMResponse
+
+        call_log = []
+        async def mock_complete(**kwargs):
+            call_log.append(kwargs.get("role"))
+            if len(call_log) == 1:
+                raise RuntimeError("Haiku down")
+            return LLMResponse("Done.", [], "end_turn", 1, 1)
+
+        router = mock.MagicMock()
+        router.complete = mock.AsyncMock(side_effect=mock_complete)
+
+        # "hi" is short → heuristic says QUICK → one more call for the response
+        result = asyncio.run(handle_message(
+            user_text="hi",
+            router=router,
+            db_path=str(tmp_path / "test.db"),
+        ))
+        assert isinstance(result, str)
+        # classifier was attempted (raised), then response call happened
+        assert len(call_log) == 2

@@ -219,7 +219,12 @@ async def handle_message(
     history = list(conversation_history or [])
     history.append({"role": "user", "content": user_text})
 
-    use_quick = force_quick or (not force_full and _classify_quick(user_text))
+    if force_quick:
+        use_quick = True
+    elif force_full:
+        use_quick = False
+    else:
+        use_quick = await _classify_quick_llm(user_text, router)
 
     if use_quick:
         response = await router.complete(
@@ -243,11 +248,39 @@ async def handle_message(
     return response.content
 
 
-def _classify_quick(text: str) -> bool:
-    """Heuristic quick/full classifier. Phase 3 uses simple rules;
-    Phase 7 will replace this with a real Haiku classifier call."""
+_CLASSIFIER_SYSTEM = (
+    "You are a message router for a task management assistant. "
+    "Classify the user's message as QUICK or FULL.\n\n"
+    "QUICK: greetings, acknowledgements, simple yes/no, brief conversational replies, "
+    "questions answerable from context without fetching live data.\n"
+    "FULL: anything requiring task changes, scheduling, planning, organizing, "
+    "fetching live plan/task/context/milestone data, multi-step reasoning, or "
+    "any request the user wants acted upon in their system.\n\n"
+    "Reply with exactly one word: QUICK or FULL."
+)
+
+
+async def _classify_quick_llm(user_text: str, router: LLMRouter) -> bool:
+    """Call Haiku to classify the message as quick (True) or full (False).
+    Falls back to the heuristic if the classifier call fails."""
+    try:
+        resp = await router.complete(
+            role="classifier",
+            messages=[{"role": "user", "content": user_text}],
+            system=_CLASSIFIER_SYSTEM,
+            tools=None,
+        )
+        result = resp.content.strip().upper()
+        logger.info("classifier: %r → %s", user_text[:60], result)
+        return result.startswith("QUICK")
+    except Exception as exc:
+        logger.warning("classifier LLM call failed (%s) — falling back to heuristic", exc)
+        return _classify_quick_heuristic(user_text)
+
+
+def _classify_quick_heuristic(text: str) -> bool:
+    """Fallback heuristic classifier used when the LLM classifier is unavailable."""
     text_lower = text.strip().lower()
-    # Very short messages or greetings → quick
     if len(text_lower) < 15:
         return True
     quick_patterns = ("hi", "hello", "thanks", "ok", "yes", "no", "sure", "what time")
