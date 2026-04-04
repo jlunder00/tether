@@ -910,9 +910,16 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     config = load_config()
     llm_config = config.get("llm", {})
 
-    logger.info("v3: initializing LLMRouter...")
-    router = LLMRouter()
-    logger.info("v3: backend=%s", type(router.active_backend).__name__)
+    # Pass MCP server URL so AgentSDKBackend can call tether tools natively.
+    # Falls back gracefully if the MCP server isn't running.
+    mcp_url = llm_config.get("mcp_server_url", "http://localhost:5001/sse")
+    roles_config = llm_config.get("roles", {})
+    logger.info("v3: initializing LLMRouter (mcp=%s, roles=%d overrides)...",
+                mcp_url, len(roles_config))
+    router = LLMRouter(mcp_server_url=mcp_url, roles_config=roles_config)
+    logger.info("v3: full=%s fast=%s",
+                type(router.active_backend).__name__,
+                type(router.fast_backend).__name__)
     tools = load_tools()
     tool_schemas = [t.to_api_schema() for t in tools]
     executor = make_tool_executor(tools, db_path=str(db_path))
@@ -940,10 +947,7 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
             "content": h["body"],
         })
 
-    model_quick = config.get("models", {}).get("quick_classifier", "claude-haiku-4-5-20251001")
-    model_full = config.get("models", {}).get("orchestrator", "claude-sonnet-4-6")
-
-    logger.info("v3: calling conversation loop (model_full=%s, %d tools)", model_full, len(tool_schemas))
+    logger.info("v3: calling conversation loop (%d tools)", len(tool_schemas))
     result = asyncio.run(v3_handle(
         user_text=text,
         router=router,
@@ -956,8 +960,6 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         conversation_history=conv_history,
         tools=tool_schemas,
         tool_executor=executor,
-        model_quick=model_quick,
-        model_full=model_full,
     ))
     return result
 

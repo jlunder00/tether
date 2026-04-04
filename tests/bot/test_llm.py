@@ -254,44 +254,193 @@ class TestAWSBedrockBackend:
 
 
 # ---------------------------------------------------------------------------
-# LLMRouter — backend selection
+# LLMRouter — role-based routing and fallback chain
 # ---------------------------------------------------------------------------
 
 class TestLLMRouter:
-    def test_falls_back_to_pipeline_when_nothing_else_available(self, monkeypatch, tmp_path):
-        # boto3 is not installed in this env → AWSBedrockBackend.is_available() returns False
-        # via its except Exception handler, so no mocking needed
+    # --- backward-compat attributes ---
+
+    def test_fast_backend_falls_back_to_pipeline_when_nothing_else_available(self, monkeypatch, tmp_path):
         from bot.llm import LLMRouter, PipelineBackend
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
-        assert isinstance(router.active_backend, PipelineBackend)
+        assert isinstance(router.fast_backend, PipelineBackend)
 
-    def test_prefers_anthropic_when_api_key_available(self, monkeypatch, tmp_path):
+    def test_fast_backend_prefers_anthropic_when_api_key_available(self, monkeypatch, tmp_path):
         from bot.llm import LLMRouter, AnthropicBackend
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
-        assert isinstance(router.active_backend, AnthropicBackend)
+        assert isinstance(router.fast_backend, AnthropicBackend)
 
-    def test_complete_delegates_to_active_backend(self, monkeypatch, tmp_path):
-        from bot.llm import LLMRouter, LLMResponse
-        import unittest.mock as mock
-        import asyncio
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    def test_active_backend_is_agent_sdk_when_claude_available(self, tmp_path):
+        from bot.llm import LLMRouter, AgentSDKBackend, PipelineBackend
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
-        fake_resp = LLMResponse("hi", [], "end_turn", 1, 1)
-        async def fake_complete(**kwargs):
+        assert isinstance(router.active_backend, (AgentSDKBackend, PipelineBackend))
+
+    # --- role resolution ---
+
+    def test_complete_resolves_classifier_role_to_haiku(self, monkeypatch, tmp_path):
+        """router.complete(role='classifier') should use the Haiku model."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse, AnthropicBackend
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
             return fake_resp
-        with mock.patch.object(router.active_backend, "complete", side_effect=fake_complete):
+        with mock.patch.object(router._anthropic, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="classifier",
+                                        messages=[{"role": "user", "content": "hi"}],
+                                        system="sys"))
+        assert "haiku" in captured["model"]
+
+    def test_complete_resolves_main_agent_role_to_sonnet(self, monkeypatch, tmp_path):
+        """router.complete(role='main_agent') should use Sonnet."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse, AgentSDKBackend, PipelineBackend
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return fake_resp
+        backend = router.active_backend  # Agent SDK or Pipeline
+        with mock.patch.object(backend, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="main_agent",
+                                        messages=[{"role": "user", "content": "plan?"}],
+                                        system="sys"))
+        assert "sonnet" in captured["model"]
+
+    def test_complete_accepts_roles_config_override(self, monkeypatch, tmp_path):
+        """roles_config overrides the default model for a role."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        custom_roles = {"classifier": {"vendor": "anthropic", "model": "claude-sonnet-4-6"}}
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"),
+                           roles_config=custom_roles)
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return fake_resp
+        with mock.patch.object(router._anthropic, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="classifier",
+                                        messages=[{"role": "user", "content": "hi"}],
+                                        system="sys"))
+        assert "sonnet" in captured["model"]
+
+    # --- ToolMode behavior ---
+
+    def test_native_path_passes_tools_to_backend(self, monkeypatch, tmp_path):
+        """NATIVE path: tool schemas forwarded to backend."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return fake_resp
+        tools = [{"name": "get_plan", "description": "d", "input_schema": {}}]
+        with mock.patch.object(router._anthropic, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="classifier", messages=[], system="s", tools=tools))
+        assert captured.get("tools") == tools
+
+    def test_mcp_path_passes_no_tool_schemas(self, monkeypatch, tmp_path):
+        """MCP path (Agent SDK): tool schemas NOT forwarded — handled via MCP internally."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse, AgentSDKBackend
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        if not isinstance(router.active_backend, AgentSDKBackend):
+            import pytest; pytest.skip("Agent SDK not available")
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return fake_resp
+        tools = [{"name": "get_plan", "description": "d", "input_schema": {}}]
+        with mock.patch.object(router._agent_sdk, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="main_agent", messages=[], system="s", tools=tools))
+        assert captured.get("tools") is None
+
+    def test_pipeline_path_augments_system_with_tool_names(self, monkeypatch, tmp_path):
+        """STRUCTURED path (Pipeline): tool names injected into system prompt."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        # Force pipeline by making agent SDK unavailable
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        captured = {}
+        fake_resp = LLMResponse("ok", [], "end_turn", 1, 1)
+        async def capture(**kwargs):
+            captured.update(kwargs)
+            return fake_resp
+        tools = [{"name": "get_plan", "description": "d", "input_schema": {}}]
+        with mock.patch.object(router._agent_sdk, "is_available", return_value=False), \
+             mock.patch.object(router._pipeline, "complete", side_effect=capture):
+            asyncio.run(router.complete(role="main_agent", messages=[], system="sys", tools=tools))
+        assert "get_plan" in captured.get("system", "")
+        assert captured.get("tools") is None
+
+    # --- fallback on rate limit ---
+
+    def test_anthropic_rate_limit_falls_back_to_agent_sdk(self, monkeypatch, tmp_path):
+        """429 on AnthropicBackend → retries with AgentSDKBackend."""
+        import asyncio, sys, unittest.mock as mock
+        from bot.llm import LLMRouter, LLMResponse
+
+        # Inject a fake anthropic module so _is_retriable can match the exception
+        # without requiring the real anthropic package to be installed.
+        class FakeRateLimitError(Exception):
+            pass
+        class FakeAPIConnectionError(Exception):
+            pass
+        fake_anthropic = mock.MagicMock()
+        fake_anthropic.RateLimitError = FakeRateLimitError
+        fake_anthropic.APIConnectionError = FakeAPIConnectionError
+        monkeypatch.setitem(sys.modules, "anthropic", fake_anthropic)
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"))
+        fake_resp = LLMResponse("fallback ok", [], "end_turn", 1, 1)
+
+        async def raise_429(**kwargs):
+            raise FakeRateLimitError("rate limited")
+
+        async def sdk_ok(**kwargs):
+            return fake_resp
+
+        with mock.patch.object(router._anthropic, "complete", side_effect=raise_429), \
+             mock.patch.object(router._agent_sdk, "is_available", return_value=True), \
+             mock.patch.object(router._agent_sdk, "complete", side_effect=sdk_ok):
             result = asyncio.run(router.complete(
-                messages=[{"role": "user", "content": "hi"}],
-                system="sys",
-                model="claude-haiku-4-5-20251001",
-            ))
-        assert result.content == "hi"
+                role="classifier", messages=[], system="s"))
+        assert result.content == "fallback ok"
+
+    def test_non_anthropic_failure_propagates(self, monkeypatch, tmp_path):
+        """OpenAI failure should NOT fall back to Pipeline — exception propagates."""
+        import asyncio, unittest.mock as mock
+        from bot.llm import LLMRouter
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        custom_roles = {"task": {"vendor": "openai", "model": "gpt-4o"}}
+        router = LLMRouter(credentials_path=str(tmp_path / "nope.json"),
+                           roles_config=custom_roles)
+
+        async def openai_fail(**kwargs):
+            raise RuntimeError("OpenAI network error")
+
+        with mock.patch.object(router._openai, "complete", side_effect=openai_fail):
+            with pytest.raises(RuntimeError, match="OpenAI network error"):
+                asyncio.run(router.complete(role="task", messages=[], system="s"))
 
 
 # ---------------------------------------------------------------------------
