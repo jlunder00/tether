@@ -317,10 +317,14 @@ class TestLLMRouter:
         assert "sonnet" in captured["model"]
 
     def test_complete_accepts_roles_config_override(self, monkeypatch, tmp_path):
-        """roles_config overrides the default model for a role."""
+        """roles_config overrides the default model for a role.
+
+        Sonnet skips NATIVE (known 429), so we mock _pipeline which is always
+        last in the Anthropic chain when Agent SDK is unavailable.
+        """
         import asyncio, unittest.mock as mock
         from bot.llm import LLMRouter, LLMResponse
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         custom_roles = {"classifier": {"vendor": "anthropic", "model": "claude-sonnet-4-6"}}
         router = LLMRouter(credentials_path=str(tmp_path / "nope.json"),
                            roles_config=custom_roles)
@@ -329,7 +333,9 @@ class TestLLMRouter:
         async def capture(**kwargs):
             captured.update(kwargs)
             return fake_resp
-        with mock.patch.object(router._anthropic, "complete", side_effect=capture):
+        # Sonnet skips NATIVE; Agent SDK unavailable in test env → falls to Pipeline
+        with mock.patch.object(router._agent_sdk, "is_available", return_value=False), \
+             mock.patch.object(router._pipeline, "complete", side_effect=capture):
             asyncio.run(router.complete(role="classifier",
                                         messages=[{"role": "user", "content": "hi"}],
                                         system="sys"))
