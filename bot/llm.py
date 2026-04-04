@@ -81,6 +81,12 @@ def _is_retriable(exc: Exception) -> bool:
             return True
     except ImportError:
         pass
+    try:
+        from claude_agent_sdk._errors import ProcessError
+        if isinstance(exc, ProcessError):
+            return True
+    except ImportError:
+        pass
     return False
 
 
