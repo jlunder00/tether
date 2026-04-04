@@ -393,7 +393,7 @@ class TestLLMRouter:
         with mock.patch.object(router._agent_sdk, "is_available", return_value=False), \
              mock.patch.object(router._pipeline, "complete", side_effect=capture):
             asyncio.run(router.complete(role="main_agent", messages=[], system="sys", tools=tools))
-        assert "get_plan" in captured.get("system", "")
+        assert "unavailable" in captured.get("system", "").lower()
         assert captured.get("tools") is None
 
     # --- fallback on rate limit ---
