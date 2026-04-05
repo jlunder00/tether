@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 
+# Shared allowed-tools list for Agent SDK sessions (Session, AgentSDKBackend)
+_AGENT_SDK_ALLOWED_TOOLS = [
+    "ToolSearch", "mcp__tether__*", "Agent", "Read", "Glob", "Grep",
+    "WebSearch", "WebFetch",
+]
+
 
 @dataclass
 class ToolCall:
