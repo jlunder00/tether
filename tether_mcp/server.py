@@ -321,6 +321,20 @@ def get_context_linked_tasks(subject: str) -> list[dict]:
     return get_context_tasks(_db(), subject)
 
 
+@mcp.tool()
+async def session_done(summary: str = "") -> str:
+    """Signal that the current session is complete.
+
+    Call this when you have finished all planned work for this conversation.
+    Include a brief summary of what was accomplished — this is saved for
+    the user's records and used by the memory management system.
+
+    Args:
+        summary: Brief description of what was accomplished in this session.
+    """
+    return f"Session done acknowledged. Summary: {summary or '(none provided)'}"
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

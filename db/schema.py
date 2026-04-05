@@ -191,6 +191,23 @@ CREATE TABLE IF NOT EXISTS beacon_state (
 INSERT OR IGNORE INTO beacon_state (id, last_invoked_at) VALUES (1, NULL);
 """
 
+_SESSIONS_DDL = """
+CREATE TABLE IF NOT EXISTS sessions (
+    id          TEXT PRIMARY KEY,
+    chat_id     TEXT NOT NULL,
+    state       TEXT NOT NULL DEFAULT 'active',
+    turn_count  INTEGER NOT NULL DEFAULT 0,
+    max_turns   INTEGER NOT NULL DEFAULT 10,
+    summary     TEXT,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_activity DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_chat_active
+ON sessions(chat_id, state)
+WHERE state IN ('active', 'waiting_user');
+"""
+
 
 def get_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -202,3 +219,4 @@ def get_db(db_path: Path) -> sqlite3.Connection:
 def init_db(db_path: Path) -> None:
     with get_db(db_path) as conn:
         conn.executescript(DDL)
+        conn.executescript(_SESSIONS_DDL)
