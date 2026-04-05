@@ -26,7 +26,7 @@ def _make_session(**overrides):
     return Session(**defaults)
 
 
-def _mock_backend(content="OK", tool_calls=None, stop_reason="end_turn"):
+def _mock_router(content="OK", tool_calls=None, stop_reason="end_turn"):
     """Return a MagicMock LLMBackend whose complete() returns a canned LLMResponse."""
     backend = MagicMock()
     backend.complete = AsyncMock(return_value=LLMResponse(
@@ -60,9 +60,9 @@ class TestSessionInit:
         session._turn_count = 3
         assert session.at_turn_limit is True
 
-    def test_mode_reports_backend_when_no_client(self):
-        session = _make_session(backend=_mock_backend())
-        assert session.mode == "backend"
+    def test_mode_reports_router_when_no_client(self):
+        session = _make_session(router=_mock_router())
+        assert session.mode == "router"
 
     def test_mode_reports_sdk_when_client_set(self):
         session = _make_session()
@@ -175,12 +175,12 @@ class TestSessionSDKMode:
 # Backend mode — send via LLMBackend + conversation_loop
 # ===========================================================================
 
-class TestSessionBackendMode:
-    """Test the backend transport path using mocked LLMBackend."""
+class TestSessionRouterMode:
+    """Test the router transport path using mocked LLMRouter."""
 
     def test_send_increments_turn_count(self):
-        backend = _mock_backend(content="Here you go.")
-        session = _make_session(backend=backend)
+        router = _mock_router(content="Here you go.")
+        session = _make_session(router=router)
         session._is_active = True
 
         response = asyncio.run(session.send("hello"))
@@ -188,8 +188,8 @@ class TestSessionBackendMode:
         assert response == "Here you go."
 
     def test_send_appends_to_message_history(self):
-        backend = _mock_backend(content="Done.")
-        session = _make_session(backend=backend)
+        router = _mock_router(content="Done.")
+        session = _make_session(router=router)
         session._is_active = True
 
         asyncio.run(session.send("update my plan"))
@@ -201,8 +201,8 @@ class TestSessionBackendMode:
 
     def test_multi_turn_history_accumulates(self):
         """Each turn adds to the same messages list."""
-        backend = _mock_backend(content="Turn response.")
-        session = _make_session(backend=backend, max_turns=5)
+        router = _mock_router(content="Turn response.")
+        session = _make_session(router=router, max_turns=5)
         session._is_active = True
 
         asyncio.run(session.send("first"))
@@ -218,7 +218,7 @@ class TestSessionBackendMode:
 
     def test_done_signal_from_tool_call(self):
         """Session detects session_done in backend mode tool calls."""
-        backend = _mock_backend(
+        router = _mock_router(
             content="All done.",
             tool_calls=[ToolCall(
                 id="tc_1",
@@ -226,7 +226,7 @@ class TestSessionBackendMode:
                 input={"summary": "Organized tasks."},
             )],
         )
-        session = _make_session(backend=backend)
+        session = _make_session(router=router)
         session._is_active = True
 
         asyncio.run(session.send("wrap up"))
@@ -235,8 +235,8 @@ class TestSessionBackendMode:
 
     def test_backend_passes_full_history(self):
         """conversation_loop receives the accumulated messages."""
-        backend = _mock_backend(content="Acknowledged.")
-        session = _make_session(backend=backend)
+        router = _mock_router(content="Acknowledged.")
+        session = _make_session(router=router)
         session._is_active = True
 
         asyncio.run(session.send("first message"))
@@ -245,14 +245,14 @@ class TestSessionBackendMode:
         # The second call to conversation_loop should receive 3 messages:
         # user "first message", assistant "Acknowledged.", user "second message"
         # (conversation_loop is called with a copy of _messages)
-        last_call_args = backend.complete.call_args
+        last_call_args = router.complete.call_args
         messages_sent = last_call_args.kwargs.get("messages", last_call_args[1].get("messages", []))
         assert len(messages_sent) == 3
 
     def test_start_activates_and_sends(self):
         """start() sets is_active=True and delegates to send()."""
-        backend = _mock_backend(content="Welcome!")
-        session = _make_session(backend=backend)
+        router = _mock_router(content="Welcome!")
+        session = _make_session(router=router)
 
         response = asyncio.run(session.start("hi there"))
         assert session.is_active is True
@@ -338,7 +338,7 @@ class TestSessionClose:
 
     def test_close_without_client(self):
         """Close works when no client was ever created (backend mode)."""
-        session = _make_session(backend=_mock_backend())
+        session = _make_session(router=_mock_router())
         session._is_active = True
 
         asyncio.run(session.close())

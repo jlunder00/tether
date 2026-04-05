@@ -9,12 +9,17 @@ router = APIRouter(prefix="/llm-config", tags=["llm-config"])
 
 _CONFIG_PATH = Path.home() / ".tether-config" / "config.yaml"
 
-# All configurable model roles in the pipeline
+# All configurable model roles in the pipeline (v2)
 _MODEL_ROLES = [
     "orchestrator", "meta_eval", "meta_eval_repair",
     "meta_eval_repair_escalate", "execution_subagent",
     "satisfaction_eval", "response_builder", "quick_classifier",
 ]
+
+# v3 role defaults (imported lazily to avoid circular import at module level)
+def _get_default_roles() -> dict:
+    from bot.llm import _DEFAULT_ROLES
+    return _DEFAULT_ROLES
 
 # v3 defaults
 _DEFAULTS = {
@@ -29,6 +34,8 @@ _DEFAULTS = {
         "quick_classifier": "claude-haiku-4-5-20251001",
     },
     "llm": {
+        "use_v3": False,
+        "v2_fallback": True,
         "preferred_backend": "anthropic",
         "thinking_enabled": True,
         "thinking_budget": 8000,
@@ -56,11 +63,14 @@ async def get_llm_config(request: Request, _auth=Depends(auth_dependency)):
     config = _read_config()
     models = {**_DEFAULTS["models"], **config.get("models", {})}
     llm = {**_DEFAULTS["llm"], **config.get("llm", {})}
+    default_roles = _get_default_roles()
+    roles = {**default_roles, **config.get("llm", {}).get("roles", {})}
     return {
         "models": models,
         "llm": llm,
+        "roles": roles,
         "model_roles": _MODEL_ROLES,
-        "defaults": _DEFAULTS,
+        "defaults": {**_DEFAULTS, "roles": default_roles},
     }
 
 
@@ -74,8 +84,9 @@ async def put_llm_config(request: Request, _auth=Depends(auth_dependency)):
             for role in _MODEL_ROLES
             if body["models"].get(role)
         }
-    _LLM_KEYS = {"preferred_backend", "thinking_enabled", "thinking_budget",
-                  "beacon_score_threshold", "beacon_cooldown_minutes"}
+    _LLM_KEYS = {"use_v3", "v2_fallback", "preferred_backend", "thinking_enabled",
+                  "thinking_budget", "beacon_score_threshold", "beacon_cooldown_minutes",
+                  "roles", "mcp_server_url"}
     if "llm" in body:
         config["llm"] = {
             **config.get("llm", {}),

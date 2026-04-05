@@ -25,7 +25,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Awaitable
 
-from bot.llm import LLMBackend, LLMResponse, LLMRouter, ToolCall, _AGENT_SDK_ALLOWED_TOOLS
+from bot.llm import LLMResponse, LLMRouter, ToolCall, _AGENT_SDK_ALLOWED_TOOLS
 
 if TYPE_CHECKING:
     from bot.tools.base import Tool
@@ -58,7 +58,8 @@ class Session:
         system_prompt: str,
         *,
         mcp_server_url: str | None = None,
-        backend: LLMBackend | None = None,
+        router=None,
+        role: str = "main_agent",
         tools: list[dict] | None = None,
         tool_executor: Callable[[ToolCall], Awaitable[dict]] | None = None,
         max_turns: int = _DEFAULT_MAX_TURNS,
@@ -68,7 +69,8 @@ class Session:
         self._model = model
         self._system_prompt = system_prompt
         self._mcp_server_url = mcp_server_url
-        self._backend = backend
+        self._router = router
+        self._role = role
         self._tools = tools or []
         self._tool_executor = tool_executor
         self.max_turns = max_turns
@@ -112,8 +114,8 @@ class Session:
 
     @property
     def mode(self) -> str:
-        """Which transport is in use: 'sdk' or 'backend'."""
-        return "sdk" if self._client is not None else "backend"
+        """Which transport is in use: 'sdk' or 'router'."""
+        return "sdk" if self._client is not None else "router"
 
     # -- SDK helpers ---------------------------------------------------------
 
@@ -146,7 +148,7 @@ class Session:
         Otherwise, attempts to connect a ClaudeSDKClient (SDK mode).
         Returns the agent's first response.
         """
-        if self._backend is not None:
+        if self._router is not None:
             # Backend mode — no persistent connection needed
             self._is_active = True
             logger.info(
@@ -185,7 +187,7 @@ class Session:
 
         if self._client is not None:
             response_text = await self._send_sdk(message)
-        elif self._backend is not None:
+        elif self._router is not None:
             response_text = await self._send_backend(message)
         else:
             raise RuntimeError("Session has no transport (no SDK client or backend)")
@@ -223,7 +225,7 @@ class Session:
         return content_text.strip()
 
     async def _send_backend(self, message: str) -> str:
-        """Send via LLMBackend with local history management.
+        """Send via LLMRouter with local history management.
 
         Uses conversation_loop() to handle multi-round tool use within
         a single user turn. The full message history is passed so the
@@ -232,10 +234,10 @@ class Session:
         from bot.conversation import conversation_loop
 
         response = await conversation_loop(
-            backend=self._backend,
+            router=self._router,
+            role=self._role,
             messages=list(self._messages),  # copy — loop appends internally
             system=self._system_prompt,
-            model=self._model,
             tools=self._tools,
             tool_executor=self._tool_executor,
         )

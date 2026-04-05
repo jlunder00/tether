@@ -66,7 +66,7 @@ async def update_session_notes(
     router,
     db_path: str,
     notes_path: str,
-    model: str = "claude-haiku-4-5-20251001",
+    role: str = "summarizer",
 ) -> None:
     """Ask the LLM to rewrite session notes based on current state.
     Swallows errors — this is fire-and-forget, never blocking."""
@@ -96,10 +96,9 @@ async def update_session_notes(
         )
 
         response = await router.complete(
+            role=role,
             messages=[{"role": "user", "content": prompt}],
             system="You are a concise note-taking assistant.",
-            model=model,
-            thinking=False,
         )
         write_session_notes(response.content, notes_path)
     except Exception as e:
@@ -115,7 +114,7 @@ async def commit_anchor_transition(
     db_path: str,
     anchor_id: str,
     notes_path: str,
-    model: str = "claude-haiku-4-5-20251001",
+    role: str = "summarizer",
 ) -> None:
     """Summarize what happened during an anchor and append to context_entries.
     Resets session notes for the next anchor."""
@@ -145,10 +144,9 @@ async def commit_anchor_transition(
         )
 
         response = await router.complete(
+            role=role,
             messages=[{"role": "user", "content": prompt}],
             system="You are a concise note-taking assistant.",
-            model=model,
-            thinking=False,
         )
 
         # Append summary to a per-anchor log in context_entries
@@ -181,7 +179,7 @@ async def commit_significant_mutations(
     db_path: str,
     changes: list[dict],
     notes_path: str,
-    model: str = "claude-haiku-4-5-20251001",
+    role: str = "summarizer",
     threshold: int = _SIGNIFICANT_MUTATION_THRESHOLD,
 ) -> None:
     """If enough mutations happened, summarize and update session notes.
@@ -204,10 +202,9 @@ async def commit_significant_mutations(
         )
 
         response = await router.complete(
+            role=role,
             messages=[{"role": "user", "content": prompt}],
             system="You are a concise note-taking assistant.",
-            model=model,
-            thinking=False,
         )
         write_session_notes(response.content, notes_path)
     except Exception as e:
@@ -232,7 +229,7 @@ def should_compact(
 async def compact_conversation(
     messages: list[dict],
     router,
-    model: str = "claude-haiku-4-5-20251001",
+    role: str = "memory",
 ) -> list[dict]:
     """Emergency compaction: summarize history into a single synthetic message.
     Returns original messages unchanged if the LLM call fails."""
@@ -248,10 +245,9 @@ async def compact_conversation(
         )
 
         response = await router.complete(
+            role=role,
             messages=[{"role": "user", "content": prompt}],
             system="You are a concise summarization assistant.",
-            model=model,
-            thinking=False,
         )
 
         summary_message = {
