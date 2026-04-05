@@ -857,3 +857,77 @@ def get_context_tasks(db_path: Path, subject: str) -> list[dict]:
             (subject,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Multi-turn session management
+# ---------------------------------------------------------------------------
+
+_VALID_SESSION_STATES = {"active", "waiting_user", "closed"}
+
+
+def create_session(db_path: Path, chat_id: str, max_turns: int = 10) -> str:
+    """Create a new session, closing any existing active session for this chat."""
+    sid = str(uuid.uuid4())
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET state = 'closed' "
+            "WHERE chat_id = ? AND state IN ('active', 'waiting_user')",
+            (chat_id,),
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, chat_id, state, max_turns) VALUES (?, ?, 'active', ?)",
+            (sid, chat_id, max_turns),
+        )
+    return sid
+
+
+def get_active_session(db_path: Path, chat_id: str) -> dict | None:
+    """Get the active or waiting session for a chat, or None."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE chat_id = ? AND state IN ('active', 'waiting_user') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_session_state(db_path: Path, session_id: str, state: str) -> None:
+    """Update session state. State must be one of: active, waiting_user, closed."""
+    if state not in _VALID_SESSION_STATES:
+        raise ValueError(f"Invalid session state: {state!r}. Must be one of {_VALID_SESSION_STATES}")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET state = ?, last_activity = CURRENT_TIMESTAMP WHERE id = ?",
+            (state, session_id),
+        )
+
+
+def update_session_activity(db_path: Path, session_id: str, turn_count: int) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET turn_count = ?, last_activity = CURRENT_TIMESTAMP WHERE id = ?",
+            (turn_count, session_id),
+        )
+
+
+def close_session(db_path: Path, session_id: str, summary: str | None = None) -> None:
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE sessions SET state = 'closed', summary = ?, last_activity = CURRENT_TIMESTAMP "
+            "WHERE id = ?",
+            (summary, session_id),
+        )
+
+
+def get_stale_sessions(db_path: Path, timeout_minutes: int = 15) -> list[dict]:
+    """Find sessions idle longer than timeout_minutes."""
+    interval = f"-{int(timeout_minutes)} minutes"
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM sessions WHERE state IN ('active', 'waiting_user') "
+            "AND last_activity < datetime('now', ?)",
+            (interval,),
+        ).fetchall()
+    return [dict(r) for r in rows]
