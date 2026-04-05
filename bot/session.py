@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Awaitable
 
 from bot.llm import LLMBackend, LLMResponse, LLMRouter, ToolCall, _AGENT_SDK_ALLOWED_TOOLS
@@ -349,16 +350,37 @@ class SessionManager:
         return session
 
     def close_session(self, chat_id: str, summary: str | None = None) -> None:
-        """Close a session and persist to DB."""
+        """Close a session, persist to DB, and trigger memory management."""
         from db.queries import close_session as db_close
 
         session = self._sessions.pop(chat_id, None)
         if session:
             if session.is_active:
                 self._run_async(session.close())
+            if session.turn_count > 0 and summary:
+                self._run_memory_management(session, summary)
             db_close(self._db_path, session.session_id, summary)
-            logger.info("SessionManager: closed session %s for chat %s",
-                         session.session_id, chat_id)
+            logger.info("SessionManager: closed session %s (turns=%d, summary=%s)",
+                         session.session_id, session.turn_count, summary)
+
+    def _run_memory_management(self, session: "Session", summary: str) -> None:
+        """Append session summary to session notes."""
+        try:
+            notes_path = str(Path.home() / ".tether-config" / ".session-notes.md")
+            existing = ""
+            try:
+                existing = Path(notes_path).read_text()
+            except FileNotFoundError:
+                pass
+            updated = existing.rstrip()
+            if updated:
+                updated += "\n\n"
+            updated += f"## Session {session.session_id[:8]} ({session.turn_count} turns)\n{summary}"
+            Path(notes_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(notes_path).write_text(updated)
+            logger.info("SessionManager: memory updated for session %s", session.session_id)
+        except Exception as e:
+            logger.warning("SessionManager: memory management failed: %s", e)
 
     def run_in_session(
         self,

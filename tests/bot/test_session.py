@@ -464,6 +464,40 @@ class TestSessionManager:
 # Stale session cleanup
 # ===========================================================================
 
+class TestSessionMemoryManagement:
+    def test_close_with_summary_appends_to_notes(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        notes_path = tmp_path / ".session-notes.md"
+
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+        session = mgr.create_session(chat_id="123", model="m", system_prompt="s")
+        session._turn_count = 3  # Simulate some turns
+
+        with mock.patch("bot.session.Path.home", return_value=tmp_path):
+            # Create the .tether-config dir structure
+            (tmp_path / ".tether-config").mkdir(exist_ok=True)
+            mgr.close_session("123", summary="Organized 15 tasks")
+
+        notes = (tmp_path / ".tether-config" / ".session-notes.md").read_text()
+        assert "Organized 15 tasks" in notes
+        assert session.session_id[:8] in notes
+
+    def test_close_without_summary_skips_memory(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+        mgr.create_session(chat_id="123", model="m", system_prompt="s")
+        mgr.close_session("123")  # No summary
+        # No crash, no notes file needed
+
+
 class TestStaleCleanup:
     def test_cleanup_stale_closes_timed_out_sessions(self, tmp_path):
         from bot.session import SessionManager
