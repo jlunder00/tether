@@ -1,6 +1,7 @@
 """Tests for bot.session — backend-agnostic multi-turn Session class."""
 import asyncio
 import pytest
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 from bot.llm import LLMResponse, ToolCall
@@ -348,3 +349,137 @@ class TestSessionClose:
         session = _make_session()
         asyncio.run(session.close())
         assert session.is_active is False
+
+
+# ===========================================================================
+# SessionManager
+# ===========================================================================
+
+class TestSessionManager:
+    def test_create_session(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        session = mgr.create_session(
+            chat_id="123",
+            model="claude-sonnet-4-6",
+            system_prompt="test",
+        )
+        assert session.chat_id == "123"
+        assert session.session_id is not None
+
+    def test_get_session(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        session = mgr.create_session(
+            chat_id="123",
+            model="claude-sonnet-4-6",
+            system_prompt="test",
+        )
+        retrieved = mgr.get_session("123")
+        assert retrieved is not None
+        assert retrieved.session_id == session.session_id
+
+    def test_get_session_returns_none_when_no_active(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        assert mgr.get_session("999") is None
+
+    def test_close_session(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        session = mgr.create_session(
+            chat_id="123",
+            model="claude-sonnet-4-6",
+            system_prompt="test",
+        )
+        mgr.close_session("123", summary="Done")
+        assert mgr.get_session("123") is None
+
+    def test_run_in_session_creates_if_needed(self, tmp_path):
+        """run_in_session creates a new session when none exists."""
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        with mock.patch("bot.session.Session.start", new_callable=mock.AsyncMock, return_value="Hello!"):
+            response = mgr.run_in_session(
+                chat_id="123",
+                message="organize my tasks",
+                model="claude-sonnet-4-6",
+                system_prompt="test",
+            )
+        assert response == "Hello!"
+
+    def test_run_in_session_reuses_existing(self, tmp_path):
+        """run_in_session sends to existing session when one is active."""
+        from bot.session import SessionManager
+        from db.schema import init_db
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+
+        with mock.patch("bot.session.Session.start", new_callable=mock.AsyncMock, return_value="Turn 1"):
+            mgr.run_in_session(
+                chat_id="123",
+                message="organize my tasks",
+                model="claude-sonnet-4-6",
+                system_prompt="test",
+            )
+
+        with mock.patch("bot.session.Session.send", new_callable=mock.AsyncMock, return_value="Turn 2"):
+            response = mgr.run_in_session(
+                chat_id="123",
+                message="yes, do it",
+                model="claude-sonnet-4-6",
+                system_prompt="test",
+            )
+        assert response == "Turn 2"
+
+
+# ===========================================================================
+# Stale session cleanup
+# ===========================================================================
+
+class TestStaleCleanup:
+    def test_cleanup_stale_closes_timed_out_sessions(self, tmp_path):
+        from bot.session import SessionManager
+        from db.schema import init_db
+        from db.queries import get_db, create_session
+
+        db = tmp_path / "test.db"
+        init_db(db)
+        sid = create_session(db, chat_id="123", max_turns=10)
+
+        with get_db(db) as conn:
+            conn.execute(
+                "UPDATE sessions SET last_activity = datetime('now', '-20 minutes') WHERE id = ?",
+                (sid,),
+            )
+
+        mgr = SessionManager(db_path=str(db), mcp_server_url=None)
+        closed = mgr.cleanup_stale()
+        assert sid in closed

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING, Callable, Awaitable
 
 from bot.llm import LLMBackend, LLMResponse, LLMRouter, ToolCall, _AGENT_SDK_ALLOWED_TOOLS
@@ -274,3 +275,141 @@ class Session:
             "session %s: closed (turns=%d, done=%s, mode=%s)",
             self.session_id, self._turn_count, self._is_done, self.mode,
         )
+
+
+class SessionManager:
+    """Manages multi-turn sessions across Telegram messages.
+
+    Bridges the synchronous polling loop with async ClaudeSDKClient
+    sessions via a background asyncio event loop.
+    """
+
+    def __init__(self, db_path: str, mcp_server_url: str | None):
+        self._db_path = db_path
+        self._mcp_server_url = mcp_server_url
+        self._sessions: dict[str, Session] = {}  # chat_id -> Session
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        """Start the background event loop if not running."""
+        if self._loop is None or not self._loop.is_running():
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._loop.run_forever,
+                daemon=True,
+                name="session-loop",
+            )
+            self._thread.start()
+            logger.info("SessionManager: background event loop started")
+        return self._loop
+
+    def _run_async(self, coro):
+        """Run an async coroutine in the background loop, blocking until done."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=300)  # 5 min timeout
+
+    def create_session(
+        self,
+        chat_id: str,
+        model: str,
+        system_prompt: str,
+        max_turns: int = _DEFAULT_MAX_TURNS,
+    ) -> Session:
+        """Create a new session, closing any existing one for this chat."""
+        from db.queries import create_session as db_create
+
+        # Close existing session if any
+        existing = self._sessions.pop(chat_id, None)
+        if existing and existing.is_active:
+            self._run_async(existing.close())
+
+        session_id = db_create(self._db_path, chat_id, max_turns)
+        session = Session(
+            session_id=session_id,
+            chat_id=chat_id,
+            mcp_server_url=self._mcp_server_url,
+            model=model,
+            system_prompt=system_prompt,
+            max_turns=max_turns,
+        )
+        self._sessions[chat_id] = session
+        return session
+
+    def get_session(self, chat_id: str) -> Session | None:
+        """Get the active session for a chat, or None."""
+        session = self._sessions.get(chat_id)
+        if session is None:
+            return None
+        # Evict sessions that are done or that were started then closed
+        if session.is_done or (session.turn_count > 0 and not session.is_active):
+            self._sessions.pop(chat_id, None)
+            return None
+        return session
+
+    def close_session(self, chat_id: str, summary: str | None = None) -> None:
+        """Close a session and persist to DB."""
+        from db.queries import close_session as db_close
+
+        session = self._sessions.pop(chat_id, None)
+        if session:
+            if session.is_active:
+                self._run_async(session.close())
+            db_close(self._db_path, session.session_id, summary)
+            logger.info("SessionManager: closed session %s for chat %s",
+                         session.session_id, chat_id)
+
+    def run_in_session(
+        self,
+        chat_id: str,
+        message: str,
+        model: str,
+        system_prompt: str,
+        max_turns: int = _DEFAULT_MAX_TURNS,
+    ) -> str:
+        """Send a message in the session for this chat. Creates session if needed.
+
+        This is the main entry point from the synchronous polling loop.
+        Returns the agent's response text.
+        """
+        from db.queries import update_session_state, update_session_activity
+
+        session = self.get_session(chat_id)
+
+        if session is None:
+            session = self.create_session(chat_id, model, system_prompt, max_turns)
+            response = self._run_async(session.start(message))
+        else:
+            response = self._run_async(session.send(message))
+
+        # Update DB state
+        update_session_activity(self._db_path, session.session_id, session.turn_count)
+
+        if session.is_done:
+            self.close_session(chat_id, summary=session.done_summary)
+        elif session.at_turn_limit:
+            logger.warning("Session %s hit turn limit (%d)", session.session_id, session.max_turns)
+            self.close_session(chat_id, summary="Turn limit reached")
+            response += "\n\n[Session ended — turn limit reached]"
+        else:
+            update_session_state(self._db_path, session.session_id, "waiting_user")
+
+        return response
+
+    def cleanup_stale(self) -> list[str]:
+        """Close sessions that have been idle too long. Returns list of closed session IDs."""
+        from db.queries import get_stale_sessions, close_session as db_close
+
+        stale = get_stale_sessions(self._db_path, timeout_minutes=_SESSION_TIMEOUT_MINUTES)
+        closed = []
+        for s in stale:
+            chat_id = s["chat_id"]
+            session = self._sessions.pop(chat_id, None)
+            if session and session.is_active:
+                self._run_async(session.close())
+            db_close(self._db_path, s["id"], summary="Session timed out")
+            closed.append(s["id"])
+            logger.info("SessionManager: timed out session %s for chat %s",
+                         s["id"], chat_id)
+        return closed
