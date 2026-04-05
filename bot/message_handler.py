@@ -951,6 +951,70 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
 
 
 # ---------------------------------------------------------------------------
+# v3 multi-turn session path
+# ---------------------------------------------------------------------------
+
+# Module-level session manager (lazy-initialized)
+_session_manager = None
+
+
+def _get_session_manager(db_path: Path) -> "SessionManager":
+    """Lazily initialize the session manager."""
+    global _session_manager
+    if _session_manager is None:
+        from bot.session import SessionManager
+        config = load_config()
+        llm_config = config.get("llm", {})
+        mcp_url = llm_config.get("mcp_server_url", "http://localhost:5001/sse")
+        _session_manager = SessionManager(db_path=str(db_path), mcp_server_url=mcp_url)
+    return _session_manager
+
+
+def _handle_v3_session(text: str, db_path: Path, anchors: list[dict],
+                       current_anchor: dict) -> str:
+    """Run the v3 multi-turn session loop. Returns the response text."""
+    from bot.conversation import build_system_prompt
+    from bot.memory import read_session_notes
+
+    today = str(date_type.today())
+    plan = get_plan(db_path, today)
+    subjects = [e["subject"] for e in get_context_entries(db_path)]
+
+    plan_lines = []
+    for anchor_id, data in plan.get("anchors", {}).items():
+        tasks = data.get("tasks", [])
+        task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
+        plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
+
+    notes_path = str(Path.home() / ".tether-config" / ".session-notes.md")
+    session_notes = read_session_notes(notes_path)
+
+    system = build_system_prompt(
+        anchor_name=current_anchor.get("name", "General"),
+        anchor_time=current_anchor.get("time", "00:00"),
+        plan_summary="\n".join(plan_lines) or "No plan data.",
+        context_subjects=subjects,
+        session_notes=session_notes,
+    )
+
+    config = load_config()
+    llm_config = config.get("llm", {})
+    roles = llm_config.get("roles", {})
+    main_role = roles.get("main_agent", {})
+    model = main_role.get("model", "claude-sonnet-4-6")
+
+    mgr = _get_session_manager(db_path)
+    mgr.cleanup_stale()
+
+    return mgr.run_in_session(
+        chat_id="default",  # TODO: use actual chat_id when multi-user
+        message=text,
+        model=model,
+        system_prompt=system,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -994,14 +1058,30 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
     # --- v3 SDK path (if enabled) ---
     if _is_v3_enabled():
         try:
-            final = _handle_v3(text, db_path, anchors, current_anchor)
+            final = _handle_v3_session(text, db_path, anchors, current_anchor)
             send_fn(final)
             insert_conversation_turn(db_path, "user", text)
             insert_conversation_turn(db_path, "assistant", final)
             return
         except Exception as e:
-            logger.warning("v3 path failed, falling back to v2: %s", e)
-            # Fall through to v2 pipeline
+            import traceback
+            logger.error("v3 session path failed (%s: %s):\n%s",
+                         type(e).__name__, e, traceback.format_exc())
+            # Fall back to one-shot v3
+            try:
+                final = _handle_v3(text, db_path, anchors, current_anchor)
+                send_fn(final)
+                insert_conversation_turn(db_path, "user", text)
+                insert_conversation_turn(db_path, "assistant", final)
+                return
+            except Exception as e2:
+                logger.error("v3 one-shot fallback also failed: %s", e2)
+                v2_fallback = load_config().get("llm", {}).get("v2_fallback", True)
+                if not v2_fallback:
+                    send_fn(f"[Tether error: {type(e).__name__}: {e}]")
+                    insert_conversation_turn(db_path, "user", text)
+                    return
+                logger.warning("v3 FAILED — falling back to v2 pipeline")
 
     # --- v2 pipeline (default / fallback) ---
 
