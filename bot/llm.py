@@ -40,11 +40,16 @@ _DEFAULT_ROLES: dict[str, dict[str, str]] = {
 }
 
 # Tools the agent SDK is allowed to use. Whitelist approach — anything not listed
-# is blocked. ToolSearch is required because MCP tools are "deferred" in Claude Code
-# and their schemas must be fetched before calling them.
+# is blocked. No destructive tools (Bash, Edit, Write, Cron*, RemoteTrigger).
 _AGENT_SDK_ALLOWED_TOOLS = [
     "ToolSearch",       # Required: fetches deferred MCP tool schemas
     "mcp__tether__*",   # All tether MCP tools (wildcard)
+    "Agent",            # Subagent dispatch for parallel MCP work
+    "Read",             # Read-only file access (memory files, etc.)
+    "Glob",             # File search (read-only)
+    "Grep",             # Content search (read-only)
+    "WebSearch",        # Web search
+    "WebFetch",         # Web fetch
 ]
 
 
@@ -514,6 +519,12 @@ class AgentSDKBackend(LLMBackend):
         from claude_agent_sdk.types import McpSSEServerConfig
 
         system_text = system if isinstance(system, str) else "\n".join(system)
+        # Add resource constraints for the Pi
+        system_text += (
+            "\n\nIMPORTANT: You are running on a resource-constrained device. "
+            "Limit parallel subagent dispatches to at most 2 at a time. "
+            "Prefer sequential tool calls when parallelism isn't critical."
+        )
         prompt = _format_messages_as_prompt(messages, system)
 
         mcp_servers: dict = {}
