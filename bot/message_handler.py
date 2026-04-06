@@ -1174,6 +1174,10 @@ def _save_offset(offset: int) -> None:
 def run_polling(token: str, chat_id: str) -> None:
     offset = _load_offset()
     last_anchor_id: str | None = None
+    # Persist across polling cycles so followups work even when no messages arrive.
+    # These get set when a message is processed and remembered for background checks.
+    last_message_db_path: Path | None = None
+    last_message_chat_id: str | None = None
     logger.info("Tether bot polling started (offset=%d)", offset)
     while True:
         try:
@@ -1183,8 +1187,6 @@ def run_polling(token: str, chat_id: str) -> None:
                 timeout=35,
             )
             data = resp.json()
-            last_message_db_path: Path | None = None
-            last_message_chat_id: str | None = None
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
                 _save_offset(offset)
