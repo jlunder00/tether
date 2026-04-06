@@ -307,11 +307,20 @@ class SessionManager:
             logger.info("SessionManager: background event loop started")
         return self._loop
 
-    def _run_async(self, coro):
-        """Run an async coroutine in the background loop, blocking until done."""
+    def _run_async(self, coro, timeout: int = 600):
+        """Run an async coroutine in the background loop, blocking until done.
+
+        On timeout, cancels the coroutine to prevent zombie sessions from
+        continuing to make MCP tool calls in the background.
+        """
         loop = self._ensure_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=300)  # 5 min timeout
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            logger.error("SessionManager: coroutine timed out after %ds — cancelled", timeout)
+            raise
 
     def create_session(
         self,
@@ -401,11 +410,19 @@ class SessionManager:
 
         session = self.get_session(chat_id)
 
-        if session is None:
-            session = self.create_session(chat_id, model, system_prompt, max_turns)
-            response = self._run_async(session.start(message))
-        else:
-            response = self._run_async(session.send(message))
+        try:
+            if session is None:
+                session = self.create_session(chat_id, model, system_prompt, max_turns)
+                response = self._run_async(session.start(message))
+            else:
+                response = self._run_async(session.send(message))
+        except (TimeoutError, Exception) as exc:
+            # Kill the session so it doesn't keep running as a zombie
+            logger.error("Session %s failed (%s) — closing to prevent zombie",
+                         session.session_id if session else "?", type(exc).__name__)
+            if session:
+                self.close_session(chat_id, summary=f"Error: {type(exc).__name__}")
+            raise
 
         # Update DB state
         update_session_activity(self._db_path, session.session_id, session.turn_count)
