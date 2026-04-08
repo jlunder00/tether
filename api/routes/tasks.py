@@ -28,10 +28,19 @@ async def patch_task(task_uuid: str, body: dict, request: Request, _auth=Depends
 async def move_task(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
     try:
         move_task_atomic(request.state.db_path, task_uuid,
-                         body["date"], body["anchor_id"], body.get("position"))
+                         body.get("date"), body.get("anchor_id"), body.get("position"))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"ok": True}
+
+
+@router.get("/tasks/{task_uuid}")
+async def get_task(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
+    from db.queries import get_task_by_uuid
+    task = get_task_by_uuid(request.state.db_path, task_uuid)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
 
 
 @router.get("/tasks/{task_uuid}/dependencies")
