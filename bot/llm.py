@@ -519,12 +519,8 @@ class AgentSDKBackend(LLMBackend):
         from claude_agent_sdk.types import McpSSEServerConfig
 
         system_text = system if isinstance(system, str) else "\n".join(system)
-        # Add resource constraints for the Pi
-        system_text += (
-            "\n\nIMPORTANT: You are running on a resource-constrained device. "
-            "Limit parallel subagent dispatches to at most 2 at a time. "
-            "Prefer sequential tool calls when parallelism isn't critical."
-        )
+        # Resource constraints are now in prompt_sections.RESOURCE_CONSTRAINTS
+        # and included by build_system_prompt() for all applicable modes.
         prompt = _format_messages_as_prompt(messages, system)
 
         mcp_servers: dict = {}
