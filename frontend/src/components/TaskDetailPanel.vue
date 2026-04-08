@@ -7,6 +7,8 @@ import SearchAutocomplete from './SearchAutocomplete.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
+import { useAnchorStore } from '../stores/anchors'
+import { useBacklogStore } from '../stores/backlog'
 import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
@@ -18,19 +20,34 @@ const props = defineProps<{ taskId: string }>()
 const router = useRouter()
 const planStore = usePlanStore()
 const milestoneStore = useMilestoneStore()
+const anchorStore = useAnchorStore()
+const backlogStore = useBacklogStore()
 
-// Find the task and its anchor from the plan
+// Find the task from the plan OR from the backlog
 const taskAndAnchor = computed(() => {
-  if (!planStore.plan) return null
-  for (const [anchorId, anchorPlan] of Object.entries(planStore.plan.anchors)) {
-    const task = anchorPlan.tasks.find(t => t.id === props.taskId)
-    if (task) return { task, anchorId }
+  if (planStore.plan) {
+    for (const [aid, anchorPlan] of Object.entries(planStore.plan.anchors)) {
+      const t = anchorPlan.tasks.find(t => t.id === props.taskId)
+      if (t) return { task: t, anchorId: aid, isBacklog: false }
+    }
   }
+  const bt = backlogStore.tasks.find(t => t.id === props.taskId)
+  if (bt) return { task: bt, anchorId: '', isBacklog: true }
+  // Also check standalone fetch
+  if (standaloneTask.value) return { task: standaloneTask.value, anchorId: '', isBacklog: true }
   return null
 })
 
 const task = computed(() => taskAndAnchor.value?.task ?? null)
 const anchorId = computed(() => taskAndAnchor.value?.anchorId ?? '')
+const isBacklog = computed(() => taskAndAnchor.value?.isBacklog ?? false)
+
+// Standalone task fetch for when task isn't in plan or backlog store yet
+const standaloneTask = ref<any>(null)
+
+// Schedule controls
+const scheduleDate = ref(planStore.today)
+const scheduleAnchor = ref('')
 
 // Composables
 const { subtasks, create: createSubtask, update: updateSubtask, remove: removeSubtask } = useSubtasks(() => props.taskId)
@@ -120,6 +137,40 @@ function patchFollowup(fields: Partial<FollowupConfig>) {
   patchTask({ followup_config: { ...task.value.followup_config, ...fields } })
 }
 
+// Schedule / Unschedule
+async function scheduleTask() {
+  if (!scheduleDate.value || !scheduleAnchor.value) return
+  await api(`/api/tasks/${props.taskId}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: scheduleDate.value, anchor_id: scheduleAnchor.value }),
+  })
+  await planStore.fetchPlan(scheduleDate.value)
+  await backlogStore.fetchTasks()
+  router.push(`/plan/day/${scheduleDate.value}/task/${props.taskId}`)
+}
+
+async function moveToBacklog() {
+  await api(`/api/tasks/${props.taskId}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date: null, anchor_id: null }),
+  })
+  await planStore.fetchPlan()
+  await backlogStore.fetchTasks()
+  router.push(`/backlog/task/${props.taskId}`)
+}
+
+async function moveToAnchor(newAnchorId: string) {
+  const date = planStore.plan?.date ?? planStore.today
+  await api(`/api/tasks/${props.taskId}/move`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ date, anchor_id: newAnchorId }),
+  })
+  await planStore.fetchPlan()
+}
+
 // Delete
 async function deleteTask() {
   if (!confirm('Delete this task?')) return
@@ -197,6 +248,19 @@ const STATUS_COLORS: Record<string, string> = {
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
+  if (!anchorStore.anchors.length) await anchorStore.fetchAnchors()
+  if (!backlogStore.tasks.length) await backlogStore.fetchTasks()
+  // If task not found in plan or backlog, fetch it directly
+  if (!task.value) {
+    try {
+      const resp = await api(`/api/tasks/${props.taskId}`)
+      if (resp.ok) standaloneTask.value = await resp.json()
+    } catch { /* task may not exist */ }
+  }
+  // Default schedule anchor to first anchor
+  if (!scheduleAnchor.value && anchorStore.anchors.length) {
+    scheduleAnchor.value = anchorStore.anchors[0].id
+  }
 })
 </script>
 
@@ -240,6 +304,40 @@ onMounted(async () => {
             <option value="skipped">Skipped</option>
             <option value="blocked">Blocked</option>
           </select>
+        </div>
+
+        <!-- Schedule / Location -->
+        <div class="flex flex-col gap-2">
+          <span class="text-xs text-white/50 uppercase tracking-wide">Location</span>
+          <template v-if="isBacklog">
+            <div class="text-xs text-white/30 italic mb-1">Unscheduled (backlog)</div>
+            <div class="flex items-center gap-2">
+              <input v-model="scheduleDate" type="date"
+                     class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none" />
+              <select v-model="scheduleAnchor"
+                      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none">
+                <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
+              </select>
+              <button @click="scheduleTask"
+                      class="text-xs px-3 py-1 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30">
+                Schedule
+              </button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="flex items-center gap-2 text-sm">
+              <span class="text-white/60">{{ planStore.activeDate }}</span>
+              <span class="text-white/40">·</span>
+              <select :value="anchorId" @change="moveToAnchor(($event.target as HTMLSelectElement).value)"
+                      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none">
+                <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
+              </select>
+            </div>
+            <button @click="moveToBacklog"
+                    class="text-xs text-white/40 hover:text-white/70 self-start">
+              Move to backlog
+            </button>
+          </template>
         </div>
 
         <!-- Description -->

@@ -196,16 +196,43 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
     }
 
 
+def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
+    """Get a single task by UUID."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description "
+            "FROM tasks WHERE uuid=?", (task_uuid,)
+        ).fetchone()
+    if not row:
+        return None
+    fc = row["followup_config"]
+    return {
+        "id": row["uuid"], "text": row["text"], "status": row["status"],
+        "position": row["position"], "description": row["description"],
+        "plan_date": row["plan_date"], "anchor_id": row["anchor_id"],
+        "followup_config": json.loads(fc) if fc else None,
+        "blocks": [], "blocked_by": [],
+    }
+
+
 def move_task_atomic(
-    db_path: Path, task_uuid: str, date: str, anchor_id: str, position: int | None = None,
+    db_path: Path, task_uuid: str, date: str | None, anchor_id: str | None,
+    position: int | None = None,
 ) -> None:
-    """Atomically move a task to a different date/anchor."""
+    """Atomically move a task to a different date/anchor, or unschedule (both None)."""
     with get_db(db_path) as conn:
         row = conn.execute(
             "SELECT plan_date FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
         if not row:
             raise ValueError(f"Task {task_uuid} not found")
+        if date is None or anchor_id is None:
+            # Unschedule — move to backlog
+            conn.execute(
+                "UPDATE tasks SET plan_date=NULL, anchor_id=NULL, position=0 WHERE uuid=?",
+                (task_uuid,),
+            )
+            return
         conn.execute("INSERT OR IGNORE INTO plans (date) VALUES (?)", (date,))
         if position is None:
             max_pos = conn.execute(
@@ -838,16 +865,31 @@ def create_unscheduled_task(
 
 
 def get_unscheduled_tasks(db_path: Path) -> list[dict]:
-    """Get all tasks with no plan_date (backlog)."""
+    """Get all tasks with no plan_date (backlog), with context subjects."""
     with get_db(db_path) as conn:
         rows = conn.execute(
             "SELECT uuid, text, status, position, followup_config, description "
             "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
         ).fetchall()
+        task_uuids = [r["uuid"] for r in rows]
+        # Fetch context links for all backlog tasks in one query
+        ctx_map: dict[str, list[str]] = {}
+        if task_uuids:
+            try:
+                ph = ",".join("?" for _ in task_uuids)
+                ctx_rows = conn.execute(
+                    f"SELECT task_id, subject FROM task_context WHERE task_id IN ({ph})",
+                    task_uuids,
+                ).fetchall()
+                for cr in ctx_rows:
+                    ctx_map.setdefault(cr["task_id"], []).append(cr["subject"])
+            except Exception:
+                pass  # task_context table may not exist
     return [
         {"id": r["uuid"], "text": r["text"], "status": r["status"],
          "position": r["position"], "description": r["description"],
          "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
+         "contexts": ctx_map.get(r["uuid"], []),
          "blocks": [], "blocked_by": []}
         for r in rows
     ]
