@@ -19,6 +19,11 @@ async function logout() {
       <div class="flex items-center gap-6">
         <span class="text-lg font-bold tracking-tight">Tether</span>
         <div class="flex items-center gap-1">
+          <router-link to="/dashboard"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+                       :class="$route.path.startsWith('/dashboard') ? 'bg-white/20 text-white' : 'text-white/60'">
+            Dashboard
+          </router-link>
           <router-link to="/plan/day"
                        class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
                        active-class="bg-white/20 text-white"
@@ -36,6 +41,11 @@ async function logout() {
                        active-class="bg-white/20 text-white"
                        :class="$route.path === '/anchors' ? 'bg-white/20 text-white' : 'text-white/60'">
             Anchors
+          </router-link>
+          <router-link to="/backlog"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+                       :class="$route.path.startsWith('/backlog') ? 'bg-white/20 text-white' : 'text-white/60'">
+            Backlog
           </router-link>
         </div>
       </div>

@@ -27,6 +27,7 @@ async def create_milestone_route(subject: str, body: dict, request: Request, _au
         request.state.db_path, subject, body["name"],
         description=body.get("description"),
         target_date=body.get("target_date"),
+        color=body.get("color"),
     )
 
 

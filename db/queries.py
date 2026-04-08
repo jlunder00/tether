@@ -262,6 +262,25 @@ def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dic
     return {"blocks": blocks, "blocked_by": blocked_by}
 
 
+def get_full_task_dependencies(db_path: Path, task_uuid: str) -> dict:
+    """Get all dependencies for a task, regardless of what day the related tasks are on."""
+    with get_db(db_path) as conn:
+        blocks = conn.execute(
+            "SELECT blocked_type, blocked_id FROM dependencies "
+            "WHERE blocker_type='task' AND blocker_id=?",
+            (task_uuid,),
+        ).fetchall()
+        blocked_by = conn.execute(
+            "SELECT blocker_type, blocker_id FROM dependencies "
+            "WHERE blocked_type='task' AND blocked_id=?",
+            (task_uuid,),
+        ).fetchall()
+    return {
+        "blocks": [{"type": r["blocked_type"], "id": r["blocked_id"]} for r in blocks],
+        "blocked_by": [{"type": r["blocker_type"], "id": r["blocker_id"]} for r in blocked_by],
+    }
+
+
 def add_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
     with get_db(db_path) as conn:
         conn.execute(
@@ -570,6 +589,18 @@ def get_invocation_log(db_path: Path, n: int = 5) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_last_bot_activity(db_path: Path) -> dict | None:
+    """Return the most recent invocation_log entry."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT stage, response, error, ts FROM invocation_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    return {"stage": row["stage"], "response": row["response"][:200] if row["response"] else None,
+            "error": row["error"], "ts": row["ts"]}
+
+
 def insert_check_in(db_path: Path, date: str, anchor_id: str,
                     accomplished: str, current_status: str) -> None:
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -596,18 +627,20 @@ def _derive_milestone_status(statuses: list[str]) -> str:
 def create_milestone(
     db_path: Path, context_subject: str, name: str,
     description: str | None = None, target_date: str | None = None,
+    color: str | None = None,
 ) -> dict:
     mid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
         conn.execute(
-            "INSERT INTO milestones (id, context_subject, name, description, target_date, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (mid, context_subject, name, description, target_date, now, now),
+            "INSERT INTO milestones (id, context_subject, name, description, target_date, color, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (mid, context_subject, name, description, target_date, color, now, now),
         )
     return {
         "id": mid, "context_subject": context_subject, "name": name,
         "description": description, "target_date": target_date,
+        "color": color,
         "status": "pending", "status_override": False,
         "created_at": now, "updated_at": now,
         "task_count": 0, "done_count": 0, "task_ids": [], "tasks": [],
@@ -664,6 +697,7 @@ def get_milestones(db_path: Path, context_subject: str | None = None) -> list[di
             "name": m["name"],
             "description": m["description"],
             "target_date": m["target_date"],
+            "color": m["color"],
             "status": m["status"] if m["status_override"] else _derive_milestone_status(statuses),
             "status_override": bool(m["status_override"]),
             "created_at": m["created_at"],
@@ -677,7 +711,7 @@ def get_milestones(db_path: Path, context_subject: str | None = None) -> list[di
 
 
 def patch_milestone(db_path: Path, milestone_id: str, fields: dict) -> dict | None:
-    allowed = {"name", "description", "target_date"}
+    allowed = {"name", "description", "target_date", "color"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if "status" in fields:
         updates["status"] = fields["status"]
@@ -785,6 +819,38 @@ def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict
     if not config or not config.get("enabled"):
         return None
     return config
+
+
+def create_unscheduled_task(
+    db_path: Path, text: str, description: str | None = None,
+    status: str = "pending",
+) -> dict:
+    """Create a task with no plan_date or anchor_id (backlog task)."""
+    task_uuid = str(uuid.uuid4())
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO tasks (uuid, plan_date, anchor_id, text, status, description) "
+            "VALUES (?,NULL,NULL,?,?,?)",
+            (task_uuid, text, status, description),
+        )
+    return {"id": task_uuid, "text": text, "status": status, "description": description,
+            "position": 0, "followup_config": None, "blocks": [], "blocked_by": []}
+
+
+def get_unscheduled_tasks(db_path: Path) -> list[dict]:
+    """Get all tasks with no plan_date (backlog)."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT uuid, text, status, position, followup_config, description "
+            "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
+        ).fetchall()
+    return [
+        {"id": r["uuid"], "text": r["text"], "status": r["status"],
+         "position": r["position"], "description": r["description"],
+         "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
+         "blocks": [], "blocked_by": []}
+        for r in rows
+    ]
 
 
 def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list[dict]:

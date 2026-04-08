@@ -15,6 +15,7 @@ from db.queries import (
     create_milestone, get_milestones, patch_milestone, delete_milestone,
     link_milestone_task, unlink_milestone_task,
     add_dependency, remove_dependency, get_dependencies_for,
+    get_full_task_dependencies,
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
     get_links, create_link, delete_link,
     patch_task_fields,
@@ -842,3 +843,50 @@ def test_patch_task_description(db_path):
     plan = get_plan(db_path, "2026-03-30")
     task = plan["anchors"]["grind_am"]["tasks"][0]
     assert task["description"] == "A detailed description."
+
+
+# ---------------------------------------------------------------------------
+# get_full_task_dependencies — cross-day dependency resolution
+# ---------------------------------------------------------------------------
+
+def test_milestone_color_roundtrip(db_path):
+    upsert_context_entry(db_path, "Proj", "body")
+    m = create_milestone(db_path, "Proj", "Ship v2", color="#ff6b6b")
+    assert m["color"] == "#ff6b6b"
+    ms = get_milestones(db_path, "Proj")
+    assert ms[0]["color"] == "#ff6b6b"
+    patch_milestone(db_path, m["id"], {"color": "#4ecdc4"})
+    ms2 = get_milestones(db_path, "Proj")
+    assert ms2[0]["color"] == "#4ecdc4"
+
+
+# ---------------------------------------------------------------------------
+# get_full_task_dependencies — cross-day dependency resolution
+# ---------------------------------------------------------------------------
+
+def test_get_full_task_dependencies_cross_day(db_path):
+    # Create tasks on two different dates
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    upsert_plan(db_path, "2026-03-31")
+    tasks_day1 = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                               [{"text": "Day1 Task"}], notes="")
+    tasks_day2 = upsert_tasks(db_path, "2026-03-31", "grind_am",
+                               [{"text": "Day2 Task"}], notes="")
+    uid_day1 = tasks_day1[0]["id"]
+    uid_day2 = tasks_day2[0]["id"]
+
+    # Day1 task blocks Day2 task (cross-day dependency)
+    add_dependency(db_path, "task", uid_day1, "task", uid_day2)
+
+    deps_day1 = get_full_task_dependencies(db_path, uid_day1)
+    assert len(deps_day1["blocks"]) == 1
+    assert deps_day1["blocks"][0]["type"] == "task"
+    assert deps_day1["blocks"][0]["id"] == uid_day2
+    assert deps_day1["blocked_by"] == []
+
+    deps_day2 = get_full_task_dependencies(db_path, uid_day2)
+    assert deps_day2["blocks"] == []
+    assert len(deps_day2["blocked_by"]) == 1
+    assert deps_day2["blocked_by"][0]["type"] == "task"
+    assert deps_day2["blocked_by"][0]["id"] == uid_day1

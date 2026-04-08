@@ -174,6 +174,21 @@ onMounted(async () => {
             class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none" />
         </div>
 
+        <!-- Color -->
+        <label class="flex flex-col gap-1 text-white/50 text-xs">
+          Color
+          <div class="flex items-center gap-2">
+            <input
+              :value="milestone.color ?? ''"
+              type="color"
+              @change="patchMilestone({ color: ($event.target as HTMLInputElement).value })"
+              class="bg-white/10 rounded h-8 w-12 cursor-pointer" />
+            <button v-if="milestone.color"
+                    @click="patchMilestone({ color: null })"
+                    class="text-xs text-white/30 hover:text-white/60">Clear</button>
+          </div>
+        </label>
+
         <!-- Description -->
         <div class="flex flex-col gap-1">
           <label class="text-xs text-white/50 uppercase tracking-wide">Description</label>

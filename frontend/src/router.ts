@@ -9,6 +9,15 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
     { path: '/admin', name: 'admin', component: () => import('./views/AdminView.vue') },
     {
+      path: '/dashboard',
+      name: 'dashboard',
+      component: () => import('./views/DashboardView.vue'),
+      children: [
+        { path: 'task/:taskId', name: 'dashboard-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'milestone/:milestoneId', name: 'dashboard-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
+    {
       path: '/plan/day/:date?',
       name: 'day',
       component: () => import('./views/PlanView.vue'),
@@ -47,8 +56,16 @@ const router = createRouter({
       ],
     },
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
-    { path: '/', redirect: '/plan/day' },
-    { path: '/:pathMatch(.*)*', redirect: '/plan/day' },
+    {
+      path: '/backlog',
+      name: 'backlog',
+      component: () => import('./views/BacklogView.vue'),
+      children: [
+        { path: 'task/:taskId', name: 'backlog-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+      ],
+    },
+    { path: '/', redirect: '/dashboard' },
+    { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
 })
 
@@ -60,10 +77,10 @@ router.beforeEach(async (to) => {
     return { name: 'login' }
   }
   if (auth.isAuthenticated && publicRoutes.includes(to.name as string)) {
-    return { name: 'day' }
+    return { name: 'dashboard' }
   }
   if (to.name === 'admin' && !auth.user?.is_admin) {
-    return { name: 'day' }
+    return { name: 'dashboard' }
   }
 })
 

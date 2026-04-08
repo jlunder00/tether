@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     uuid TEXT UNIQUE,
-    plan_date TEXT NOT NULL REFERENCES plans(date) ON DELETE CASCADE,
-    anchor_id TEXT NOT NULL REFERENCES anchors(id),
+    plan_date TEXT,
+    anchor_id TEXT,
     position INTEGER NOT NULL DEFAULT 0,
     text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS milestones (
     target_date     TEXT,
     status          TEXT NOT NULL DEFAULT 'pending',
     status_override INTEGER NOT NULL DEFAULT 0,
+    color           TEXT,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
