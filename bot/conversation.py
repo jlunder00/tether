@@ -29,44 +29,32 @@ def build_system_prompt(
     plan_summary: str,
     context_subjects: list[str],
     session_notes: str | None,
+    mode: str = "scheduler",
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
 ) -> str:
     """Assemble the system prompt from modular sections.
 
-    Stable sections (identity, rules) are cheap to cache.
-    Volatile sections (anchor, plan, date) are recomputed each turn
-    but kept short so cache misses are inexpensive.
+    Modes control which sections are included:
+      - "scheduler": full scheduling + backlog focus (default for FULL path)
+      - "coach": brief accountability coaching (for followup nudges)
+      - "planner": detailed planning with structured output
+      - "quick": minimal prompt for simple responses
+      - "followup": followup ping coaching style
+
+    Callers can further customize with include/exclude lists.
     """
-    today = date.today().isoformat()
-    sections = []
+    from bot.prompt_sections import build_prompt
 
-    # --- Identity + rules (stable) ---
-    sections.append(
-        "You are Tether, a daily task management assistant. "
-        "You help the user stay focused, track their plan, and manage their context. "
-        "Be concise and direct. Prefer actions over explanation."
-    )
-
-    # --- Current state (volatile) ---
-    sections.append(
-        f"Today is {today}. Current time block: {anchor_name} (starts {anchor_time})."
-    )
-
-    # --- Plan (semi-stable) ---
-    if plan_summary:
-        sections.append(f"Today's plan:\n{plan_summary}")
-
-    # --- Context index (semi-stable, subjects only — bodies fetched via tools) ---
-    if context_subjects:
-        subjects_list = "\n".join(f"  - {s}" for s in context_subjects)
-        sections.append(
-            f"Available context entries (fetch bodies with get_context_entry tool):\n{subjects_list}"
-        )
-
-    # --- Session notes (injected when available, replaces raw history) ---
-    if session_notes:
-        sections.append(f"Session Notes:\n{session_notes}")
-
-    return "\n\n".join(sections)
+    ctx = {
+        "today": date.today().isoformat(),
+        "anchor_name": anchor_name,
+        "anchor_time": anchor_time,
+        "plan_summary": plan_summary,
+        "context_subjects": context_subjects,
+        "session_notes": session_notes,
+    }
+    return build_prompt(mode=mode, ctx=ctx, include=include, exclude=exclude)
 
 
 # ---------------------------------------------------------------------------
