@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted, computed, ref } from 'vue'
+import { api } from '../lib/api'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
@@ -7,11 +8,19 @@ import { useMilestoneStore } from '../stores/milestones'
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
+const botStatus = ref('unknown')
 
-onMounted(() => {
+onMounted(async () => {
   planStore.fetchPlan()
   anchorStore.fetchAnchors()
   milestoneStore.fetchAll()
+  try {
+    const resp = await api('/api/bot/health')
+    if (resp.ok) {
+      const data = await resp.json()
+      botStatus.value = data.status
+    }
+  } catch { /* ignore */ }
 })
 
 const now = new Date()
@@ -45,7 +54,14 @@ const dayStats = computed(() => {
 
 <template>
   <div class="min-h-screen bg-gray-900 text-white p-6">
-    <h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+    <div class="flex items-center gap-4 mb-6">
+      <h1 class="text-2xl font-bold">Dashboard</h1>
+      <div class="flex items-center gap-2 text-sm">
+        <span class="w-2 h-2 rounded-full"
+              :class="botStatus === 'ok' ? 'bg-green-400' : botStatus === 'stale' ? 'bg-yellow-400' : 'bg-red-400'" />
+        <span class="text-white/50">Bot {{ botStatus }}</span>
+      </div>
+    </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Now Box -->
