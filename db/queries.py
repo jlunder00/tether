@@ -659,11 +659,20 @@ def create_milestone(
     mid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
-        conn.execute(
-            "INSERT INTO milestones (id, context_subject, name, description, target_date, color, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (mid, context_subject, name, description, target_date, color, now, now),
-        )
+        # Check if color column exists
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(milestones)").fetchall()]
+        if "color" in cols:
+            conn.execute(
+                "INSERT INTO milestones (id, context_subject, name, description, target_date, color, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (mid, context_subject, name, description, target_date, color, now, now),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO milestones (id, context_subject, name, description, target_date, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (mid, context_subject, name, description, target_date, now, now),
+            )
     return {
         "id": mid, "context_subject": context_subject, "name": name,
         "description": description, "target_date": target_date,
@@ -724,7 +733,7 @@ def get_milestones(db_path: Path, context_subject: str | None = None) -> list[di
             "name": m["name"],
             "description": m["description"],
             "target_date": m["target_date"],
-            "color": m["color"],
+            "color": m["color"] if "color" in m.keys() else None,
             "status": m["status"] if m["status_override"] else _derive_milestone_status(statuses),
             "status_override": bool(m["status_override"]),
             "created_at": m["created_at"],

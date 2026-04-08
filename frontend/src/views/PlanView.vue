@@ -3,6 +3,7 @@ import { computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore } from '../stores/anchors'
+import { useMilestoneStore } from '../stores/milestones'
 import AnchorBlock from '../components/AnchorBlock.vue'
 import WeekView from '../components/WeekView.vue'
 import MonthView from '../components/MonthView.vue'
@@ -11,6 +12,7 @@ const props = defineProps<{ view: string; date?: string }>()
 const router = useRouter()
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
+const milestoneStore = useMilestoneStore()
 
 // Resolve date from route or default to today
 const activeDate = computed(() => (props.date as string) || planStore.today)
@@ -33,6 +35,7 @@ const displayDate = computed(() => {
 watch(activeDate, (d) => planStore.fetchPlan(d), { immediate: true })
 onMounted(() => {
   anchorStore.fetchAnchors()
+  milestoneStore.fetchAll()
 })
 
 function offsetDate(base: string, days: number): string {
