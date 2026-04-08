@@ -20,6 +20,7 @@ export interface Milestone {
   target_date: string | null
   status: MilestoneStatus
   status_override: boolean
+  color: string | null
   created_at: string
   updated_at: string
   task_count: number
@@ -67,7 +68,7 @@ export const useMilestoneStore = defineStore('milestones', () => {
     return m
   }
 
-  async function patchMilestone(id: string, fields: Partial<Pick<Milestone, 'name' | 'description' | 'target_date' | 'status'>>) {
+  async function patchMilestone(id: string, fields: Partial<Pick<Milestone, 'name' | 'description' | 'target_date' | 'status' | 'color'>>) {
     const resp = await api(`/api/milestones/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
