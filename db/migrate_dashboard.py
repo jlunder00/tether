@@ -29,6 +29,7 @@ def migrate(db_path: Path = DB_PATH) -> None:
         else:
             select_sql = "SELECT id, uuid, plan_date, anchor_id, position, text, status, followup_config, notes, NULL FROM tasks"
         conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DROP TABLE IF EXISTS tasks_new")
         conn.execute("""
             CREATE TABLE tasks_new (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
