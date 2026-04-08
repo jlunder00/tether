@@ -92,12 +92,20 @@ async function addLink() {
 
 // Task PATCH helper
 async function patchTask(fields: Record<string, unknown>) {
-  await api(`/api/tasks/${props.taskId}`, {
+  const resp = await api(`/api/tasks/${props.taskId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(fields),
   })
-  await planStore.fetchPlan()
+  if (isBacklog.value) {
+    // Update standalone task from response if applicable
+    if (resp.ok && standaloneTask.value) {
+      standaloneTask.value = await resp.json()
+    }
+    await backlogStore.fetchTasks()
+  } else {
+    await planStore.fetchPlan()
+  }
 }
 
 // Text editing
@@ -176,7 +184,11 @@ async function deleteTask() {
   if (!confirm('Delete this task?')) return
   await api(`/api/tasks/${props.taskId}`, { method: 'DELETE' })
   router.back()
-  await planStore.fetchPlan()
+  if (isBacklog.value) {
+    await backlogStore.fetchTasks()
+  } else {
+    await planStore.fetchPlan()
+  }
 }
 
 // Navigate to milestone panel
