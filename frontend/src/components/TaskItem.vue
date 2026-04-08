@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
@@ -57,10 +57,25 @@ function toggleFollowup(enabled: boolean) {
   }
   emit('update', { ...props.task, followup_config: enabled ? fc : null })
 }
+
+const milestoneColors = computed(() =>
+  (milestoneStore.taskMilestones[props.task.id] ?? [])
+    .map(m => m.color)
+    .filter((c): c is string => c !== null)
+)
 </script>
 
 <template>
-  <li class="flex gap-2 items-center group">
+  <li class="group"
+      :style="milestoneColors.length ? {
+        borderLeft: `3px solid ${milestoneColors[0]}`,
+        paddingLeft: '8px',
+        borderImage: milestoneColors.length > 1
+          ? `linear-gradient(to bottom, ${milestoneColors.join(', ')}) 1`
+          : undefined,
+        borderLeftWidth: milestoneColors.length > 1 ? '4px' : '3px',
+      } : undefined">
+    <div class="flex gap-2 items-center">
     <button
       @click="cycleStatus"
       :class="STATUS_COLORS[task.status]"
@@ -74,7 +89,9 @@ function toggleFollowup(enabled: boolean) {
     <span
       v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
       @click="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
-      class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/50 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer hover:bg-white/20">
+      :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
+      class="text-xs px-1 py-0.5 rounded border flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+      :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">
       {{ m.name }}
     </span>
     <button
@@ -127,5 +144,6 @@ function toggleFollowup(enabled: boolean) {
       </div>
       </Teleport>
     </div>
+  </div>
   </li>
 </template>
