@@ -42,6 +42,11 @@ async function logout() {
                        :class="$route.path === '/anchors' ? 'bg-white/20 text-white' : 'text-white/60'">
             Anchors
           </router-link>
+          <router-link to="/backlog"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+                       :class="$route.path.startsWith('/backlog') ? 'bg-white/20 text-white' : 'text-white/60'">
+            Backlog
+          </router-link>
         </div>
       </div>
       <div class="flex items-center gap-2">
