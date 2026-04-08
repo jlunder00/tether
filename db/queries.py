@@ -615,18 +615,20 @@ def _derive_milestone_status(statuses: list[str]) -> str:
 def create_milestone(
     db_path: Path, context_subject: str, name: str,
     description: str | None = None, target_date: str | None = None,
+    color: str | None = None,
 ) -> dict:
     mid = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
         conn.execute(
-            "INSERT INTO milestones (id, context_subject, name, description, target_date, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (mid, context_subject, name, description, target_date, now, now),
+            "INSERT INTO milestones (id, context_subject, name, description, target_date, color, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (mid, context_subject, name, description, target_date, color, now, now),
         )
     return {
         "id": mid, "context_subject": context_subject, "name": name,
         "description": description, "target_date": target_date,
+        "color": color,
         "status": "pending", "status_override": False,
         "created_at": now, "updated_at": now,
         "task_count": 0, "done_count": 0, "task_ids": [], "tasks": [],
@@ -683,6 +685,7 @@ def get_milestones(db_path: Path, context_subject: str | None = None) -> list[di
             "name": m["name"],
             "description": m["description"],
             "target_date": m["target_date"],
+            "color": m["color"],
             "status": m["status"] if m["status_override"] else _derive_milestone_status(statuses),
             "status_override": bool(m["status_override"]),
             "created_at": m["created_at"],
@@ -696,7 +699,7 @@ def get_milestones(db_path: Path, context_subject: str | None = None) -> list[di
 
 
 def patch_milestone(db_path: Path, milestone_id: str, fields: dict) -> dict | None:
-    allowed = {"name", "description", "target_date"}
+    allowed = {"name", "description", "target_date", "color"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if "status" in fields:
         updates["status"] = fields["status"]

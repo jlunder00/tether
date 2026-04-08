@@ -849,6 +849,21 @@ def test_patch_task_description(db_path):
 # get_full_task_dependencies — cross-day dependency resolution
 # ---------------------------------------------------------------------------
 
+def test_milestone_color_roundtrip(db_path):
+    upsert_context_entry(db_path, "Proj", "body")
+    m = create_milestone(db_path, "Proj", "Ship v2", color="#ff6b6b")
+    assert m["color"] == "#ff6b6b"
+    ms = get_milestones(db_path, "Proj")
+    assert ms[0]["color"] == "#ff6b6b"
+    patch_milestone(db_path, m["id"], {"color": "#4ecdc4"})
+    ms2 = get_milestones(db_path, "Proj")
+    assert ms2[0]["color"] == "#4ecdc4"
+
+
+# ---------------------------------------------------------------------------
+# get_full_task_dependencies — cross-day dependency resolution
+# ---------------------------------------------------------------------------
+
 def test_get_full_task_dependencies_cross_day(db_path):
     # Create tasks on two different dates
     upsert_anchor(db_path, _ANCHOR)
