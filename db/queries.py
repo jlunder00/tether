@@ -262,6 +262,25 @@ def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dic
     return {"blocks": blocks, "blocked_by": blocked_by}
 
 
+def get_full_task_dependencies(db_path: Path, task_uuid: str) -> dict:
+    """Get all dependencies for a task, regardless of what day the related tasks are on."""
+    with get_db(db_path) as conn:
+        blocks = conn.execute(
+            "SELECT blocked_type, blocked_id FROM dependencies "
+            "WHERE blocker_type='task' AND blocker_id=?",
+            (task_uuid,),
+        ).fetchall()
+        blocked_by = conn.execute(
+            "SELECT blocker_type, blocker_id FROM dependencies "
+            "WHERE blocked_type='task' AND blocked_id=?",
+            (task_uuid,),
+        ).fetchall()
+    return {
+        "blocks": [{"type": r["blocked_type"], "id": r["blocked_id"]} for r in blocks],
+        "blocked_by": [{"type": r["blocker_type"], "id": r["blocker_id"]} for r in blocked_by],
+    }
+
+
 def add_task_dependency(db_path: Path, task_id: str, blocked_by_id: str) -> None:
     with get_db(db_path) as conn:
         conn.execute(

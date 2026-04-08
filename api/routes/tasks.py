@@ -34,6 +34,12 @@ async def move_task(task_uuid: str, body: dict, request: Request, _auth=Depends(
     return {"ok": True}
 
 
+@router.get("/tasks/{task_uuid}/dependencies")
+async def task_dependencies(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
+    from db.queries import get_full_task_dependencies
+    return get_full_task_dependencies(request.state.db_path, task_uuid)
+
+
 @router.post("/tasks/{task_uuid}/dependencies")
 async def add_dependency(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
     add_task_dependency(request.state.db_path, task_uuid, body["blocked_by_id"])
