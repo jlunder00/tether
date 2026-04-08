@@ -215,6 +215,17 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     }
 
 
+def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
+    """Delete a task and its related data."""
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM subtasks WHERE task_id=?", (task_uuid,))
+        conn.execute("DELETE FROM links WHERE entity_type='tasks' AND entity_id=?", (task_uuid,))
+        conn.execute("DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=?) OR (blocked_type='task' AND blocked_id=?)", (task_uuid, task_uuid))
+        conn.execute("DELETE FROM milestone_tasks WHERE task_id=?", (task_uuid,))
+        conn.execute("DELETE FROM task_context WHERE task_id=?", (task_uuid,))
+        conn.execute("DELETE FROM tasks WHERE uuid=?", (task_uuid,))
+
+
 def move_task_atomic(
     db_path: Path, task_uuid: str, date: str | None, anchor_id: str | None,
     position: int | None = None,

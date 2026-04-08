@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
-    search_entities, link_task_context, unlink_task_context, get_task_contexts
+    search_entities, link_task_context, unlink_task_context, get_task_contexts, \
+    get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid
 from api.auth import auth_dependency
 import api.config as cfg
 
@@ -16,12 +17,47 @@ async def search(q: str = "", type: str = "all", request: Request = None, _auth=
     return search_entities(request.state.db_path, q.strip(), type)
 
 
+# --- Literal path routes MUST come before {task_uuid} parameterized routes ---
+
+@router.get("/tasks/unscheduled")
+async def list_unscheduled(request: Request, _auth=Depends(auth_dependency)):
+    return get_unscheduled_tasks(request.state.db_path)
+
+
+@router.post("/tasks/unscheduled")
+async def create_unscheduled(body: dict, request: Request, _auth=Depends(auth_dependency)):
+    if "text" not in body:
+        raise HTTPException(status_code=422, detail="'text' is required")
+    return create_unscheduled_task(
+        request.state.db_path, body["text"],
+        description=body.get("description"),
+        status=body.get("status", "pending"),
+    )
+
+
+# --- Parameterized routes below ---
+
+@router.get("/tasks/{task_uuid}")
+async def get_task(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
+    task = get_task_by_uuid(request.state.db_path, task_uuid)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
 @router.patch("/tasks/{task_uuid}")
 async def patch_task(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
     result = patch_task_fields(request.state.db_path, task_uuid, body)
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return result
+
+
+@router.delete("/tasks/{task_uuid}")
+async def delete_task(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
+    from db.queries import delete_task_by_uuid
+    delete_task_by_uuid(request.state.db_path, task_uuid)
+    return {"ok": True}
 
 
 @router.put("/tasks/{task_uuid}/move")
@@ -32,15 +68,6 @@ async def move_task(task_uuid: str, body: dict, request: Request, _auth=Depends(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"ok": True}
-
-
-@router.get("/tasks/{task_uuid}")
-async def get_task(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
-    from db.queries import get_task_by_uuid
-    task = get_task_by_uuid(request.state.db_path, task_uuid)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return task
 
 
 @router.get("/tasks/{task_uuid}/dependencies")
