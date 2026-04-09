@@ -66,15 +66,15 @@ const milestoneColors = computed(() =>
 </script>
 
 <template>
-  <li class="group"
+  <li class="group rounded-lg transition-colors"
       :style="milestoneColors.length ? {
-        borderLeft: `3px solid ${milestoneColors[0]}`,
-        paddingLeft: '8px',
-        borderImage: milestoneColors.length > 1
-          ? `linear-gradient(to bottom, ${milestoneColors.join(', ')}) 1`
+        border: `2px solid ${milestoneColors[0]}`,
+        padding: '4px 8px',
+        outline: milestoneColors.length > 1
+          ? `2px solid ${milestoneColors[1]}`
           : undefined,
-        borderLeftWidth: milestoneColors.length > 1 ? '4px' : '3px',
-      } : undefined">
+        outlineOffset: milestoneColors.length > 1 ? '1px' : undefined,
+      } : { padding: '4px 8px' }">
     <div class="flex gap-2 items-center">
     <button
       @click="cycleStatus"
