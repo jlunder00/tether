@@ -160,3 +160,58 @@ def test_get_current_anchor_returns_dict():
     anchor = _get_current_anchor()
     assert "id" in anchor
     assert "name" in anchor
+
+
+# --- upsert_task unified tool ---
+
+def test_upsert_task_create_backlog(db_path):
+    from tether_mcp.server import upsert_task
+    result = upsert_task(text="Backlog item", description="Details here",
+                         context_subjects=["Intellipat"])
+    assert result["id"]
+    assert result["text"] == "Backlog item"
+    assert result["description"] == "Details here"
+    # Verify context link
+    from db.queries import get_task_contexts
+    contexts = get_task_contexts(db_path, result["id"])
+    assert "Intellipat" in contexts
+
+
+def test_upsert_task_create_scheduled(db_path):
+    from tether_mcp.server import upsert_task
+    result = upsert_task(text="Scheduled task", date="2026-03-26", anchor_id="grind_am")
+    assert result["id"]
+    assert result["plan_date"] == "2026-03-26"
+    assert result["anchor_id"] == "grind_am"
+
+
+def test_upsert_task_create_with_milestone(db_path):
+    from tether_mcp.server import upsert_task
+    from db.queries import create_milestone
+    m = create_milestone(db_path, "Intellipat", "Test MS")
+    result = upsert_task(text="Linked task", milestone_ids=[m["id"]],
+                         context_subjects=["Intellipat"])
+    assert result["id"]
+    from db.queries import get_milestones
+    ms = get_milestones(db_path, "Intellipat")
+    test_ms = next(x for x in ms if x["id"] == m["id"])
+    assert result["id"] in test_ms["task_ids"]
+
+
+def test_upsert_task_update_existing(db_path):
+    from tether_mcp.server import upsert_task
+    created = upsert_task(text="Original")
+    updated = upsert_task(task_uuid=created["id"], status="done",
+                          description="Now done")
+    assert updated["status"] == "done"
+    assert updated["description"] == "Now done"
+    assert updated["text"] == "Original"
+
+
+def test_upsert_task_move_to_backlog(db_path):
+    from tether_mcp.server import upsert_task
+    created = upsert_task(text="Will unschedule", date="2026-03-26", anchor_id="grind_am")
+    assert created["plan_date"] == "2026-03-26"
+    moved = upsert_task(task_uuid=created["id"], backlog=True)
+    assert moved["plan_date"] is None
+    assert moved["anchor_id"] is None
