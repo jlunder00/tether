@@ -32,6 +32,9 @@ from db.queries import (
     get_task_contexts,
     get_context_tasks,
     patch_milestone,
+    create_unscheduled_task,
+    get_task_by_uuid,
+    move_task_atomic,
 )
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
@@ -165,6 +168,106 @@ def patch_context_entry(subject: str, old: str, new: str) -> dict:
 def get_today_plan(date: str = "") -> dict:
     """Get the anchor plan for a given date. Pass YYYY-MM-DD or leave empty for today."""
     return _get_today_plan(date or None)
+
+
+@mcp.tool()
+def upsert_task(
+    text: str = "",
+    task_uuid: str = "",
+    status: str = "",
+    description: str = "",
+    date: str = "",
+    anchor_id: str = "",
+    backlog: bool = False,
+    context_subjects: list[str] = [],
+    milestone_ids: list[str] = [],
+    blocked_by: list[str] = [],
+) -> dict:
+    """Create or update a task in one call. All fields optional except:
+    - To CREATE: must provide 'text'. Lands in backlog unless date+anchor_id given.
+    - To UPDATE: must provide 'task_uuid'. Only provided fields are changed.
+
+    Fields:
+    - text: task title (required for create, optional for update)
+    - task_uuid: existing task UUID (omit to create new)
+    - status: pending/in_progress/done/skipped/blocked
+    - description: detailed description text
+    - date + anchor_id: schedule to a specific day+anchor
+    - backlog: True to unschedule (move to backlog)
+    - context_subjects: list of context entry subjects to link (additive)
+    - milestone_ids: list of milestone IDs to link (additive)
+    - blocked_by: list of task/milestone UUIDs that block this task (additive)
+
+    Returns the task dict with id, text, status, etc."""
+    db = _db()
+
+    if task_uuid:
+        # UPDATE existing task
+        patch_fields = {}
+        if text:
+            patch_fields["text"] = text
+        if status:
+            patch_fields["status"] = status
+        if description:
+            patch_fields["description"] = description
+        if patch_fields:
+            patch_task_fields(db, task_uuid, patch_fields)
+
+        # Move if requested
+        if backlog:
+            move_task_atomic(db, task_uuid, None, None)
+        elif date and anchor_id:
+            move_task_atomic(db, task_uuid, date, anchor_id)
+
+        result_task = get_task_by_uuid(db, task_uuid)
+    else:
+        # CREATE new task
+        if not text:
+            return {"error": "text is required to create a new task"}
+
+        if date and anchor_id:
+            # Scheduled task
+            upsert_plan(db, date)
+            tasks_result = upsert_tasks(db, date, anchor_id, [
+                {"text": text, "status": status or "pending"}
+            ])
+            new_task = next((t for t in tasks_result if t["text"] == text), tasks_result[-1])
+            task_uuid = new_task["id"]
+        else:
+            # Backlog task
+            new_task = create_unscheduled_task(db, text,
+                                               description=description or None,
+                                               status=status or "pending")
+            task_uuid = new_task["id"]
+
+        if description and date and anchor_id:
+            # Scheduled task needs description set separately
+            patch_task_fields(db, task_uuid, {"description": description})
+
+        result_task = get_task_by_uuid(db, task_uuid)
+
+    # Link contexts (additive)
+    for subject in context_subjects:
+        try:
+            link_task_context(db, task_uuid, subject)
+        except Exception:
+            pass  # already linked
+
+    # Link milestones (additive)
+    for mid in milestone_ids:
+        try:
+            link_milestone_task(db, mid, task_uuid)
+        except Exception:
+            pass  # already linked
+
+    # Add blockers (additive)
+    for blocker_id in blocked_by:
+        try:
+            add_dependency(db, "task", blocker_id, "task", task_uuid)
+        except Exception:
+            pass  # already exists
+
+    return result_task or {"id": task_uuid, "text": text, "status": status or "pending"}
 
 
 @mcp.tool()
