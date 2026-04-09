@@ -66,7 +66,8 @@ def test_upsert_tasks_replaces_anchor_tasks(db_path):
     assert plan["anchors"]["grind_am"]["notes"] == "ML roles"
 
 
-def test_upsert_tasks_replaces_existing(db_path):
+def test_upsert_tasks_adds_without_deleting(db_path):
+    """upsert_tasks no longer deletes implicitly — adding new tasks preserves existing."""
     upsert_anchor(db_path, {"id": "grind_am", "name": "The Grind", "time": "08:00",
                              "duration_minutes": 120, "flexibility": "locked",
                              "strictness": 4, "color": "#e05c5c", "position": 1})
@@ -75,7 +76,8 @@ def test_upsert_tasks_replaces_existing(db_path):
     upsert_tasks(db_path, "2026-03-26", "grind_am", tasks=["New task"], notes="")
     plan = get_plan(db_path, "2026-03-26")
     texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
-    assert texts == ["New task"]
+    assert "Old task" in texts
+    assert "New task" in texts
 
 
 def test_context_entry_crud(db_path):
@@ -349,16 +351,33 @@ def test_upsert_tasks_preserves_uuid_on_update(db_path):
     assert updated[0]["status"] == "in_progress"
 
 
-def test_upsert_tasks_removes_deleted_tasks(db_path):
+def test_upsert_tasks_does_not_delete_on_omit(db_path):
+    """upsert_tasks never deletes implicitly — use delete_task_by_uuid for that."""
     upsert_anchor(db_path, _ANCHOR)
     upsert_plan(db_path, "2026-03-30")
     tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
                          [{"text": "Task A"}, {"text": "Task B"}], notes="")
     uid_a = tasks[0]["id"]
+    # Update just Task A — Task B should still exist
     updated = upsert_tasks(db_path, "2026-03-30", "grind_am",
-                           [{"id": uid_a, "text": "Task A"}], notes="")
-    assert len(updated) == 1
-    assert updated[0]["id"] == uid_a
+                           [{"id": uid_a, "text": "Task A updated"}], notes="")
+    assert len(updated) == 2  # Both tasks still present
+    texts = [t["text"] for t in updated]
+    assert "Task A updated" in texts
+    assert "Task B" in texts
+
+
+def test_explicit_delete_removes_task(db_path):
+    """delete_task_by_uuid is the only way to remove a task."""
+    from db.queries import delete_task_by_uuid
+    upsert_anchor(db_path, _ANCHOR)
+    upsert_plan(db_path, "2026-03-30")
+    tasks = upsert_tasks(db_path, "2026-03-30", "grind_am",
+                         [{"text": "Keep"}, {"text": "Remove"}], notes="")
+    delete_task_by_uuid(db_path, tasks[1]["id"])
+    plan = get_plan(db_path, "2026-03-30")
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert texts == ["Keep"]
 
 
 # ---------------------------------------------------------------------------

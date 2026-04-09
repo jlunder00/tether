@@ -114,7 +114,7 @@ def _get_today_plan(date: str | None = None) -> dict:
     return get_plan(_db(), d)
 
 
-def _update_plan_tasks(anchor_id: str, tasks: list[str], date: str | None = None) -> list[dict]:
+def _update_plan_tasks(anchor_id: str, tasks: list, date: str | None = None) -> list[dict]:
     d = date or str(date_type.today())
     upsert_plan(_db(), d)
     return upsert_tasks(_db(), d, anchor_id, tasks, notes="")
@@ -168,9 +168,22 @@ def get_today_plan(date: str = "") -> dict:
 
 
 @mcp.tool()
-def update_plan_tasks(anchor_id: str, tasks: list[str], date: str = "") -> dict:
-    """Replace the task list for an anchor. Pass YYYY-MM-DD or leave empty for today."""
+def update_plan_tasks(anchor_id: str, tasks: list, date: str = "") -> dict:
+    """Add or update tasks for an anchor. Never deletes — use remove_task to delete.
+    Each item can be:
+    - A plain string: creates a new task with that text
+    - A dict with 'id': updates that existing task (pass text/status to change them)
+    - A dict with 'text' only: creates a new task
+    Returns the full task list for this anchor after changes."""
     return _update_plan_tasks(anchor_id, tasks, date or None)
+
+
+@mcp.tool()
+def remove_task(task_uuid: str) -> dict:
+    """Permanently delete a task by UUID. Cascades to subtasks, links, dependencies, milestones."""
+    from db.queries import delete_task_by_uuid
+    delete_task_by_uuid(_db(), task_uuid)
+    return {"ok": True, "deleted": task_uuid}
 
 
 @mcp.tool()
