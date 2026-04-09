@@ -54,4 +54,10 @@ def migrate(db_path: Path = DB_PATH) -> None:
 
 
 if __name__ == "__main__":
-    migrate()
+    import sys
+    if len(sys.argv) > 1:
+        for path in sys.argv[1:]:
+            print(f"Migrating {path}...")
+            migrate(Path(path))
+    else:
+        migrate()
