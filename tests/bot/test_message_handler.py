@@ -151,10 +151,11 @@ def test_apply_mutations_update_plan_tasks_with_task_objects(db_path):
     }], db_path, TODAY)
     plan = get_plan(db_path, TODAY)
     tasks = plan["anchors"]["grind_am"]["tasks"]
-    assert len(tasks) == 1
-    assert tasks[0]["text"] == "New task"
-    assert tasks[0]["status"] == "in_progress"
-    assert tasks[0]["id"] is not None
+    texts = [t["text"] for t in tasks]
+    assert "New task" in texts
+    new_task = next(t for t in tasks if t["text"] == "New task")
+    assert new_task["status"] == "in_progress"
+    assert new_task["id"] is not None
 
 
 def test_apply_mutations_update_plan_tasks_string_list_backward_compat(db_path):
@@ -167,7 +168,8 @@ def test_apply_mutations_update_plan_tasks_string_list_backward_compat(db_path):
     }], db_path, TODAY)
     plan = get_plan(db_path, TODAY)
     texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
-    assert texts == ["String task 1", "String task 2"]
+    assert "String task 1" in texts
+    assert "String task 2" in texts
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +200,9 @@ def test_handle_update_plan_saves_tasks(db_path):
     with patch("bot.message_handler.call_claude", return_value="Updated!"):
         handle_message("/update-plan grind_am :: New task 1; New task 2", [].append, db_path=db_path)
     plan = get_plan(db_path, TODAY)
-    assert [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]] == ["New task 1", "New task 2"]
+    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    assert "New task 1" in texts
+    assert "New task 2" in texts
 
 
 # ---------------------------------------------------------------------------
@@ -613,9 +617,10 @@ def test_check_followups_sends_pre_ack_message(db_path):
         "post_ack_interval_min": 15, "post_ack_pings": 2,
     }})
     upsert_plan(db_path, TODAY)
-    tasks = upsert_tasks(db_path, TODAY, "grind_am", [{"text": "Apply to Adobe"}], notes="")
+    all_tasks = upsert_tasks(db_path, TODAY, "grind_am", [{"text": "Apply to Adobe"}], notes="")
+    adobe_task = next(t for t in all_tasks if t["text"] == "Apply to Adobe")
     started = datetime.now() - timedelta(minutes=6)
-    init_followup_state(db_path, TODAY, "grind_am", tasks[0]["id"], started)
+    init_followup_state(db_path, TODAY, "grind_am", adobe_task["id"], started)
     sent = []
     check_followups(db_path, sent.append)
     assert len(sent) == 1

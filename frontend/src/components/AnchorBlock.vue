@@ -25,7 +25,11 @@ function onUpdate(task: Task, index: number) {
   store.updateAnchorTasks(props.anchorId, updated, anchorPlan.value.notes ?? '')
 }
 
-function onRemove(index: number) {
+async function onRemove(index: number) {
+  const task = anchorPlan.value.tasks[index]
+  if (task?.id) {
+    await fetch(`/api/tasks/${task.id}`, { method: 'DELETE', credentials: 'include' })
+  }
   const updated = anchorPlan.value.tasks.filter((_, i) => i !== index)
   store.updateAnchorTasks(props.anchorId, updated, anchorPlan.value.notes ?? '')
 }

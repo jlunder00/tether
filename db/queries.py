@@ -124,49 +124,95 @@ def upsert_tasks(
     db_path: Path, date: str, anchor_id: str,
     tasks: list[dict], notes: str = "",
 ) -> list[dict]:
-    """Merge task list for (date, anchor_id). Each task: {id?, text, status?, followup_config?}.
-    Accepts plain strings for backward compatibility. Returns list with UUIDs populated."""
+    """Add or update tasks for (date, anchor_id). Never deletes implicitly.
+    Each task: {id?, text?, status?, followup_config?}.
+    - With id: update that task (preserves text/status if not provided).
+    - Without id but with text: create new task with fresh UUID.
+    Plain strings accepted for backward compat (creates new tasks).
+    Returns the full task list for this anchor after changes."""
     task_dicts = [
         {"text": t, "status": "pending"} if isinstance(t, str) else t
         for t in tasks
     ]
     with get_db(db_path) as conn:
-        existing_uuids = {
-            row["uuid"]
-            for row in conn.execute(
-                "SELECT uuid FROM tasks WHERE plan_date=? AND anchor_id=? AND uuid IS NOT NULL",
-                (date, anchor_id),
-            )
-        }
-        incoming_uuids = {t["id"] for t in task_dicts if t.get("id")}
-        for uid in existing_uuids - incoming_uuids:
-            conn.execute("DELETE FROM tasks WHERE uuid=?", (uid,))
+        conn.execute("INSERT OR IGNORE INTO plans (date) VALUES (?)", (date,))
+
+        existing_by_uuid: dict[str, dict] = {}
+        for row in conn.execute(
+            "SELECT uuid, text, status, followup_config FROM tasks "
+            "WHERE plan_date=? AND anchor_id=? AND uuid IS NOT NULL",
+            (date, anchor_id),
+        ):
+            existing_by_uuid[row["uuid"]] = dict(row)
+
+        # Track which existing tasks were referenced so we can compute new positions
+        touched_uuids: set[str] = set()
 
         result = []
-        for pos, task in enumerate(task_dicts):
+        for task in task_dicts:
             uid = task.get("id") or ""
-            status = task.get("status", "pending")
+            text = task.get("text")
+            status = task.get("status")
             fc = task.get("followup_config")
             fc_json = json.dumps(fc) if fc is not None else None
-            if uid and uid in existing_uuids:
+
+            if uid:
+                # Update existing task by UUID
+                existing = existing_by_uuid.get(uid)
+                if not existing:
+                    # Check if UUID exists in another anchor/date
+                    row = conn.execute(
+                        "SELECT text, status FROM tasks WHERE uuid=?", (uid,)
+                    ).fetchone()
+                    if not row:
+                        raise ValueError(f"Task UUID {uid} not found")
+                    existing = dict(row)
+                text = text or existing["text"]
+                status = status or existing.get("status") or "pending"
                 conn.execute(
-                    "UPDATE tasks SET text=?, status=?, position=?, followup_config=?, notes=? "
-                    "WHERE uuid=?",
-                    (task["text"], status, pos, fc_json, notes, uid),
+                    "UPDATE tasks SET plan_date=?, anchor_id=?, text=?, status=?, "
+                    "followup_config=?, notes=? WHERE uuid=?",
+                    (date, anchor_id, text, status, fc_json, notes, uid),
                 )
+                touched_uuids.add(uid)
             else:
+                # New task — must have text
+                if not text:
+                    raise ValueError("New tasks must have 'text'")
                 uid = str(uuid.uuid4())
+                status = status or "pending"
+                max_pos = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) FROM tasks "
+                    "WHERE plan_date=? AND anchor_id=?",
+                    (date, anchor_id),
+                ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO tasks (uuid, plan_date, anchor_id, position, text, status, "
                     "followup_config, notes) VALUES (?,?,?,?,?,?,?,?)",
-                    (uid, date, anchor_id, pos, task["text"], status, fc_json, notes),
+                    (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes),
                 )
+                touched_uuids.add(uid)
+
             result.append({
-                "id": uid, "text": task["text"], "status": status,
-                "position": pos, "followup_config": fc,
+                "id": uid, "text": text, "status": status,
+                "position": 0, "followup_config": fc,
                 "blocks": [], "blocked_by": [],
             })
-        return result
+
+        # Return ALL tasks for this anchor (including untouched ones)
+        all_rows = conn.execute(
+            "SELECT uuid, text, status, position, followup_config, description "
+            "FROM tasks WHERE plan_date=? AND anchor_id=? ORDER BY position",
+            (date, anchor_id),
+        ).fetchall()
+        return [
+            {"id": r["uuid"], "text": r["text"], "status": r["status"] or "pending",
+             "position": r["position"],
+             "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
+             "description": r["description"],
+             "blocks": [], "blocked_by": []}
+            for r in all_rows
+        ]
 
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
