@@ -12,8 +12,11 @@ def migrate(db_path: Path = DB_PATH) -> None:
     def try_alter(sql: str) -> None:
         try:
             conn.execute(sql)
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                pass  # Already migrated
+            else:
+                raise  # Real error — surface it
 
     try_alter("ALTER TABLE milestones ADD COLUMN color TEXT")
     # SQLite doesn't support ALTER COLUMN, so recreate tasks table with nullable columns

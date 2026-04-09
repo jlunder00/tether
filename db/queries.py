@@ -1,10 +1,14 @@
 from __future__ import annotations
 import json
+import logging
+import sqlite3
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from db.schema import get_db
+
+logger = logging.getLogger(__name__)
 
 
 def upsert_anchor(db_path: Path, anchor: dict) -> None:
@@ -53,7 +57,8 @@ def get_plan(db_path: Path, date: str) -> dict:
                 (date,)
             ).fetchall()
             has_description = True
-        except Exception:
+        except sqlite3.OperationalError:
+            logger.warning("tasks table missing 'description' column — run dashboard migration")
             task_rows = conn.execute(
                 "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
                 "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
@@ -98,8 +103,8 @@ def get_plan(db_path: Path, date: str) -> dict:
                     for task in anchor_data["tasks"]:
                         task["blocked_by"] = blocked_by_map.get(task["id"], [])
                         task["blocks"] = blocks_map.get(task["id"], [])
-            except Exception:
-                pass  # dependencies table may not exist on unmigrated DBs
+            except sqlite3.OperationalError as e:
+                logger.warning("dependencies query failed: %s", e)
 
         ack_rows = conn.execute(
             "SELECT anchor_id, acknowledged_at FROM acknowledgements WHERE plan_date=?", (date,)
@@ -219,10 +224,11 @@ def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
     """Delete a task and its related data."""
     with get_db(db_path) as conn:
         conn.execute("DELETE FROM subtasks WHERE task_id=?", (task_uuid,))
-        conn.execute("DELETE FROM links WHERE entity_type='tasks' AND entity_id=?", (task_uuid,))
+        conn.execute("DELETE FROM links WHERE parent_type='tasks' AND parent_id=?", (task_uuid,))
         conn.execute("DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=?) OR (blocked_type='task' AND blocked_id=?)", (task_uuid, task_uuid))
         conn.execute("DELETE FROM milestone_tasks WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM task_context WHERE task_id=?", (task_uuid,))
+        conn.execute("DELETE FROM followup_state WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM tasks WHERE uuid=?", (task_uuid,))
 
 
@@ -903,8 +909,8 @@ def get_unscheduled_tasks(db_path: Path) -> list[dict]:
                 ).fetchall()
                 for cr in ctx_rows:
                     ctx_map.setdefault(cr["task_id"], []).append(cr["subject"])
-            except Exception:
-                pass  # task_context table may not exist
+            except sqlite3.OperationalError as e:
+                logger.warning("task_context query failed: %s", e)
     return [
         {"id": r["uuid"], "text": r["text"], "status": r["status"],
          "position": r["position"], "description": r["description"],
