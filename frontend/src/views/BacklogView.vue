@@ -18,7 +18,7 @@ onMounted(() => {
 const grouped = computed(() => {
   const groups: Record<string, typeof backlogStore.tasks> = {}
   for (const task of backlogStore.tasks) {
-    const ctx = (task as any).contexts?.[0] ?? 'Uncategorized'
+    const ctx = task.contexts?.[0] ?? 'Uncategorized'
     if (!groups[ctx]) groups[ctx] = []
     groups[ctx].push(task)
   }
