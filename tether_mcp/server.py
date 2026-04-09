@@ -187,6 +187,22 @@ def remove_task(task_uuid: str) -> dict:
 
 
 @mcp.tool()
+def move_to_backlog(task_uuid: str) -> dict:
+    """Move a task to the backlog (unschedule it). Preserves all milestone/context/dep links."""
+    from db.queries import move_task_atomic
+    move_task_atomic(_db(), task_uuid, None, None)
+    return {"ok": True, "moved": task_uuid}
+
+
+@mcp.tool()
+def schedule_task(task_uuid: str, date: str, anchor_id: str) -> dict:
+    """Schedule a backlog task onto a specific date and anchor."""
+    from db.queries import move_task_atomic
+    move_task_atomic(_db(), task_uuid, date, anchor_id)
+    return {"ok": True, "scheduled": task_uuid, "date": date, "anchor_id": anchor_id}
+
+
+@mcp.tool()
 def get_anchors() -> list[dict]:
     """Get all anchor definitions (id, name, time, duration, color)."""
     return _get_anchors()
