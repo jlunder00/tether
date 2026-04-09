@@ -53,8 +53,14 @@ export const useMilestoneStore = defineStore('milestones', () => {
   })
 
   async function fetchAll() {
-    const resp = await api('/api/milestones')
-    all.value = await resp.json()
+    try {
+      const resp = await api('/api/milestones')
+      if (!resp.ok) throw new Error(`${resp.status}`)
+      const data = await resp.json()
+      if (Array.isArray(data)) all.value = data
+    } catch (e) {
+      console.error('fetchMilestones error:', e)
+    }
   }
 
   async function createMilestone(subject: string, name: string, description?: string, targetDate?: string) {

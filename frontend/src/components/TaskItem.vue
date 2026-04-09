@@ -90,7 +90,7 @@ const milestoneColors = computed(() =>
       v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
       @click="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
       :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-      class="text-xs px-1 py-0.5 rounded border flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+      class="text-xs px-1 py-0.5 rounded border flex-shrink-0 cursor-pointer"
       :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">
       {{ m.name }}
     </span>

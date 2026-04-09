@@ -23,7 +23,9 @@ onMounted(async () => {
   } catch { /* ignore */ }
 })
 
-const now = new Date()
+const now = ref(new Date())
+setInterval(() => { now.value = new Date() }, 60_000)
+
 const currentAnchor = computed(() => {
   const sorted = [...anchorStore.anchors].sort((a, b) => a.time.localeCompare(b.time))
   let active = sorted[0]
@@ -31,7 +33,7 @@ const currentAnchor = computed(() => {
     const [h, m] = a.time.split(':').map(Number)
     const anchorTime = new Date()
     anchorTime.setHours(h, m, 0, 0)
-    if (now >= anchorTime) active = a
+    if (now.value >= anchorTime) active = a
     else break
   }
   return active
