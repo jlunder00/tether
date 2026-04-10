@@ -257,6 +257,26 @@ const STATUS_COLORS: Record<string, string> = {
   blocked: 'bg-red-400',
 }
 
+// Resolve dependency entity_id to a display name
+function depLabel(type: string, entityId: string): string {
+  if (type === 'milestone') {
+    const m = milestoneStore.all.find(m => m.id === entityId)
+    if (m) return m.name
+  } else {
+    // Search today's plan tasks
+    if (planStore.plan) {
+      for (const anchor of Object.values(planStore.plan.anchors)) {
+        const t = anchor.tasks.find(t => t.id === entityId)
+        if (t) return t.text
+      }
+    }
+    // Search backlog
+    const bt = backlogStore.tasks.find(t => t.id === entityId)
+    if (bt) return bt.text
+  }
+  return entityId.slice(0, 8) + '…'
+}
+
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
@@ -442,7 +462,7 @@ onMounted(async () => {
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.entity_id }}</span>
+              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ depLabel(d.type, d.entity_id) }}</span>
               <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
               <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>
@@ -457,7 +477,7 @@ onMounted(async () => {
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.entity_id }}</span>
+              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ depLabel(d.type, d.entity_id) }}</span>
               <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
               <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>
@@ -474,8 +494,12 @@ onMounted(async () => {
             v-for="m in (milestoneStore.taskMilestones[taskId] ?? [])" :key="m.id"
             @click="openMilestone(m.id)"
             class="flex items-center gap-2 text-left">
-            <span class="text-sm text-white/70 hover:text-white">{{ m.name }}</span>
-            <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ m.status }}</span>
+            <span v-if="m.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: m.color }" />
+            <span class="text-sm text-white/70 hover:text-white"
+                  :style="m.color ? { color: m.color } : {}">{{ m.name }}</span>
+            <span class="text-xs px-1 py-0.5 rounded text-white/40"
+                  :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
+                  :class="m.color ? 'border' : 'bg-white/10'">{{ m.status }}</span>
           </button>
           <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones..." @select="linkMilestoneFromSearch" />
         </div>

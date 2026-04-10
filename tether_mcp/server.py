@@ -344,6 +344,35 @@ def patch_task(task_uuid: str, fields: dict) -> dict:
 
 
 @mcp.tool()
+def append_task_description(task_uuid: str, text: str) -> dict:
+    """Append text to a task's description (adds after existing content with double newline).
+    Creates description if none exists."""
+    db = _db()
+    existing = get_task_by_uuid(db, task_uuid)
+    if not existing:
+        return {"error": "Task not found"}
+    current = existing.get("description") or ""
+    new_desc = (current + "\n\n" + text).strip() if current else text
+    return patch_task_fields(db, task_uuid, {"description": new_desc}) or {"error": "Update failed"}
+
+
+@mcp.tool()
+def append_milestone_description(milestone_id: str, text: str) -> dict:
+    """Append text to a milestone's description (adds after existing content with double newline).
+    Creates description if none exists."""
+    db = _db()
+    from db.queries import get_milestones as _get_ms
+    all_ms = _get_ms(db)
+    ms = next((m for m in all_ms if m["id"] == milestone_id), None)
+    if not ms:
+        return {"error": "Milestone not found"}
+    current = ms.get("description") or ""
+    new_desc = (current + "\n\n" + text).strip() if current else text
+    result = patch_milestone(db, milestone_id, {"description": new_desc})
+    return result or {"error": "Update failed"}
+
+
+@mcp.tool()
 def search(query: str, type: str = "all") -> list[dict]:
     """Search tasks and milestones by text. Type: 'task', 'milestone', or 'all'.
     Returns [{id, label, sublabel, type}]."""
