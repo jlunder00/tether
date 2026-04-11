@@ -16,7 +16,7 @@ export interface Task {
   followup_config: FollowupConfig | null
   blocks: string[]
   blocked_by: string[]
-  contexts?: string[]
+  context_subject: string | null
 }
 
 export interface AnchorPlan { tasks: Task[]; notes: string }

@@ -179,7 +179,7 @@ def upsert_task(
     date: str = "",
     anchor_id: str = "",
     backlog: bool = False,
-    context_subjects: list[str] = [],
+    context_subject: str = "",
     milestone_ids: list[str] = [],
     blocked_by: list[str] = [],
 ) -> dict:
@@ -194,7 +194,7 @@ def upsert_task(
     - description: detailed description text
     - date + anchor_id: schedule to a specific day+anchor
     - backlog: True to unschedule (move to backlog)
-    - context_subjects: list of context entry subjects to link (additive)
+    - context_subject: context entry subject to link (replaces existing)
     - milestone_ids: list of milestone IDs to link (additive)
     - blocked_by: list of task/milestone UUIDs that block this task (additive)
 
@@ -229,7 +229,8 @@ def upsert_task(
             # Scheduled task
             upsert_plan(db, date)
             tasks_result = upsert_tasks(db, date, anchor_id, [
-                {"text": text, "status": status or "pending"}
+                {"text": text, "status": status or "pending",
+                 "context_subject": context_subject or None}
             ])
             new_task = next((t for t in tasks_result if t["text"] == text), tasks_result[-1])
             task_uuid = new_task["id"]
@@ -237,7 +238,8 @@ def upsert_task(
             # Backlog task
             new_task = create_unscheduled_task(db, text,
                                                description=description or None,
-                                               status=status or "pending")
+                                               status=status or "pending",
+                                               context_subject=context_subject or None)
             task_uuid = new_task["id"]
 
         if description and date and anchor_id:
@@ -246,12 +248,9 @@ def upsert_task(
 
         result_task = get_task_by_uuid(db, task_uuid)
 
-    # Link contexts (additive)
-    for subject in context_subjects:
-        try:
-            link_task_context(db, task_uuid, subject)
-        except Exception:
-            pass  # already linked
+    # Set context (replaces existing)
+    if context_subject and task_uuid:
+        patch_task_fields(db, task_uuid, {"context_subject": context_subject})
 
     # Link milestones (additive)
     for mid in milestone_ids:

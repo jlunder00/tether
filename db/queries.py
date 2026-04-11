@@ -49,22 +49,33 @@ def get_plan(db_path: Path, date: str) -> dict:
         if not plan_row:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
-        # Try with description column; fall back for unmigrated DBs
+        # Try with description + context_subject columns; fall back for unmigrated DBs
         try:
             task_rows = conn.execute(
-                "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
+                "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description, context_subject "
                 "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
                 (date,)
             ).fetchall()
             has_description = True
+            has_context_subject = True
         except sqlite3.OperationalError:
-            logger.warning("tasks table missing 'description' column — run dashboard migration")
-            task_rows = conn.execute(
-                "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
-                "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
-                (date,)
-            ).fetchall()
-            has_description = False
+            try:
+                task_rows = conn.execute(
+                    "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
+                    "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+                    (date,)
+                ).fetchall()
+                has_description = True
+                has_context_subject = False
+            except sqlite3.OperationalError:
+                logger.warning("tasks table missing 'description' column — run dashboard migration")
+                task_rows = conn.execute(
+                    "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
+                    "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+                    (date,)
+                ).fetchall()
+                has_description = False
+                has_context_subject = False
 
         anchors: dict = {}
         for row in task_rows:
@@ -79,6 +90,7 @@ def get_plan(db_path: Path, date: str) -> dict:
                 "position": row["position"],
                 "followup_config": json.loads(fc) if fc else None,
                 "description": row["description"] if has_description else None,
+                "context_subject": row["context_subject"] if has_context_subject else None,
                 "blocks": [],
                 "blocked_by": [],
             })
@@ -181,6 +193,7 @@ def upsert_tasks(
                     raise ValueError("New tasks must have 'text'")
                 uid = str(uuid.uuid4())
                 status = status or "pending"
+                context_subject = task.get("context_subject")
                 max_pos = conn.execute(
                     "SELECT COALESCE(MAX(position), -1) FROM tasks "
                     "WHERE plan_date=? AND anchor_id=?",
@@ -188,8 +201,8 @@ def upsert_tasks(
                 ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO tasks (uuid, plan_date, anchor_id, position, text, status, "
-                    "followup_config, notes) VALUES (?,?,?,?,?,?,?,?)",
-                    (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes),
+                    "followup_config, notes, context_subject) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes, context_subject),
                 )
                 touched_uuids.add(uid)
 
@@ -201,7 +214,7 @@ def upsert_tasks(
 
         # Return ALL tasks for this anchor (including untouched ones)
         all_rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE plan_date=? AND anchor_id=? ORDER BY position",
             (date, anchor_id),
         ).fetchall()
@@ -210,6 +223,7 @@ def upsert_tasks(
              "position": r["position"],
              "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
              "description": r["description"],
+             "context_subject": r["context_subject"],
              "blocks": [], "blocked_by": []}
             for r in all_rows
         ]
@@ -217,7 +231,7 @@ def upsert_tasks(
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
     """Update allowed fields on a task. Returns updated task dict or None if not found."""
-    allowed = {"text", "status", "position", "followup_config", "description"}
+    allowed = {"text", "status", "position", "followup_config", "description", "context_subject"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
@@ -232,7 +246,7 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
             (*updates.values(), task_uuid),
         )
         row = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description FROM tasks WHERE uuid=?",
+            "SELECT uuid, text, status, position, followup_config, description, context_subject FROM tasks WHERE uuid=?",
             (task_uuid,),
         ).fetchone()
     if not row:
@@ -243,6 +257,7 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
         "position": row["position"],
         "followup_config": json.loads(fc) if fc else None,
         "description": row["description"],
+        "context_subject": row["context_subject"],
         "blocks": [], "blocked_by": [],
     }
 
@@ -251,7 +266,7 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     """Get a single task by UUID."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description "
+            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     if not row:
@@ -260,6 +275,7 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     return {
         "id": row["uuid"], "text": row["text"], "status": row["status"],
         "position": row["position"], "description": row["description"],
+        "context_subject": row["context_subject"],
         "plan_date": row["plan_date"], "anchor_id": row["anchor_id"],
         "followup_config": json.loads(fc) if fc else None,
         "blocks": [], "blocked_by": [],
@@ -922,46 +938,33 @@ def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict
 
 def create_unscheduled_task(
     db_path: Path, text: str, description: str | None = None,
-    status: str = "pending",
+    status: str = "pending", context_subject: str | None = None,
 ) -> dict:
     """Create a task with no plan_date or anchor_id (backlog task)."""
     task_uuid = str(uuid.uuid4())
     with get_db(db_path) as conn:
         conn.execute(
-            "INSERT INTO tasks (uuid, plan_date, anchor_id, text, status, description) "
-            "VALUES (?,NULL,NULL,?,?,?)",
-            (task_uuid, text, status, description),
+            "INSERT INTO tasks (uuid, plan_date, anchor_id, text, status, description, context_subject) "
+            "VALUES (?,NULL,NULL,?,?,?,?)",
+            (task_uuid, text, status, description, context_subject),
         )
     return {"id": task_uuid, "text": text, "status": status, "description": description,
+            "context_subject": context_subject,
             "position": 0, "followup_config": None, "blocks": [], "blocked_by": []}
 
 
 def get_unscheduled_tasks(db_path: Path) -> list[dict]:
-    """Get all tasks with no plan_date (backlog), with context subjects."""
+    """Get all tasks with no plan_date (backlog), with context_subject."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
         ).fetchall()
-        task_uuids = [r["uuid"] for r in rows]
-        # Fetch context links for all backlog tasks in one query
-        ctx_map: dict[str, list[str]] = {}
-        if task_uuids:
-            try:
-                ph = ",".join("?" for _ in task_uuids)
-                ctx_rows = conn.execute(
-                    f"SELECT task_id, subject FROM task_context WHERE task_id IN ({ph})",
-                    task_uuids,
-                ).fetchall()
-                for cr in ctx_rows:
-                    ctx_map.setdefault(cr["task_id"], []).append(cr["subject"])
-            except sqlite3.OperationalError as e:
-                logger.warning("task_context query failed: %s", e)
     return [
         {"id": r["uuid"], "text": r["text"], "status": r["status"],
          "position": r["position"], "description": r["description"],
          "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
-         "contexts": ctx_map.get(r["uuid"], []),
+         "context_subject": r["context_subject"],
          "blocks": [], "blocked_by": []}
         for r in rows
     ]

@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL DEFAULT 'pending',
     followup_config TEXT,
     notes TEXT NOT NULL DEFAULT '',
-    description TEXT
+    description TEXT,
+    context_subject TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (

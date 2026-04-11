@@ -44,6 +44,7 @@ function onAddNewTask() {
   tasks.push({
     id: '', text: '', description: null, status: 'pending' as const,
     position: tasks.length, followup_config: null, blocks: [], blocked_by: [],
+    context_subject: null,
   })
   nextTick(() => {
     const inputs = ulRef.value?.querySelectorAll('input')
