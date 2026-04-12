@@ -96,13 +96,13 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
-    <h1 class="text-2xl font-bold mb-4">Kanban</h1>
+  <div class="h-screen bg-gray-900 text-white p-6 flex flex-col overflow-hidden">
+    <h1 class="text-2xl font-bold mb-4 flex-shrink-0">Kanban</h1>
 
     <div v-if="kanbanStore.loading || tasksLoading" class="text-white/40 text-sm">Loading...</div>
     <div v-else-if="kanbanStore.error" class="text-red-400 text-sm">{{ kanbanStore.error }}</div>
 
-    <div v-else class="flex gap-4 overflow-x-auto pb-4" style="min-height: calc(100vh - 140px);">
+    <div v-else class="flex gap-4 overflow-x-auto flex-1 min-h-0">
       <KanbanColumn
         v-for="col in kanbanStore.columns"
         :key="col.id"
