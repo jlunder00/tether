@@ -64,6 +64,15 @@ const router = createRouter({
         { path: 'task/:taskId', name: 'backlog-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
       ],
     },
+    {
+      path: '/kanban',
+      name: 'kanban',
+      component: () => import('./views/KanbanView.vue'),
+      children: [
+        { path: 'task/:taskId', name: 'kanban-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'milestone/:milestoneId', name: 'kanban-milestone', component: () => import('./components/MilestoneDetailPanel.vue'), props: true },
+      ],
+    },
     { path: '/', redirect: '/dashboard' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],

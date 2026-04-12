@@ -167,14 +167,14 @@ def test_get_current_anchor_returns_dict():
 def test_upsert_task_create_backlog(db_path):
     from tether_mcp.server import upsert_task
     result = upsert_task(text="Backlog item", description="Details here",
-                         context_subjects=["Intellipat"])
+                         context_subject="Intellipat")
     assert result["id"]
     assert result["text"] == "Backlog item"
     assert result["description"] == "Details here"
-    # Verify context link
-    from db.queries import get_task_contexts
-    contexts = get_task_contexts(db_path, result["id"])
-    assert "Intellipat" in contexts
+    # Verify context_subject set directly on task
+    from db.queries import get_task_by_uuid
+    task = get_task_by_uuid(db_path, result["id"])
+    assert task["context_subject"] == "Intellipat"
 
 
 def test_upsert_task_create_scheduled(db_path):
@@ -190,7 +190,7 @@ def test_upsert_task_create_with_milestone(db_path):
     from db.queries import create_milestone
     m = create_milestone(db_path, "Intellipat", "Test MS")
     result = upsert_task(text="Linked task", milestone_ids=[m["id"]],
-                         context_subjects=["Intellipat"])
+                         context_subject="Intellipat")
     assert result["id"]
     from db.queries import get_milestones
     ms = get_milestones(db_path, "Intellipat")

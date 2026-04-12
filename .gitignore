@@ -210,3 +210,6 @@ __marimo__/
 # Git worktrees
 .worktrees/
 .serena/
+
+# Internal dev specs (not user-facing docs)
+docs/superpowers/

@@ -14,6 +14,7 @@ from api.routes import links as links_routes
 from api.routes import llm_config as llm_config_routes
 from api.routes import sessions as sessions_routes
 from api.routes import bot as bot_routes
+from api.routes import kanban as kanban_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.auth_schema import init_auth_db
@@ -52,6 +53,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(llm_config_routes.router, prefix="/api")
     app.include_router(sessions_routes.router, prefix="/api")
     app.include_router(bot_routes.router, prefix="/api")
+    app.include_router(kanban_routes.router, prefix="/api")
 
     @app.post("/api/notify")
     async def notify():

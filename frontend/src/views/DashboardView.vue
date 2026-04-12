@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
+import TaskCard from '../components/TaskCard.vue'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
@@ -74,11 +75,8 @@ const dayStats = computed(() => {
           <span class="text-white/40 text-sm ml-auto">{{ currentAnchor?.time }}</span>
         </div>
         <ul class="flex flex-col gap-1.5">
-          <li v-for="task in currentTasks" :key="task.id" class="flex items-center gap-2 text-sm">
-            <span class="w-2 h-2 rounded-full flex-shrink-0"
-                  :class="task.status === 'done' ? 'bg-green-400' : task.status === 'in_progress' ? 'bg-blue-400' : 'bg-white/20'" />
-            <span :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
-          </li>
+          <TaskCard v-for="task in currentTasks" :key="task.id"
+            :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
           <li v-if="!currentTasks.length" class="text-white/30 text-sm">No tasks</li>
         </ul>
       </div>

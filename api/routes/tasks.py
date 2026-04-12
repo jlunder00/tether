@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
-    search_entities, link_task_context, unlink_task_context, get_task_contexts, \
+    search_entities, \
     get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid
 from api.auth import auth_dependency
 import api.config as cfg
@@ -32,6 +32,7 @@ async def create_unscheduled(body: dict, request: Request, _auth=Depends(auth_de
         request.state.db_path, body["text"],
         description=body.get("description"),
         status=body.get("status", "pending"),
+        context_subject=body.get("context_subject"),
     )
 
 
@@ -113,17 +114,25 @@ async def reorder_task_subtasks(task_uuid: str, body: dict, request: Request, _a
     return {"ok": True}
 
 
-# Task-context linking
+# Task-context linking (single context_subject model)
 @router.get("/tasks/{task_uuid}/contexts")
 async def get_task_context_links(task_uuid: str, request: Request, _auth=Depends(auth_dependency)):
-    return get_task_contexts(request.state.db_path, task_uuid)
+    task = get_task_by_uuid(request.state.db_path, task_uuid)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    ctx = task.get("context_subject")
+    return [ctx] if ctx else []
 
 @router.post("/tasks/{task_uuid}/contexts")
 async def link_task_to_context(task_uuid: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
-    link_task_context(request.state.db_path, task_uuid, body["subject"])
+    result = patch_task_fields(request.state.db_path, task_uuid, {"context_subject": body["subject"]})
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True}
 
 @router.delete("/tasks/{task_uuid}/contexts/{subject:path}")
 async def unlink_task_from_context(task_uuid: str, subject: str, request: Request, _auth=Depends(auth_dependency)):
-    unlink_task_context(request.state.db_path, task_uuid, subject)
+    result = patch_task_fields(request.state.db_path, task_uuid, {"context_subject": None})
+    if result is None:
+        raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True}

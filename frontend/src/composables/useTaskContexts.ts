@@ -6,10 +6,12 @@ export function useTaskContexts(taskId: () => string) {
 
   async function fetch() {
     const resp = await api(`/api/tasks/${taskId()}/contexts`)
+    // API returns [] or [subject] (single-context model)
     contexts.value = resp.ok ? await resp.json() : []
   }
 
   async function link(subject: string) {
+    // POST replaces existing context_subject
     await api(`/api/tasks/${taskId()}/contexts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -19,6 +21,7 @@ export function useTaskContexts(taskId: () => string) {
   }
 
   async function unlink(subject: string) {
+    // DELETE clears context_subject (subject param kept for API compat)
     await api(`/api/tasks/${taskId()}/contexts/${encodeURIComponent(subject)}`, {
       method: 'DELETE',
     })

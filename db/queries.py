@@ -11,6 +11,27 @@ from db.schema import get_db
 logger = logging.getLogger(__name__)
 
 
+def _row_to_task(row, *, include_schedule: bool = False) -> dict:
+    """Convert a DB row to a task dict. Shared by all task-returning functions."""
+    r = dict(row)  # sqlite3.Row -> dict so .get() works
+    fc = r.get("followup_config")
+    d = {
+        "id": r["uuid"],
+        "text": r["text"],
+        "status": r["status"] or "pending",
+        "position": r.get("position", 0),
+        "description": r.get("description"),
+        "context_subject": r.get("context_subject"),
+        "followup_config": json.loads(fc) if fc else None,
+        "blocks": [],
+        "blocked_by": [],
+    }
+    if include_schedule:
+        d["plan_date"] = r.get("plan_date")
+        d["anchor_id"] = r.get("anchor_id")
+    return d
+
+
 def upsert_anchor(db_path: Path, anchor: dict) -> None:
     fc_json = json.dumps(anchor.get("followup_config")) if anchor.get("followup_config") is not None else None
     with get_db(db_path) as conn:
@@ -49,39 +70,25 @@ def get_plan(db_path: Path, date: str) -> dict:
         if not plan_row:
             return {"date": date, "anchors": {}, "acknowledgements": {}, "check_in_log": []}
 
-        # Try with description column; fall back for unmigrated DBs
-        try:
-            task_rows = conn.execute(
-                "SELECT uuid, anchor_id, text, status, notes, position, followup_config, description "
-                "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
-                (date,)
-            ).fetchall()
-            has_description = True
-        except sqlite3.OperationalError:
-            logger.warning("tasks table missing 'description' column — run dashboard migration")
-            task_rows = conn.execute(
-                "SELECT uuid, anchor_id, text, status, notes, position, followup_config "
-                "FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
-                (date,)
-            ).fetchall()
-            has_description = False
+        # Detect available columns so we work on unmigrated DBs too
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)").fetchall()}
+        select_cols = "uuid, anchor_id, text, status, notes, position, followup_config"
+        if "description" in cols:
+            select_cols += ", description"
+        if "context_subject" in cols:
+            select_cols += ", context_subject"
+
+        task_rows = conn.execute(
+            f"SELECT {select_cols} FROM tasks WHERE plan_date=? ORDER BY anchor_id, position",
+            (date,),
+        ).fetchall()
 
         anchors: dict = {}
         for row in task_rows:
             aid = row["anchor_id"]
             if aid not in anchors:
                 anchors[aid] = {"tasks": [], "notes": row["notes"]}
-            fc = row["followup_config"]
-            anchors[aid]["tasks"].append({
-                "id": row["uuid"],
-                "text": row["text"],
-                "status": row["status"] or "pending",
-                "position": row["position"],
-                "followup_config": json.loads(fc) if fc else None,
-                "description": row["description"] if has_description else None,
-                "blocks": [],
-                "blocked_by": [],
-            })
+            anchors[aid]["tasks"].append(_row_to_task(row))
 
         # Populate dependency fields from the dependencies table
         all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
@@ -145,10 +152,6 @@ def upsert_tasks(
         ):
             existing_by_uuid[row["uuid"]] = dict(row)
 
-        # Track which existing tasks were referenced so we can compute new positions
-        touched_uuids: set[str] = set()
-
-        result = []
         for task in task_dicts:
             uid = task.get("id") or ""
             text = task.get("text")
@@ -174,13 +177,13 @@ def upsert_tasks(
                     "followup_config=?, notes=? WHERE uuid=?",
                     (date, anchor_id, text, status, fc_json, notes, uid),
                 )
-                touched_uuids.add(uid)
             else:
                 # New task — must have text
                 if not text:
                     raise ValueError("New tasks must have 'text'")
                 uid = str(uuid.uuid4())
                 status = status or "pending"
+                context_subject = task.get("context_subject")
                 max_pos = conn.execute(
                     "SELECT COALESCE(MAX(position), -1) FROM tasks "
                     "WHERE plan_date=? AND anchor_id=?",
@@ -188,36 +191,22 @@ def upsert_tasks(
                 ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO tasks (uuid, plan_date, anchor_id, position, text, status, "
-                    "followup_config, notes) VALUES (?,?,?,?,?,?,?,?)",
-                    (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes),
+                    "followup_config, notes, context_subject) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes, context_subject),
                 )
-                touched_uuids.add(uid)
-
-            result.append({
-                "id": uid, "text": text, "status": status,
-                "position": 0, "followup_config": fc,
-                "blocks": [], "blocked_by": [],
-            })
 
         # Return ALL tasks for this anchor (including untouched ones)
         all_rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE plan_date=? AND anchor_id=? ORDER BY position",
             (date, anchor_id),
         ).fetchall()
-        return [
-            {"id": r["uuid"], "text": r["text"], "status": r["status"] or "pending",
-             "position": r["position"],
-             "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
-             "description": r["description"],
-             "blocks": [], "blocked_by": []}
-            for r in all_rows
-        ]
+        return [_row_to_task(r) for r in all_rows]
 
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
     """Update allowed fields on a task. Returns updated task dict or None if not found."""
-    allowed = {"text", "status", "position", "followup_config", "description"}
+    allowed = {"text", "status", "position", "followup_config", "description", "context_subject"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
@@ -232,38 +221,24 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
             (*updates.values(), task_uuid),
         )
         row = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description FROM tasks WHERE uuid=?",
+            "SELECT uuid, text, status, position, followup_config, description, context_subject FROM tasks WHERE uuid=?",
             (task_uuid,),
         ).fetchone()
     if not row:
         return None
-    fc = row["followup_config"]
-    return {
-        "id": row["uuid"], "text": row["text"], "status": row["status"],
-        "position": row["position"],
-        "followup_config": json.loads(fc) if fc else None,
-        "description": row["description"],
-        "blocks": [], "blocked_by": [],
-    }
+    return _row_to_task(row)
 
 
 def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     """Get a single task by UUID."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description "
+            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     if not row:
         return None
-    fc = row["followup_config"]
-    return {
-        "id": row["uuid"], "text": row["text"], "status": row["status"],
-        "position": row["position"], "description": row["description"],
-        "plan_date": row["plan_date"], "anchor_id": row["anchor_id"],
-        "followup_config": json.loads(fc) if fc else None,
-        "blocks": [], "blocked_by": [],
-    }
+    return _row_to_task(row, include_schedule=True)
 
 
 def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
@@ -273,7 +248,6 @@ def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
         conn.execute("DELETE FROM links WHERE parent_type='tasks' AND parent_id=?", (task_uuid,))
         conn.execute("DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=?) OR (blocked_type='task' AND blocked_id=?)", (task_uuid, task_uuid))
         conn.execute("DELETE FROM milestone_tasks WHERE task_id=?", (task_uuid,))
-        conn.execute("DELETE FROM task_context WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM followup_state WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM tasks WHERE uuid=?", (task_uuid,))
 
@@ -539,6 +513,18 @@ def rename_context_subject(db_path: Path, old_subject: str, new_subject: str) ->
             new_child = new_subject + row["subject"][len(old_subject):]
             conn.execute(
                 "UPDATE milestones SET context_subject=? WHERE context_subject=?",
+                (new_child, row["subject"]),
+            )
+        # cascade tasks.context_subject (exact match)
+        conn.execute(
+            "UPDATE tasks SET context_subject=? WHERE context_subject=?",
+            (new_subject, old_subject),
+        )
+        # cascade tasks.context_subject (child subjects)
+        for row in children:
+            new_child = new_subject + row["subject"][len(old_subject):]
+            conn.execute(
+                "UPDATE tasks SET context_subject=? WHERE context_subject=?",
                 (new_child, row["subject"]),
             )
         conn.execute("PRAGMA foreign_keys = ON")
@@ -922,49 +908,31 @@ def resolve_followup_config(db_path: Path, anchor_id: str, task_id: str) -> dict
 
 def create_unscheduled_task(
     db_path: Path, text: str, description: str | None = None,
-    status: str = "pending",
+    status: str = "pending", context_subject: str | None = None,
 ) -> dict:
     """Create a task with no plan_date or anchor_id (backlog task)."""
     task_uuid = str(uuid.uuid4())
     with get_db(db_path) as conn:
         conn.execute(
-            "INSERT INTO tasks (uuid, plan_date, anchor_id, text, status, description) "
-            "VALUES (?,NULL,NULL,?,?,?)",
-            (task_uuid, text, status, description),
+            "INSERT INTO tasks (uuid, plan_date, anchor_id, text, status, description, context_subject) "
+            "VALUES (?,NULL,NULL,?,?,?,?)",
+            (task_uuid, text, status, description, context_subject),
         )
-    return {"id": task_uuid, "text": text, "status": status, "description": description,
-            "position": 0, "followup_config": None, "blocks": [], "blocked_by": []}
+        row = conn.execute(
+            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "FROM tasks WHERE uuid=?", (task_uuid,)
+        ).fetchone()
+    return _row_to_task(row)
 
 
 def get_unscheduled_tasks(db_path: Path) -> list[dict]:
-    """Get all tasks with no plan_date (backlog), with context subjects."""
+    """Get all tasks with no plan_date (backlog), with context_subject."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject "
             "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
         ).fetchall()
-        task_uuids = [r["uuid"] for r in rows]
-        # Fetch context links for all backlog tasks in one query
-        ctx_map: dict[str, list[str]] = {}
-        if task_uuids:
-            try:
-                ph = ",".join("?" for _ in task_uuids)
-                ctx_rows = conn.execute(
-                    f"SELECT task_id, subject FROM task_context WHERE task_id IN ({ph})",
-                    task_uuids,
-                ).fetchall()
-                for cr in ctx_rows:
-                    ctx_map.setdefault(cr["task_id"], []).append(cr["subject"])
-            except sqlite3.OperationalError as e:
-                logger.warning("task_context query failed: %s", e)
-    return [
-        {"id": r["uuid"], "text": r["text"], "status": r["status"],
-         "position": r["position"], "description": r["description"],
-         "followup_config": json.loads(r["followup_config"]) if r["followup_config"] else None,
-         "contexts": ctx_map.get(r["uuid"], []),
-         "blocks": [], "blocked_by": []}
-        for r in rows
-    ]
+    return [_row_to_task(r) for r in rows]
 
 
 def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list[dict]:
@@ -1001,42 +969,18 @@ def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list
 # Task-context linking
 # ---------------------------------------------------------------------------
 
-def link_task_context(db_path: Path, task_id: str, subject: str) -> None:
-    with get_db(db_path) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_context (task_id, subject) VALUES (?,?)",
-            (task_id, subject),
-        )
-
-
-def unlink_task_context(db_path: Path, task_id: str, subject: str) -> None:
-    with get_db(db_path) as conn:
-        conn.execute(
-            "DELETE FROM task_context WHERE task_id=? AND subject=?",
-            (task_id, subject),
-        )
-
-
-def get_task_contexts(db_path: Path, task_id: str) -> list[str]:
-    """Return list of context subjects linked to a task."""
-    with get_db(db_path) as conn:
-        rows = conn.execute(
-            "SELECT subject FROM task_context WHERE task_id=? ORDER BY subject",
-            (task_id,),
-        ).fetchall()
-    return [r["subject"] for r in rows]
-
 
 def get_context_tasks(db_path: Path, subject: str) -> list[dict]:
-    """Return tasks linked to a context subject."""
+    """Return tasks linked to a context subject (uses context_subject column).
+    Returns [{id, text, status, plan_date, anchor_id}] — 'id' matches _row_to_task convention."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT t.uuid, t.text, t.status, t.plan_date, t.anchor_id "
-            "FROM tasks t JOIN task_context tc ON t.uuid = tc.task_id "
-            "WHERE tc.subject=? ORDER BY t.plan_date DESC",
+            "SELECT uuid, text, status, plan_date, anchor_id "
+            "FROM tasks WHERE context_subject=? ORDER BY plan_date DESC",
             (subject,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [{"id": r["uuid"], "text": r["text"], "status": r["status"],
+             "plan_date": r["plan_date"], "anchor_id": r["anchor_id"]} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -1111,3 +1055,108 @@ def get_stale_sessions(db_path: Path, timeout_minutes: int = 15) -> list[dict]:
             (interval,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Kanban columns
+# ---------------------------------------------------------------------------
+
+def seed_kanban_columns(db_path: Path) -> None:
+    """Create default kanban columns if none exist."""
+    with get_db(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM kanban_columns").fetchone()[0]
+        if count > 0:
+            return
+        defaults = [
+            ("col_backlog", "Backlog", 0, None,
+             json.dumps({"plan_date": None}),
+             json.dumps({})),
+            ("col_pending", "Pending", 1, "#3b82f6",
+             json.dumps({"status": "pending", "plan_date": "not_null"}),
+             json.dumps({"set_status": "pending", "prompt_schedule": True})),
+            ("col_in_progress", "In Progress", 2, "#f59e0b",
+             json.dumps({"status": "in_progress"}),
+             json.dumps({"set_status": "in_progress"})),
+            ("col_done", "Done", 3, "#22c55e",
+             json.dumps({"status": "done"}),
+             json.dumps({"set_status": "done"})),
+            ("col_skipped", "Skipped", 4, "#94a3b8",
+             json.dumps({"status": "skipped"}),
+             json.dumps({"set_status": "skipped"})),
+            ("col_blocked", "Blocked", 5, "#ef4444",
+             json.dumps({"status": "blocked"}),
+             json.dumps({"set_status": "blocked"})),
+        ]
+        conn.executemany(
+            "INSERT OR IGNORE INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "
+            "VALUES (?,?,?,?,?,?)",
+            defaults,
+        )
+
+
+def get_kanban_columns(db_path: Path, user_id: str | None = None) -> list[dict]:
+    """Get columns visible to user: built-in (created_by IS NULL) + user's own."""
+    with get_db(db_path) as conn:
+        if user_id:
+            rows = conn.execute(
+                "SELECT * FROM kanban_columns WHERE created_by IS NULL OR created_by=? ORDER BY position",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM kanban_columns WHERE created_by IS NULL ORDER BY position"
+            ).fetchall()
+    return [
+        {"id": r["id"], "name": r["name"], "position": r["position"],
+         "color": r["color"],
+         "match_rules": json.loads(r["match_rules"]),
+         "entry_rules": json.loads(r["entry_rules"]),
+         "created_by": r["created_by"]}
+        for r in rows
+    ]
+
+
+def create_kanban_column(
+    db_path: Path, name: str, position: int, color: str | None,
+    match_rules: dict, entry_rules: dict, created_by: str,
+) -> dict:
+    col_id = str(uuid.uuid4())
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO kanban_columns (id, name, position, color, match_rules, entry_rules, created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (col_id, name, position, color, json.dumps(match_rules), json.dumps(entry_rules), created_by),
+        )
+    return {"id": col_id, "name": name, "position": position, "color": color,
+            "match_rules": match_rules, "entry_rules": entry_rules, "created_by": created_by}
+
+
+def update_kanban_column(db_path: Path, column_id: str, fields: dict) -> dict | None:
+    allowed = {"name", "position", "color", "match_rules", "entry_rules"}
+    updates = {}
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in ("match_rules", "entry_rules"):
+            updates[k] = json.dumps(v) if isinstance(v, dict) else v
+        else:
+            updates[k] = v
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(f"UPDATE kanban_columns SET {set_clause} WHERE id=?",
+                     (*updates.values(), column_id))
+        row = conn.execute("SELECT * FROM kanban_columns WHERE id=?", (column_id,)).fetchone()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["name"], "position": row["position"],
+            "color": row["color"],
+            "match_rules": json.loads(row["match_rules"]),
+            "entry_rules": json.loads(row["entry_rules"]),
+            "created_by": row["created_by"]}
+
+
+def delete_kanban_column(db_path: Path, column_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM kanban_columns WHERE id=?", (column_id,))

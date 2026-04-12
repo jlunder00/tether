@@ -47,6 +47,11 @@ async function logout() {
                        :class="$route.path.startsWith('/backlog') ? 'bg-white/20 text-white' : 'text-white/60'">
             Backlog
           </router-link>
+          <router-link to="/kanban"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+                       :class="$route.path.startsWith('/kanban') ? 'bg-white/20 text-white' : 'text-white/60'">
+            Kanban
+          </router-link>
         </div>
       </div>
       <div class="flex items-center gap-2">

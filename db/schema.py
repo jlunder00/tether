@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     status TEXT NOT NULL DEFAULT 'pending',
     followup_config TEXT,
     notes TEXT NOT NULL DEFAULT '',
-    description TEXT
+    description TEXT,
+    context_subject TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (
@@ -190,6 +191,23 @@ CREATE TABLE IF NOT EXISTS beacon_state (
 );
 
 INSERT OR IGNORE INTO beacon_state (id, last_invoked_at) VALUES (1, NULL);
+
+CREATE TABLE IF NOT EXISTS kanban_columns (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    color       TEXT,
+    match_rules TEXT NOT NULL DEFAULT '{}',
+    entry_rules TEXT NOT NULL DEFAULT '{}',
+    created_by  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
 """
 
 _SESSIONS_DDL = """

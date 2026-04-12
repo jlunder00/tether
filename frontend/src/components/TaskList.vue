@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Task } from '../stores/plan'
-import TaskItem from './TaskItem.vue'
+import TaskCard from './TaskCard.vue'
 
 const props = defineProps<{ tasks: Task[] }>()
 const emit = defineEmits<{ (e: 'update', tasks: Task[]): void }>()
@@ -12,7 +12,7 @@ function add() {
   emit('update', [
     ...props.tasks,
     { id: '', text: '', description: null, status: 'pending', position: props.tasks.length,
-      followup_config: null, blocks: [], blocked_by: [] },
+      followup_config: null, blocks: [], blocked_by: [], context_subject: null },
   ])
 }
 function remove(i: number) {
@@ -22,7 +22,7 @@ function remove(i: number) {
 
 <template>
   <ul class="space-y-1">
-    <TaskItem
+    <TaskCard
       v-for="(task, i) in tasks"
       :key="task.id || i"
       :task="task"

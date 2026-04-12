@@ -27,14 +27,13 @@ from db.queries import (
     link_milestone_task,
     unlink_milestone_task,
     create_milestone,
-    link_task_context,
-    unlink_task_context,
-    get_task_contexts,
     get_context_tasks,
     patch_milestone,
     create_unscheduled_task,
     get_task_by_uuid,
     move_task_atomic,
+    delete_task_by_uuid,
+    get_milestones as _db_get_milestones,
 )
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
@@ -179,7 +178,7 @@ def upsert_task(
     date: str = "",
     anchor_id: str = "",
     backlog: bool = False,
-    context_subjects: list[str] = [],
+    context_subject: str = "",
     milestone_ids: list[str] = [],
     blocked_by: list[str] = [],
 ) -> dict:
@@ -194,7 +193,7 @@ def upsert_task(
     - description: detailed description text
     - date + anchor_id: schedule to a specific day+anchor
     - backlog: True to unschedule (move to backlog)
-    - context_subjects: list of context entry subjects to link (additive)
+    - context_subject: context entry subject to link (replaces existing)
     - milestone_ids: list of milestone IDs to link (additive)
     - blocked_by: list of task/milestone UUIDs that block this task (additive)
 
@@ -229,7 +228,8 @@ def upsert_task(
             # Scheduled task
             upsert_plan(db, date)
             tasks_result = upsert_tasks(db, date, anchor_id, [
-                {"text": text, "status": status or "pending"}
+                {"text": text, "status": status or "pending",
+                 "context_subject": context_subject or None}
             ])
             new_task = next((t for t in tasks_result if t["text"] == text), tasks_result[-1])
             task_uuid = new_task["id"]
@@ -237,7 +237,8 @@ def upsert_task(
             # Backlog task
             new_task = create_unscheduled_task(db, text,
                                                description=description or None,
-                                               status=status or "pending")
+                                               status=status or "pending",
+                                               context_subject=context_subject or None)
             task_uuid = new_task["id"]
 
         if description and date and anchor_id:
@@ -246,26 +247,17 @@ def upsert_task(
 
         result_task = get_task_by_uuid(db, task_uuid)
 
-    # Link contexts (additive)
-    for subject in context_subjects:
-        try:
-            link_task_context(db, task_uuid, subject)
-        except Exception:
-            pass  # already linked
+    # Set context (replaces existing)
+    if context_subject and task_uuid:
+        patch_task_fields(db, task_uuid, {"context_subject": context_subject})
 
-    # Link milestones (additive)
+    # Link milestones (additive — INSERT OR IGNORE handles duplicates)
     for mid in milestone_ids:
-        try:
-            link_milestone_task(db, mid, task_uuid)
-        except Exception:
-            pass  # already linked
+        link_milestone_task(db, mid, task_uuid)
 
-    # Add blockers (additive)
+    # Add blockers (additive — INSERT OR IGNORE handles duplicates)
     for blocker_id in blocked_by:
-        try:
-            add_dependency(db, "task", blocker_id, "task", task_uuid)
-        except Exception:
-            pass  # already exists
+        add_dependency(db, "task", blocker_id, "task", task_uuid)
 
     return result_task or {"id": task_uuid, "text": text, "status": status or "pending"}
 
@@ -284,7 +276,6 @@ def update_plan_tasks(anchor_id: str, tasks: list, date: str = "") -> dict:
 @mcp.tool()
 def remove_task(task_uuid: str) -> dict:
     """Permanently delete a task by UUID. Cascades to subtasks, links, dependencies, milestones."""
-    from db.queries import delete_task_by_uuid
     delete_task_by_uuid(_db(), task_uuid)
     return {"ok": True, "deleted": task_uuid}
 
@@ -292,7 +283,6 @@ def remove_task(task_uuid: str) -> dict:
 @mcp.tool()
 def move_to_backlog(task_uuid: str) -> dict:
     """Move a task to the backlog (unschedule it). Preserves all milestone/context/dep links."""
-    from db.queries import move_task_atomic
     move_task_atomic(_db(), task_uuid, None, None)
     return {"ok": True, "moved": task_uuid}
 
@@ -300,7 +290,6 @@ def move_to_backlog(task_uuid: str) -> dict:
 @mcp.tool()
 def schedule_task(task_uuid: str, date: str, anchor_id: str) -> dict:
     """Schedule a backlog task onto a specific date and anchor."""
-    from db.queries import move_task_atomic
     move_task_atomic(_db(), task_uuid, date, anchor_id)
     return {"ok": True, "scheduled": task_uuid, "date": date, "anchor_id": anchor_id}
 
@@ -329,8 +318,7 @@ def get_bot_log(n: int = 5) -> list[dict]:
 async def get_milestones(context_subject: str | None = None) -> str:
     """Get milestones for a context subject (or all if omitted).
     Returns list with id, name, status, task_count, done_count, task_ids."""
-    from db.queries import get_milestones as _get_milestones
-    return json.dumps(_get_milestones(_db(), context_subject), indent=2)
+    return json.dumps(_db_get_milestones(_db(), context_subject), indent=2)
 
 
 @mcp.tool()
@@ -361,8 +349,7 @@ def append_milestone_description(milestone_id: str, text: str) -> dict:
     """Append text to a milestone's description (adds after existing content with double newline).
     Creates description if none exists."""
     db = _db()
-    from db.queries import get_milestones as _get_ms
-    all_ms = _get_ms(db)
+    all_ms = _db_get_milestones(db)
     ms = next((m for m in all_ms if m["id"] == milestone_id), None)
     if not ms:
         return {"error": "Milestone not found"}
@@ -458,22 +445,30 @@ def update_milestone(milestone_id: str, fields: dict) -> dict:
 
 @mcp.tool()
 def link_task_to_context(task_uuid: str, subject: str) -> dict:
-    """Link a task to a context entry by subject."""
-    link_task_context(_db(), task_uuid, subject)
+    """Set a task's context entry (single context per task)."""
+    result = patch_task_fields(_db(), task_uuid, {"context_subject": subject})
+    if result is None:
+        return {"error": f"Task {task_uuid} not found"}
     return {"ok": True}
 
 
 @mcp.tool()
 def unlink_task_from_context(task_uuid: str, subject: str) -> dict:
-    """Unlink a task from a context entry."""
-    unlink_task_context(_db(), task_uuid, subject)
+    """Clear a task's context entry."""
+    result = patch_task_fields(_db(), task_uuid, {"context_subject": None})
+    if result is None:
+        return {"error": f"Task {task_uuid} not found"}
     return {"ok": True}
 
 
 @mcp.tool()
 def get_task_context_links(task_uuid: str) -> list[str]:
-    """Get context subjects linked to a task."""
-    return get_task_contexts(_db(), task_uuid)
+    """Get context subject for a task (returns list for backward compat)."""
+    task = get_task_by_uuid(_db(), task_uuid)
+    if not task:
+        return []
+    ctx = task.get("context_subject")
+    return [ctx] if ctx else []
 
 
 @mcp.tool()
