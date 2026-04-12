@@ -1113,3 +1113,105 @@ def get_stale_sessions(db_path: Path, timeout_minutes: int = 15) -> list[dict]:
             (interval,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Kanban columns
+# ---------------------------------------------------------------------------
+
+def seed_kanban_columns(db_path: Path) -> None:
+    """Create default kanban columns if none exist."""
+    with get_db(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM kanban_columns").fetchone()[0]
+        if count > 0:
+            return
+        defaults = [
+            ("col_backlog", "Backlog", 0, None,
+             json.dumps({"plan_date": None}),
+             json.dumps({})),
+            ("col_pending", "Pending", 1, "#3b82f6",
+             json.dumps({"status": "pending", "plan_date": "not_null"}),
+             json.dumps({"set_status": "pending", "prompt_schedule": True})),
+            ("col_in_progress", "In Progress", 2, "#f59e0b",
+             json.dumps({"status": "in_progress"}),
+             json.dumps({"set_status": "in_progress"})),
+            ("col_done", "Done", 3, "#22c55e",
+             json.dumps({"status": "done"}),
+             json.dumps({"set_status": "done"})),
+            ("col_skipped", "Skipped", 4, "#94a3b8",
+             json.dumps({"status": "skipped"}),
+             json.dumps({"set_status": "skipped"})),
+        ]
+        conn.executemany(
+            "INSERT INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "
+            "VALUES (?,?,?,?,?,?)",
+            defaults,
+        )
+
+
+def get_kanban_columns(db_path: Path, user_id: str | None = None) -> list[dict]:
+    """Get columns visible to user: built-in (created_by IS NULL) + user's own."""
+    with get_db(db_path) as conn:
+        if user_id:
+            rows = conn.execute(
+                "SELECT * FROM kanban_columns WHERE created_by IS NULL OR created_by=? ORDER BY position",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM kanban_columns WHERE created_by IS NULL ORDER BY position"
+            ).fetchall()
+    return [
+        {"id": r["id"], "name": r["name"], "position": r["position"],
+         "color": r["color"],
+         "match_rules": json.loads(r["match_rules"]),
+         "entry_rules": json.loads(r["entry_rules"]),
+         "created_by": r["created_by"]}
+        for r in rows
+    ]
+
+
+def create_kanban_column(
+    db_path: Path, name: str, position: int, color: str | None,
+    match_rules: dict, entry_rules: dict, created_by: str,
+) -> dict:
+    col_id = str(uuid.uuid4())
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO kanban_columns (id, name, position, color, match_rules, entry_rules, created_by) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (col_id, name, position, color, json.dumps(match_rules), json.dumps(entry_rules), created_by),
+        )
+    return {"id": col_id, "name": name, "position": position, "color": color,
+            "match_rules": match_rules, "entry_rules": entry_rules, "created_by": created_by}
+
+
+def update_kanban_column(db_path: Path, column_id: str, fields: dict) -> dict | None:
+    allowed = {"name", "position", "color", "match_rules", "entry_rules"}
+    updates = {}
+    for k, v in fields.items():
+        if k not in allowed:
+            continue
+        if k in ("match_rules", "entry_rules"):
+            updates[k] = json.dumps(v) if isinstance(v, dict) else v
+        else:
+            updates[k] = v
+    if not updates:
+        return None
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(f"UPDATE kanban_columns SET {set_clause} WHERE id=?",
+                     (*updates.values(), column_id))
+        row = conn.execute("SELECT * FROM kanban_columns WHERE id=?", (column_id,)).fetchone()
+    if not row:
+        return None
+    return {"id": row["id"], "name": row["name"], "position": row["position"],
+            "color": row["color"],
+            "match_rules": json.loads(row["match_rules"]),
+            "entry_rules": json.loads(row["entry_rules"]),
+            "created_by": row["created_by"]}
+
+
+def delete_kanban_column(db_path: Path, column_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM kanban_columns WHERE id=?", (column_id,))

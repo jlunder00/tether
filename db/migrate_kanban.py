@@ -57,6 +57,11 @@ def migrate(db_path: Path = DB_PATH) -> None:
 
     conn.commit()
     conn.close()
+
+    # Seed default kanban columns
+    from db.queries import seed_kanban_columns
+    seed_kanban_columns(db_path)
+
     print(f"Migration complete — {db_path}")
 
 
