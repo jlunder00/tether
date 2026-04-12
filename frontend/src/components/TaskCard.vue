@@ -108,12 +108,13 @@ function toggleFollowup(enabled: boolean) {
       :class="STATUS_CARD_BG[task.status]"
       @click="task.id && router.push(`${routeBase}/task/${task.id}`)">
     <div class="flex flex-col gap-1 p-2">
-    <!-- Status pill (top-right, dropdown) -->
+    <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
     <div class="absolute top-1.5 right-1.5">
       <button
-        @click.stop="openStatusDropdown"
+        @click.stop="editable && openStatusDropdown($event)"
         :class="[STATUS_PILL[task.status].bg, STATUS_PILL[task.status].text]"
-        class="text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wider leading-none">
+        class="text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wider leading-none"
+        :title="editable ? 'Change status' : task.status">
         {{ STATUS_PILL[task.status].label }}
       </button>
       <Teleport to="body">
