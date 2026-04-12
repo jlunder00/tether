@@ -289,7 +289,6 @@ def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
         conn.execute("DELETE FROM links WHERE parent_type='tasks' AND parent_id=?", (task_uuid,))
         conn.execute("DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=?) OR (blocked_type='task' AND blocked_id=?)", (task_uuid, task_uuid))
         conn.execute("DELETE FROM milestone_tasks WHERE task_id=?", (task_uuid,))
-        conn.execute("DELETE FROM task_context WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM followup_state WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM tasks WHERE uuid=?", (task_uuid,))
 

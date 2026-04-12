@@ -27,9 +27,6 @@ from db.queries import (
     link_milestone_task,
     unlink_milestone_task,
     create_milestone,
-    link_task_context,
-    unlink_task_context,
-    get_task_contexts,
     get_context_tasks,
     patch_milestone,
     create_unscheduled_task,
@@ -457,22 +454,26 @@ def update_milestone(milestone_id: str, fields: dict) -> dict:
 
 @mcp.tool()
 def link_task_to_context(task_uuid: str, subject: str) -> dict:
-    """Link a task to a context entry by subject."""
-    link_task_context(_db(), task_uuid, subject)
+    """Set a task's context entry (single context per task)."""
+    patch_task_fields(_db(), task_uuid, {"context_subject": subject})
     return {"ok": True}
 
 
 @mcp.tool()
 def unlink_task_from_context(task_uuid: str, subject: str) -> dict:
-    """Unlink a task from a context entry."""
-    unlink_task_context(_db(), task_uuid, subject)
+    """Clear a task's context entry."""
+    patch_task_fields(_db(), task_uuid, {"context_subject": None})
     return {"ok": True}
 
 
 @mcp.tool()
 def get_task_context_links(task_uuid: str) -> list[str]:
-    """Get context subjects linked to a task."""
-    return get_task_contexts(_db(), task_uuid)
+    """Get context subject for a task (returns list for backward compat)."""
+    task = get_task_by_uuid(_db(), task_uuid)
+    if not task:
+        return []
+    ctx = task.get("context_subject")
+    return [ctx] if ctx else []
 
 
 @mcp.tool()
