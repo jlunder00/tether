@@ -45,13 +45,13 @@ const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string 
   blocked:     { bg: 'bg-red-500/20', text: 'text-red-300', label: 'blocked' },
 }
 
-// Card background tint derived from status
-const STATUS_CARD_BG: Record<TaskStatus, string> = {
-  pending:     'bg-white/[0.04]',
-  in_progress: 'bg-blue-500/[0.06]',
-  done:        'bg-green-500/[0.04] opacity-70',
-  skipped:     'bg-orange-500/[0.04] opacity-50',
-  blocked:     'bg-red-500/[0.06]',
+// Card background — opaque colors to prevent parent GroupContainer color bleed
+const STATUS_CARD_STYLE: Record<TaskStatus, Record<string, string>> = {
+  pending:     { backgroundColor: 'rgb(22,29,44)' },           // slight lift from base
+  in_progress: { backgroundColor: 'rgb(20,30,55)' },           // blue tint
+  done:        { backgroundColor: 'rgb(19,30,38)', opacity: '0.7' },  // green tint, dimmed
+  skipped:     { backgroundColor: 'rgb(28,27,37)', opacity: '0.5' },  // orange tint, more dimmed
+  blocked:     { backgroundColor: 'rgb(30,22,37)' },           // red tint
 }
 
 const showFollowup = ref(false)
@@ -105,7 +105,7 @@ function toggleFollowup(enabled: boolean) {
 
 <template>
   <div class="group rounded-lg transition-colors border border-white/[0.08] cursor-pointer relative"
-      :class="STATUS_CARD_BG[task.status]"
+      :style="STATUS_CARD_STYLE[task.status]"
       @click="task.id && router.push(`${routeBase}/task/${task.id}`)">
     <div class="flex flex-col gap-1 p-2">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
