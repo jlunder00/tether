@@ -17,7 +17,6 @@ const props = defineProps<{
 
 const store = usePlanStore()
 const tasksRef = ref<HTMLElement | null>(null)
-const dragOver = ref(false)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
@@ -107,16 +106,7 @@ function onDragStart(evt: DragEvent, task: Task) {
   }))
 }
 
-function onDragOver() {
-  dragOver.value = true
-}
-
-function onDragLeave() {
-  dragOver.value = false
-}
-
 function onDrop(evt: DragEvent, toIndex: number) {
-  dragOver.value = false
   const raw = evt.dataTransfer?.getData('text/plain')
   if (!raw) return
   try {
@@ -145,8 +135,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
             <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                  :data-task-id="task.id"
                  @dragstart="onDragStart($event, task)"
-                 @dragover.prevent="onDragOver"
-                 @dragleave="onDragLeave"
+                 @dragover.prevent
                  @drop.stop.prevent="onDrop($event, i)">
               <TaskCard class="min-w-0" :task="task" :hideTags="false"
                         @update="onUpdate($event, i)" @remove="onRemove(i)" />
@@ -155,8 +144,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
                :data-task-id="task.id"
                @dragstart="onDragStart($event, task)"
-               @dragover.prevent="onDragOver"
-               @dragleave="onDragLeave"
+               @dragover.prevent
                @drop.stop.prevent="onDrop($event, i)">
             <TaskCard class="min-w-0" :task="task" :hideTags="false"
                       @update="onUpdate($event, i)" @remove="onRemove(i)" />
@@ -168,16 +156,16 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <!-- Milestone sub-groups -->
           <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
             <!-- Milestone group has 1 task — show standalone with tags visible -->
-            <div v-if="mg.tasks.length === 1"
-                 v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
-                 :data-task-id="task.id"
-                 @dragstart="onDragStart($event, task)"
-                 @dragover.prevent="onDragOver"
-                 @dragleave="onDragLeave"
-                 @drop.stop.prevent="onDrop($event, i)">
-              <TaskCard class="min-w-0" :task="task" :hideTags="false"
-                        @update="onUpdate($event, i)" @remove="onRemove(i)" />
-            </div>
+            <template v-if="mg.tasks.length === 1">
+              <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
+                   :data-task-id="task.id"
+                   @dragstart="onDragStart($event, task)"
+                   @dragover.prevent
+                   @drop.stop.prevent="onDrop($event, i)">
+                <TaskCard class="min-w-0" :task="task" :hideTags="false"
+                          @update="onUpdate($event, i)" @remove="onRemove(i)" />
+              </div>
+            </template>
             <!-- Milestone group has >1 task — wrap in milestone GroupContainer -->
             <GroupContainer v-else
               :label="mg.milestone.name"
@@ -187,8 +175,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
               <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                    :data-task-id="task.id"
                    @dragstart="onDragStart($event, task)"
-                   @dragover.prevent="onDragOver"
-                   @dragleave="onDragLeave"
+                   @dragover.prevent
                    @drop.stop.prevent="onDrop($event, i)">
                 <TaskCard class="min-w-0" :task="task" :hideTags="true"
                           @update="onUpdate($event, i)" @remove="onRemove(i)" />
@@ -200,8 +187,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
                :data-task-id="task.id"
                @dragstart="onDragStart($event, task)"
-               @dragover.prevent="onDragOver"
-               @dragleave="onDragLeave"
+               @dragover.prevent
                @drop.stop.prevent="onDrop($event, i)">
             <TaskCard class="min-w-0" :task="task" :hideTags="true"
                       @update="onUpdate($event, i)" @remove="onRemove(i)" />
