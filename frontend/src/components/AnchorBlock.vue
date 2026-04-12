@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import TaskItem from './TaskCard.vue'
+import TaskCard from './TaskCard.vue'
+import GroupContainer from './GroupContainer.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
+import { useMilestoneStore } from '../stores/milestones'
+import type { Milestone } from '../stores/milestones'
 
 const props = defineProps<{
   anchorId: string
@@ -18,6 +21,26 @@ const dragOver = ref(false)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
+
+const milestoneStore = useMilestoneStore()
+
+const groupedTasks = computed(() => {
+  const byMilestone: Record<string, { milestone: Milestone; tasks: { task: Task; index: number }[] }> = {}
+  const ungrouped: { task: Task; index: number }[] = []
+
+  anchorPlan.value.tasks.forEach((task, index) => {
+    const milestones = milestoneStore.taskMilestones[task.id]
+    if (milestones?.length) {
+      const m = milestones[0]
+      if (!byMilestone[m.id]) byMilestone[m.id] = { milestone: m, tasks: [] }
+      byMilestone[m.id].tasks.push({ task, index })
+    } else {
+      ungrouped.push({ task, index })
+    }
+  })
+
+  return { milestoneGroups: Object.values(byMilestone), ungrouped }
+})
 
 function onUpdate(task: Task, index: number) {
   const updated = [...anchorPlan.value.tasks]
@@ -113,42 +136,70 @@ function onDrop(evt: DragEvent, toIndex: number) {
 </script>
 
 <template>
-  <div class="flex rounded-xl overflow-hidden">
-    <div class="flex flex-col justify-center px-4 py-3 min-w-[110px] text-white"
-         :style="{ background: color }">
-      <span class="text-xs opacity-75">{{ time }}</span>
-      <span class="font-bold text-sm mt-0.5">{{ anchorName }}</span>
-    </div>
-    <div class="flex-1 bg-white/5 border border-white/10 border-l-0 px-4 py-3">
-      <ul
-        ref="ulRef"
-        class="space-y-1 min-h-[2rem] rounded transition-colors"
-        :class="dragOver ? 'bg-white/10 ring-2 ring-white/30' : ''"
+  <GroupContainer :label="`${anchorName} · ${time}`" :color="color" :collapsible="true" :level="0">
+    <template #header-right>
+      <span class="text-xs text-white/30">{{ anchorPlan.tasks.length }}</span>
+    </template>
+
+    <!-- Milestone groups -->
+    <GroupContainer
+      v-for="group in groupedTasks.milestoneGroups"
+      :key="group.milestone.id"
+      :label="group.milestone.name"
+      :color="group.milestone.color ?? undefined"
+      :level="1"
+      class="mb-2">
+      <div
+        v-for="{ task, index: i } in group.tasks"
+        :key="task.id || i"
+        :data-task-id="task.id"
+        class="group flex items-center"
+        @dragstart="onDragStart($event, task)"
+        @dragend="onDragEnd"
         @dragover.prevent="onDragOver"
         @dragleave="onDragLeave"
-        @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
-        <div
-          v-for="(task, i) in anchorPlan.tasks"
-          :key="task.id || i"
-          :data-task-id="task.id"
-          class="group flex items-center"
-          @dragstart="onDragStart($event, task)"
-          @dragend="onDragEnd"
-          @dragover.prevent="onDragOver"
-          @dragleave="onDragLeave"
-          @drop.stop.prevent="onDrop($event, i)">
-          <span
-            class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
-            @mousedown="onHandleMouseDown">⠿</span>
-          <TaskItem
-            class="flex-1 min-w-0"
-            :task="task"
-            @update="onUpdate($event, i)"
-            @remove="onRemove(i)" />
-        </div>
-      </ul>
-      <button type="button" @click="onAddNewTask"
-              class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
-    </div>
-  </div>
+        @drop.stop.prevent="onDrop($event, i)">
+        <span
+          class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
+          @mousedown="onHandleMouseDown">⠿</span>
+        <TaskCard
+          class="flex-1 min-w-0"
+          :task="task"
+          @update="onUpdate($event, i)"
+          @remove="onRemove(i)" />
+      </div>
+    </GroupContainer>
+
+    <!-- Ungrouped tasks -->
+    <ul
+      ref="ulRef"
+      class="space-y-1 min-h-[2rem] rounded transition-colors"
+      :class="dragOver ? 'bg-white/10 ring-2 ring-white/30' : ''"
+      @dragover.prevent="onDragOver"
+      @dragleave="onDragLeave"
+      @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
+      <div
+        v-for="{ task, index: i } in groupedTasks.ungrouped"
+        :key="task.id || i"
+        :data-task-id="task.id"
+        class="group flex items-center"
+        @dragstart="onDragStart($event, task)"
+        @dragend="onDragEnd"
+        @dragover.prevent="onDragOver"
+        @dragleave="onDragLeave"
+        @drop.stop.prevent="onDrop($event, i)">
+        <span
+          class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
+          @mousedown="onHandleMouseDown">⠿</span>
+        <TaskCard
+          class="flex-1 min-w-0"
+          :task="task"
+          @update="onUpdate($event, i)"
+          @remove="onRemove(i)" />
+      </div>
+    </ul>
+
+    <button type="button" @click="onAddNewTask"
+            class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
+  </GroupContainer>
 </template>
