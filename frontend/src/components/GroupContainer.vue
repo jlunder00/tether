@@ -21,7 +21,7 @@ const collapsed = ref(false)
     'rounded-lg transition-all cursor-pointer',
     level === 0 ? 'bg-white/5 border border-white/10 p-3' : 'bg-white/[0.03] border border-white/[0.06] p-2 ml-1',
   ]"
-  :style="color ? { backgroundColor: color + '0a' } : {}"
+  :style="color ? { backgroundColor: color + '15' } : {}"
   @click="collapsible && (collapsed = !collapsed)">
     <!-- Pill heading (sticky within scroll containers) -->
     <div

@@ -152,7 +152,9 @@ onMounted(() => {
           <button
             v-for="m in milestoneStore.bySubject[entry.subject]" :key="m.id"
             @click="toggleMilestone(m.id)"
-            class="text-xs px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 flex items-center gap-1">
+            :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
+            class="text-xs px-1.5 py-0.5 rounded border flex items-center gap-1"
+            :class="m.color ? 'hover:opacity-80' : 'bg-white/10 hover:bg-white/20 border-transparent'">
             <span :class="m.status === 'done' ? 'bg-green-400'
                         : m.status === 'in_progress' ? 'bg-blue-400'
                         : m.status === 'blocked' ? 'bg-red-400' : 'bg-white/20'"
