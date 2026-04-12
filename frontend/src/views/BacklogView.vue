@@ -3,6 +3,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBacklogStore } from '../stores/backlog'
 import { useMilestoneStore } from '../stores/milestones'
+import type { Milestone } from '../stores/milestones'
+import type { Task } from '../stores/plan'
+import TaskCard from '../components/TaskCard.vue'
+import GroupContainer from '../components/GroupContainer.vue'
 
 const router = useRouter()
 const backlogStore = useBacklogStore()
@@ -30,6 +34,19 @@ const grouped = computed(() => {
   })
   return sorted
 })
+
+function tasksByMilestone(tasks: Task[]) {
+  const byMs = new Map<string, { milestone: Milestone; tasks: Task[] }>()
+  const noMs: Task[] = []
+  for (const t of tasks) {
+    const ms = milestoneStore.taskMilestones[t.id]
+    if (!ms?.length) { noMs.push(t); continue }
+    const m = ms[0]
+    if (!byMs.has(m.id)) byMs.set(m.id, { milestone: m, tasks: [] })
+    byMs.get(m.id)!.tasks.push(t)
+  }
+  return { milestoneGroups: [...byMs.values()], ungrouped: noMs }
+}
 
 async function addTask() {
   const text = newTaskText.value.trim()
@@ -63,21 +80,20 @@ async function addTask() {
       <!-- Grouped task list -->
       <template v-else-if="grouped.length">
         <div v-for="[context, tasks] in grouped" :key="context" class="mb-5">
-          <h2 class="text-xs text-white/40 uppercase tracking-wide mb-2 flex items-center gap-2">
-            <span>{{ context }}</span>
-            <span class="text-white/20">{{ tasks.length }}</span>
-          </h2>
-          <ul class="flex flex-col gap-1.5">
-            <li v-for="task in tasks" :key="task.id"
-                class="flex items-center gap-3 bg-white/5 rounded-lg px-3 py-2 hover:bg-white/10 cursor-pointer transition-colors group"
-                @click="router.push(`/backlog/task/${task.id}`)">
-              <span class="w-2 h-2 rounded-full flex-shrink-0"
-                    :class="task.status === 'done' ? 'bg-green-400' : task.status === 'in_progress' ? 'bg-blue-400' : 'bg-white/20'" />
-              <span class="flex-1 text-sm" :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
-              <span v-if="task.description" class="text-white/20 text-xs flex-shrink-0">has description</span>
-              <span class="text-white/20 text-xs opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">↗</span>
-            </li>
-          </ul>
+          <GroupContainer :label="context" :level="0">
+            <template v-for="mg in tasksByMilestone(tasks).milestoneGroups" :key="mg.milestone.id">
+              <GroupContainer :label="mg.milestone.name" :color="mg.milestone.color ?? undefined" :level="1">
+                <ul class="flex flex-col gap-1.5">
+                  <TaskCard v-for="task in mg.tasks" :key="task.id"
+                    :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
+                </ul>
+              </GroupContainer>
+            </template>
+            <ul v-if="tasksByMilestone(tasks).ungrouped.length" class="flex flex-col gap-1.5">
+              <TaskCard v-for="task in tasksByMilestone(tasks).ungrouped" :key="task.id"
+                :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
+            </ul>
+          </GroupContainer>
         </div>
       </template>
 
