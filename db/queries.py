@@ -971,14 +971,16 @@ def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list
 
 
 def get_context_tasks(db_path: Path, subject: str) -> list[dict]:
-    """Return tasks linked to a context subject (uses context_subject column)."""
+    """Return tasks linked to a context subject (uses context_subject column).
+    Returns [{id, text, status, plan_date, anchor_id}] — 'id' matches _row_to_task convention."""
     with get_db(db_path) as conn:
         rows = conn.execute(
             "SELECT uuid, text, status, plan_date, anchor_id "
             "FROM tasks WHERE context_subject=? ORDER BY plan_date DESC",
             (subject,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [{"id": r["uuid"], "text": r["text"], "status": r["status"],
+             "plan_date": r["plan_date"], "anchor_id": r["anchor_id"]} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -1086,7 +1088,7 @@ def seed_kanban_columns(db_path: Path) -> None:
              json.dumps({"set_status": "blocked"})),
         ]
         conn.executemany(
-            "INSERT INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "
+            "INSERT OR IGNORE INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "
             "VALUES (?,?,?,?,?,?)",
             defaults,
         )

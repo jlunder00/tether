@@ -85,6 +85,8 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         if (task.plan_date !== null) return false
       } else if (value === 'not_null') {
         if (task.plan_date === null) return false
+      } else {
+        return false // unknown plan_date value — fail closed
       }
     }
   }
@@ -97,6 +99,7 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
     <h1 class="text-2xl font-bold mb-4">Kanban</h1>
 
     <div v-if="kanbanStore.loading" class="text-white/40 text-sm">Loading columns...</div>
+    <div v-else-if="kanbanStore.error" class="text-red-400 text-sm">{{ kanbanStore.error }}</div>
 
     <div v-else class="flex gap-4 overflow-x-auto pb-4" style="min-height: calc(100vh - 140px);">
       <KanbanColumn

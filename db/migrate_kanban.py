@@ -26,7 +26,7 @@ def migrate(db_path: Path = DB_PATH) -> None:
     try:
         conn.execute("""
             UPDATE tasks SET context_subject = (
-                SELECT subject FROM task_context WHERE task_id = tasks.uuid LIMIT 1
+                SELECT subject FROM task_context WHERE task_id = tasks.uuid ORDER BY subject LIMIT 1
             ) WHERE context_subject IS NULL
         """)
     except sqlite3.OperationalError as e:

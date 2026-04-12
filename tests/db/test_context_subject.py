@@ -120,3 +120,30 @@ def test_get_task_by_uuid_context_subject_none_when_not_set(db_path):
     task = create_unscheduled_task(db_path, "No context task")
     fetched = get_task_by_uuid(db_path, task["id"])
     assert fetched["context_subject"] is None
+
+
+def test_rename_context_cascades_to_tasks(db_path):
+    from db.queries import create_unscheduled_task, get_task_by_uuid, rename_context_subject
+    upsert_context_entry(db_path, "OldProj", "body")
+    upsert_context_entry(db_path, "OldProj/Sub", "child body")
+    task1 = create_unscheduled_task(db_path, "top-level task", context_subject="OldProj")
+    task2 = create_unscheduled_task(db_path, "child task", context_subject="OldProj/Sub")
+    rename_context_subject(db_path, "OldProj", "NewProj")
+    t1 = get_task_by_uuid(db_path, task1["id"])
+    t2 = get_task_by_uuid(db_path, task2["id"])
+    assert t1["context_subject"] == "NewProj"
+    assert t2["context_subject"] == "NewProj/Sub"
+
+
+def test_get_context_tasks_returns_linked_tasks(db_path):
+    from db.queries import create_unscheduled_task, get_context_tasks
+    upsert_context_entry(db_path, "TestProj", "body")
+    create_unscheduled_task(db_path, "linked task", context_subject="TestProj")
+    create_unscheduled_task(db_path, "other task", context_subject="OtherProj")
+    create_unscheduled_task(db_path, "no context task")
+    tasks = get_context_tasks(db_path, "TestProj")
+    assert len(tasks) == 1
+    assert tasks[0]["text"] == "linked task"
+    assert tasks[0]["id"] is not None
+    # Should not return tasks from other contexts
+    assert all(t["text"] != "other task" for t in tasks)

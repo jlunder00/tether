@@ -13,8 +13,9 @@ router = APIRouter()
 async def list_columns(request: Request, _auth=Depends(auth_dependency)):
     try:
         seed_kanban_columns(request.state.db_path)
-    except sqlite3.OperationalError:
-        pass  # table may not exist yet on unmigrated DB
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e).lower():
+            raise
     return get_kanban_columns(request.state.db_path, user_id=request.state.user_id)
 
 
