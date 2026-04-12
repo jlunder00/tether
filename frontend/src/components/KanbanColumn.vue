@@ -11,6 +11,8 @@ const props = defineProps<{
   tasks: Task[]
 }>()
 
+defineEmits<{ (e: 'add-task'): void }>()
+
 const milestoneStore = useMilestoneStore()
 
 /** Group tasks by context_subject, then by milestone within each context */
@@ -112,6 +114,10 @@ const grouped = computed(() => {
           </ul>
         </GroupContainer>
       </template>
+
+      <button @click="$emit('add-task')" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+        + Add task
+      </button>
     </div>
   </div>
 </template>
