@@ -3,7 +3,7 @@ from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
     search_entities, \
-    get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid
+    get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid, get_all_tasks
 from api.auth import auth_dependency
 import api.config as cfg
 
@@ -18,6 +18,11 @@ async def search(q: str = "", type: str = "all", request: Request = None, _auth=
 
 
 # --- Literal path routes MUST come before {task_uuid} parameterized routes ---
+
+@router.get("/tasks/all")
+async def list_all_tasks(request: Request, _auth=Depends(auth_dependency)):
+    return get_all_tasks(request.state.db_path)
+
 
 @router.get("/tasks/unscheduled")
 async def list_unscheduled(request: Request, _auth=Depends(auth_dependency)):

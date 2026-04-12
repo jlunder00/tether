@@ -146,8 +146,14 @@ function toggleFollowup(enabled: boolean) {
         :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
     </div>
 
-    <!-- Tags row (milestone + context) — hidden when inside a GroupContainer that shows them -->
-    <div v-if="!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject)" class="flex flex-wrap gap-1">
+    <!-- Tags row (milestone + context + schedule) — hidden when inside a GroupContainer that shows them -->
+    <div v-if="!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject || (task as any).plan_date)" class="flex flex-wrap gap-1">
+      <span
+        v-if="(task as any).plan_date"
+        @click.stop
+        class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
+        {{ (task as any).plan_date }}{{ (task as any).anchor_id ? ' · ' + (task as any).anchor_id : '' }}
+      </span>
       <span
         v-if="task.context_subject"
         @click.stop
