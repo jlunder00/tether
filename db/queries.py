@@ -152,10 +152,6 @@ def upsert_tasks(
         ):
             existing_by_uuid[row["uuid"]] = dict(row)
 
-        # Track which existing tasks were referenced so we can compute new positions
-        touched_uuids: set[str] = set()
-
-        result = []
         for task in task_dicts:
             uid = task.get("id") or ""
             text = task.get("text")
@@ -181,7 +177,6 @@ def upsert_tasks(
                     "followup_config=?, notes=? WHERE uuid=?",
                     (date, anchor_id, text, status, fc_json, notes, uid),
                 )
-                touched_uuids.add(uid)
             else:
                 # New task — must have text
                 if not text:
@@ -199,13 +194,6 @@ def upsert_tasks(
                     "followup_config, notes, context_subject) VALUES (?,?,?,?,?,?,?,?,?)",
                     (uid, date, anchor_id, max_pos + 1, text, status, fc_json, notes, context_subject),
                 )
-                touched_uuids.add(uid)
-
-            result.append({
-                "id": uid, "text": text, "status": status,
-                "position": 0, "followup_config": fc,
-                "blocks": [], "blocked_by": [],
-            })
 
         # Return ALL tasks for this anchor (including untouched ones)
         all_rows = conn.execute(
@@ -1093,6 +1081,9 @@ def seed_kanban_columns(db_path: Path) -> None:
             ("col_skipped", "Skipped", 4, "#94a3b8",
              json.dumps({"status": "skipped"}),
              json.dumps({"set_status": "skipped"})),
+            ("col_blocked", "Blocked", 5, "#ef4444",
+             json.dumps({"status": "blocked"}),
+             json.dumps({"set_status": "blocked"})),
         ]
         conn.executemany(
             "INSERT INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "

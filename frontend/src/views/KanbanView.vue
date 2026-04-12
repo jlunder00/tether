@@ -2,7 +2,6 @@
 import { onMounted, computed } from 'vue'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { usePlanStore } from '../stores/plan'
-import { useAnchorStore } from '../stores/anchors'
 import { useKanbanStore } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
 import { useBacklogStore } from '../stores/backlog'
@@ -14,14 +13,12 @@ interface KanbanTask extends Task {
 }
 
 const planStore = usePlanStore()
-const anchorStore = useAnchorStore()
 const kanbanStore = useKanbanStore()
 const milestoneStore = useMilestoneStore()
 const backlogStore = useBacklogStore()
 
 onMounted(() => {
   planStore.fetchPlan()
-  anchorStore.fetchAnchors()
   kanbanStore.fetchColumns()
   milestoneStore.fetchAll()
   backlogStore.fetchTasks()
@@ -76,8 +73,11 @@ const columnTasks = computed(() => {
   return result
 })
 
+const KNOWN_RULE_KEYS = new Set(['status', 'plan_date'])
+
 function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean {
   for (const [key, value] of Object.entries(rules)) {
+    if (!KNOWN_RULE_KEYS.has(key)) return false // unknown keys fail closed
     if (key === 'status') {
       if (task.status !== value) return false
     } else if (key === 'plan_date') {

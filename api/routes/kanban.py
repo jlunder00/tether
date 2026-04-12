@@ -1,3 +1,4 @@
+import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import (
     get_kanban_columns, create_kanban_column, update_kanban_column,
@@ -12,7 +13,7 @@ router = APIRouter()
 async def list_columns(request: Request, _auth=Depends(auth_dependency)):
     try:
         seed_kanban_columns(request.state.db_path)
-    except Exception:
+    except sqlite3.OperationalError:
         pass  # table may not exist yet on unmigrated DB
     return get_kanban_columns(request.state.db_path, user_id=request.state.user_id)
 
