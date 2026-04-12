@@ -10,7 +10,10 @@ router = APIRouter()
 
 @router.get("/kanban/columns")
 async def list_columns(request: Request, _auth=Depends(auth_dependency)):
-    seed_kanban_columns(request.state.db_path)  # ensure defaults exist
+    try:
+        seed_kanban_columns(request.state.db_path)
+    except Exception:
+        pass  # table may not exist yet on unmigrated DB
     return get_kanban_columns(request.state.db_path, user_id=request.state.user_id)
 
 

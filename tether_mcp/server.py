@@ -32,6 +32,8 @@ from db.queries import (
     create_unscheduled_task,
     get_task_by_uuid,
     move_task_atomic,
+    delete_task_by_uuid,
+    get_milestones as _db_get_milestones,
 )
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
@@ -274,7 +276,6 @@ def update_plan_tasks(anchor_id: str, tasks: list, date: str = "") -> dict:
 @mcp.tool()
 def remove_task(task_uuid: str) -> dict:
     """Permanently delete a task by UUID. Cascades to subtasks, links, dependencies, milestones."""
-    from db.queries import delete_task_by_uuid
     delete_task_by_uuid(_db(), task_uuid)
     return {"ok": True, "deleted": task_uuid}
 
@@ -282,7 +283,6 @@ def remove_task(task_uuid: str) -> dict:
 @mcp.tool()
 def move_to_backlog(task_uuid: str) -> dict:
     """Move a task to the backlog (unschedule it). Preserves all milestone/context/dep links."""
-    from db.queries import move_task_atomic
     move_task_atomic(_db(), task_uuid, None, None)
     return {"ok": True, "moved": task_uuid}
 
@@ -290,7 +290,6 @@ def move_to_backlog(task_uuid: str) -> dict:
 @mcp.tool()
 def schedule_task(task_uuid: str, date: str, anchor_id: str) -> dict:
     """Schedule a backlog task onto a specific date and anchor."""
-    from db.queries import move_task_atomic
     move_task_atomic(_db(), task_uuid, date, anchor_id)
     return {"ok": True, "scheduled": task_uuid, "date": date, "anchor_id": anchor_id}
 
@@ -319,8 +318,7 @@ def get_bot_log(n: int = 5) -> list[dict]:
 async def get_milestones(context_subject: str | None = None) -> str:
     """Get milestones for a context subject (or all if omitted).
     Returns list with id, name, status, task_count, done_count, task_ids."""
-    from db.queries import get_milestones as _get_milestones
-    return json.dumps(_get_milestones(_db(), context_subject), indent=2)
+    return json.dumps(_db_get_milestones(_db(), context_subject), indent=2)
 
 
 @mcp.tool()
@@ -351,8 +349,7 @@ def append_milestone_description(milestone_id: str, text: str) -> dict:
     """Append text to a milestone's description (adds after existing content with double newline).
     Creates description if none exists."""
     db = _db()
-    from db.queries import get_milestones as _get_ms
-    all_ms = _get_ms(db)
+    all_ms = _db_get_milestones(db)
     ms = next((m for m in all_ms if m["id"] == milestone_id), None)
     if not ms:
         return {"error": "Milestone not found"}

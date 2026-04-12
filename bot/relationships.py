@@ -1,15 +1,13 @@
 """Relationship resolver for the Beacon agent.
 
 Traces links between tasks, milestones, and context entries so the Beacon
-can make relationship-aware decisions. The chain is:
+can make relationship-aware decisions. Two link paths:
 
-    context_entries ← milestones ← milestone_tasks → tasks
+  1. Direct: tasks.context_subject column (single context per task)
+  2. Indirect: milestone_tasks → milestones → context_subject
 
-When a task changes, we trace: task → milestone_tasks → milestone → context_entry
-to determine which context entries are affected and should be reviewed.
-
-This same pattern will extend to direct task_context_links when that table
-is added.
+When a task changes, we trace both paths to determine which context entries
+are affected and should be reviewed.
 """
 import logging
 import sqlite3
@@ -25,7 +23,7 @@ def resolve_task_context(db_path: str, task_id: str) -> list[dict]:
     """Given a task UUID, find all context entries linked to it.
 
     Two link paths:
-      1. Direct: task_context table (task_id → subject)
+      1. Direct: tasks.context_subject column (single context per task)
       2. Indirect: milestone_tasks → milestones → context_subject
 
     Returns a list of dicts with keys:

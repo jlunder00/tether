@@ -29,8 +29,10 @@ def migrate(db_path: Path = DB_PATH) -> None:
                 SELECT subject FROM task_context WHERE task_id = tasks.uuid LIMIT 1
             ) WHERE context_subject IS NULL
         """)
-    except sqlite3.OperationalError:
-        pass  # task_context may not exist
+    except sqlite3.OperationalError as e:
+        if "no such table" not in str(e).lower():
+            raise RuntimeError(f"Backfill failed: {e}") from e
+        print("  Note: task_context table not found — skipping backfill")
 
     # Create kanban_columns table
     conn.execute("""
