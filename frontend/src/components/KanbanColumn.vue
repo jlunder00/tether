@@ -69,9 +69,9 @@ const grouped = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-white/[0.03] border border-white/10 rounded-xl flex-shrink-0">
-    <!-- Column header -->
-    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-white/10">
+  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-white/[0.03] border border-white/10 rounded-xl flex-shrink-0 min-h-0">
+    <!-- Column header (fixed, does not scroll) -->
+    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-white/10 flex-shrink-0">
       <span v-if="column.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: column.color }" />
       <span class="text-sm font-semibold uppercase tracking-wide"
             :style="column.color ? { color: column.color } : {}">
@@ -80,14 +80,14 @@ const grouped = computed(() => {
       <span class="text-xs text-white/30 ml-auto">{{ tasks.length }}</span>
     </div>
 
-    <!-- Scrollable body -->
-    <div class="flex-1 overflow-y-auto p-2 space-y-2" style="max-height: calc(100vh - 140px);">
+    <!-- Scrollable body (fills remaining column height) -->
+    <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
       <template v-if="!tasks.length">
         <p class="text-white/20 text-xs text-center py-4">No tasks</p>
       </template>
 
       <template v-for="group in grouped" :key="group.label">
-        <GroupContainer :label="group.label" :collapsible="true" :level="0">
+        <GroupContainer :label="group.label" :collapsible="true" :level="0" :stickyOffset="0">
           <template #header-right>
             <span class="text-xs text-white/30">{{ group.tasks.length }}</span>
           </template>
@@ -99,6 +99,7 @@ const grouped = computed(() => {
             :label="mg.name"
             :color="mg.color ?? undefined"
             :level="1"
+            :stickyOffset="0"
             class="mb-1">
             <div class="space-y-1">
               <TaskCard
