@@ -56,7 +56,7 @@ const grouped = computed(() => {
 </script>
 
 <template>
-  <div class="flex flex-col min-w-[280px] max-w-[320px] bg-white/[0.03] border border-white/10 rounded-xl flex-shrink-0">
+  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-white/[0.03] border border-white/10 rounded-xl flex-shrink-0">
     <!-- Column header -->
     <div class="flex items-center gap-2 px-3 py-2.5 border-b border-white/10">
       <span v-if="column.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: column.color }" />
@@ -95,7 +95,7 @@ const grouped = computed(() => {
                 :editable="false"
                 :showRemove="false"
                 :showDetailLink="false"
-                :compact="true" />
+                :compact="true" :hideTags="true" />
             </ul>
           </GroupContainer>
 
@@ -108,7 +108,7 @@ const grouped = computed(() => {
               :editable="false"
               :showRemove="false"
               :showDetailLink="false"
-              :compact="true" />
+              :compact="true" :hideTags="true" />
           </ul>
         </GroupContainer>
       </template>

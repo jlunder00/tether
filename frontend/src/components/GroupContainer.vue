@@ -19,10 +19,11 @@ const collapsed = ref(false)
     'rounded-lg transition-all',
     level === 0 ? 'bg-white/5 border border-white/10 p-3' : 'bg-white/[0.03] border border-white/[0.06] p-2 ml-1',
   ]">
-    <!-- Pill heading -->
+    <!-- Pill heading (sticky within scroll containers) -->
     <div
-      class="flex items-center gap-2 cursor-pointer select-none"
-      :class="collapsed ? '' : 'mb-2'"
+      class="flex items-center gap-2 cursor-pointer select-none sticky top-0 z-10 backdrop-blur-sm"
+      :class="[collapsed ? '' : 'mb-2', level === 0 ? 'bg-white/5' : 'bg-gray-900/80']"
+      :style="{ top: level === 1 ? '28px' : '0px' }"
       @click="collapsible && (collapsed = !collapsed)">
       <span v-if="color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: color }" />
       <span class="text-xs font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
