@@ -85,13 +85,13 @@ async function addTask() {
               <GroupContainer :label="mg.milestone.name" :color="mg.milestone.color ?? undefined" :level="1">
                 <ul class="flex flex-col gap-1.5">
                   <TaskCard v-for="task in mg.tasks" :key="task.id"
-                    :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
+                    :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" :hide-tags="true" />
                 </ul>
               </GroupContainer>
             </template>
             <ul v-if="tasksByMilestone(tasks).ungrouped.length" class="flex flex-col gap-1.5">
               <TaskCard v-for="task in tasksByMilestone(tasks).ungrouped" :key="task.id"
-                :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
+                :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" :hide-tags="true" />
             </ul>
           </GroupContainer>
         </div>
