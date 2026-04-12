@@ -935,6 +935,17 @@ def get_unscheduled_tasks(db_path: Path) -> list[dict]:
     return [_row_to_task(r) for r in rows]
 
 
+def get_all_tasks(db_path: Path) -> list[dict]:
+    """Get ALL tasks (scheduled + unscheduled) with schedule info. For kanban board."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT uuid, text, status, position, followup_config, description, "
+            "context_subject, plan_date, anchor_id "
+            "FROM tasks ORDER BY plan_date DESC NULLS LAST, position"
+        ).fetchall()
+    return [_row_to_task(r, include_schedule=True) for r in rows]
+
+
 def search_entities(db_path: Path, query: str, entity_type: str = "all") -> list[dict]:
     """Search tasks and/or milestones by text. Returns [{id, label, sublabel, type}]."""
     results = []

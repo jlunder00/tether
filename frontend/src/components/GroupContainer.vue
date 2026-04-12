@@ -19,15 +19,15 @@ const collapsed = ref(false)
 <template>
   <div :class="[
     'rounded-lg transition-all cursor-pointer',
-    level === 0 ? 'bg-white/5 border border-white/10 p-3' : 'bg-white/[0.03] border border-white/[0.06] p-2 ml-1',
+    level === 0 ? 'border border-white/10 p-3' : 'border border-white/[0.06] p-2 ml-1',
   ]"
-  :style="color ? { backgroundColor: color + '15' } : {}"
+  :style="{ backgroundColor: color ? color + '15' : (level === 0 ? 'rgba(255,255,255,0.03)' : 'rgb(17,24,39)') }"
   @click="collapsible && (collapsed = !collapsed)">
     <!-- Pill heading (sticky within scroll containers) -->
     <div
-      class="flex items-center gap-2 select-none sticky top-0 z-10 backdrop-blur-sm"
-      :class="[collapsed ? '' : 'mb-2', level === 0 ? 'bg-white/5' : 'bg-gray-900/80']"
-      :style="{ top: level === 1 ? '28px' : '0px' }">
+      class="flex items-center gap-2 select-none sticky top-0 z-10"
+      :class="[collapsed ? '' : 'mb-2']"
+      :style="{ backgroundColor: color ? color + '20' : (level === 0 ? 'rgba(255,255,255,0.05)' : 'rgb(17,24,39)'), top: level === 1 ? '28px' : '0px' }">
       <span class="text-xs font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
             :style="color ? { backgroundColor: color + '22', color } : {}"
             :class="color ? '' : 'text-white/50 bg-white/10'"
