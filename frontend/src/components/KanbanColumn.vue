@@ -5,6 +5,7 @@ import GroupContainer from './GroupContainer.vue'
 import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { KanbanColumn } from '../stores/kanban'
+import { api } from '../lib/api'
 
 const props = defineProps<{
   column: KanbanColumn
@@ -12,6 +13,16 @@ const props = defineProps<{
 }>()
 
 defineEmits<{ (e: 'add-task'): void }>()
+
+async function onTaskUpdate(task: Task) {
+  // Patch via API — status change, text change, etc.
+  await api(`/api/tasks/${task.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: task.status, text: task.text }),
+  })
+  // KanbanView will re-render via reactive stores
+}
 
 const milestoneStore = useMilestoneStore()
 
@@ -89,29 +100,29 @@ const grouped = computed(() => {
             :color="mg.color ?? undefined"
             :level="1"
             class="mb-1">
-            <ul class="space-y-0.5">
+            <div class="space-y-1">
               <TaskCard
                 v-for="task in mg.tasks"
                 :key="task.id"
                 :task="task"
                 :editable="false"
                 :showRemove="false"
-                :showDetailLink="false"
-                :compact="true" :hideTags="true" />
-            </ul>
+                :compact="true" :hideTags="true"
+                @update="onTaskUpdate" />
+            </div>
           </GroupContainer>
 
           <!-- Ungrouped tasks -->
-          <ul v-if="group.ungrouped.length" class="space-y-0.5">
+          <div v-if="group.ungrouped.length" class="space-y-1">
             <TaskCard
               v-for="task in group.ungrouped"
               :key="task.id"
               :task="task"
               :editable="false"
               :showRemove="false"
-              :showDetailLink="false"
-              :compact="true" :hideTags="true" />
-          </ul>
+              :compact="true" :hideTags="true"
+              @update="onTaskUpdate" />
+          </div>
         </GroupContainer>
       </template>
 

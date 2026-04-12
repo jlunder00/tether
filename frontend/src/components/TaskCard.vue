@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
@@ -8,6 +8,14 @@ import { usePlanStore } from '../stores/plan'
 const milestoneStore = useMilestoneStore()
 const planStore = usePlanStore()
 const router = useRouter()
+const route = useRoute()
+
+// Derive the route base for detail panel navigation based on current view
+const routeBase = computed(() => {
+  if (route.path.startsWith('/kanban')) return '/kanban'
+  if (route.path.startsWith('/dashboard')) return '/dashboard'
+  return `/plan/day/${planStore.activeDate}`
+})
 
 const props = withDefaults(defineProps<{
   task: Task
@@ -96,9 +104,9 @@ function toggleFollowup(enabled: boolean) {
 </script>
 
 <template>
-  <li class="group rounded-lg transition-colors border border-white/[0.08] cursor-pointer relative"
+  <div class="group rounded-lg transition-colors border border-white/[0.08] cursor-pointer relative"
       :class="STATUS_CARD_BG[task.status]"
-      @click="showDetailLink && task.id && router.push(`/plan/day/${planStore.activeDate}/task/${task.id}`)">
+      @click="task.id && router.push(`${routeBase}/task/${task.id}`)">
     <div class="flex flex-col gap-1 p-2">
     <!-- Status pill (top-right, dropdown) -->
     <div class="absolute top-1.5 right-1.5">
@@ -207,5 +215,5 @@ function toggleFollowup(enabled: boolean) {
       </Teleport>
     </div>
   </div>
-  </li>
+  </div>
 </template>
