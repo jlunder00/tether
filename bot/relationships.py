@@ -36,16 +36,16 @@ def resolve_task_context(db_path: str, task_id: str) -> list[dict]:
     results = []
     seen_subjects = set()
 
-    # --- Path 1: direct task_context links ---
+    # --- Path 1: direct context_subject on task ---
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        direct_rows = conn.execute(
-            "SELECT subject FROM task_context WHERE task_id = ?",
+        row = conn.execute(
+            "SELECT context_subject FROM tasks WHERE uuid = ?",
             (task_id,),
-        ).fetchall()
-        for r in direct_rows:
-            subj = r["subject"]
+        ).fetchone()
+        if row and row["context_subject"]:
+            subj = row["context_subject"]
             seen_subjects.add(subj)
             results.append({
                 "context_subject": subj,

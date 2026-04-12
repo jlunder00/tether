@@ -1030,12 +1030,11 @@ def get_task_contexts(db_path: Path, task_id: str) -> list[str]:
 
 
 def get_context_tasks(db_path: Path, subject: str) -> list[dict]:
-    """Return tasks linked to a context subject."""
+    """Return tasks linked to a context subject (uses context_subject column)."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT t.uuid, t.text, t.status, t.plan_date, t.anchor_id "
-            "FROM tasks t JOIN task_context tc ON t.uuid = tc.task_id "
-            "WHERE tc.subject=? ORDER BY t.plan_date DESC",
+            "SELECT uuid, text, status, plan_date, anchor_id "
+            "FROM tasks WHERE context_subject=? ORDER BY plan_date DESC",
             (subject,),
         ).fetchall()
     return [dict(r) for r in rows]

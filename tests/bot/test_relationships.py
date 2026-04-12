@@ -5,7 +5,7 @@ from datetime import date
 from db.schema import init_db
 from db.queries import (
     upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry,
-    create_milestone, link_milestone_task, link_task_context, get_plan, get_milestones,
+    create_milestone, link_milestone_task, get_plan, get_milestones,
 )
 
 
@@ -55,10 +55,11 @@ def rich_db(db_path):
     link_milestone_task(db_path, m1["id"], t2_id)
     link_milestone_task(db_path, m2["id"], t3_id)
 
-    # Direct task→context links (new task_context table)
-    link_task_context(db_path, t1_id, "Work/Alpha")    # also linked via milestone — dedup test
-    link_task_context(db_path, t3_id, "Work/Beta")     # also linked via milestone
-    link_task_context(db_path, t2_id, "Work/Beta")     # cross-link: alpha_tests → Beta context
+    # Direct task→context links (context_subject column on tasks)
+    from db.queries import patch_task_fields
+    patch_task_fields(db_path, t1_id, {"context_subject": "Work/Alpha"})  # also linked via milestone — dedup test
+    patch_task_fields(db_path, t3_id, {"context_subject": "Work/Beta"})   # also linked via milestone
+    patch_task_fields(db_path, t2_id, {"context_subject": "Work/Beta"})   # cross-link: alpha_tests → Beta context
 
     return {
         "db_path": db_path,

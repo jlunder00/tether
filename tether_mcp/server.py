@@ -249,19 +249,13 @@ def upsert_task(
     if context_subject and task_uuid:
         patch_task_fields(db, task_uuid, {"context_subject": context_subject})
 
-    # Link milestones (additive)
+    # Link milestones (additive — INSERT OR IGNORE handles duplicates)
     for mid in milestone_ids:
-        try:
-            link_milestone_task(db, mid, task_uuid)
-        except Exception:
-            pass  # already linked
+        link_milestone_task(db, mid, task_uuid)
 
-    # Add blockers (additive)
+    # Add blockers (additive — INSERT OR IGNORE handles duplicates)
     for blocker_id in blocked_by:
-        try:
-            add_dependency(db, "task", blocker_id, "task", task_uuid)
-        except Exception:
-            pass  # already exists
+        add_dependency(db, "task", blocker_id, "task", task_uuid)
 
     return result_task or {"id": task_uuid, "text": text, "status": status or "pending"}
 
@@ -455,14 +449,18 @@ def update_milestone(milestone_id: str, fields: dict) -> dict:
 @mcp.tool()
 def link_task_to_context(task_uuid: str, subject: str) -> dict:
     """Set a task's context entry (single context per task)."""
-    patch_task_fields(_db(), task_uuid, {"context_subject": subject})
+    result = patch_task_fields(_db(), task_uuid, {"context_subject": subject})
+    if result is None:
+        return {"error": f"Task {task_uuid} not found"}
     return {"ok": True}
 
 
 @mcp.tool()
 def unlink_task_from_context(task_uuid: str, subject: str) -> dict:
     """Clear a task's context entry."""
-    patch_task_fields(_db(), task_uuid, {"context_subject": None})
+    result = patch_task_fields(_db(), task_uuid, {"context_subject": None})
+    if result is None:
+        return {"error": f"Task {task_uuid} not found"}
     return {"ok": True}
 
 
