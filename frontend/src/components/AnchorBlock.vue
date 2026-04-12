@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import TaskItem from './TaskItem.vue'
+import TaskItem from './TaskCard.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
 

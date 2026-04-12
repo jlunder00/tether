@@ -9,7 +9,18 @@ const milestoneStore = useMilestoneStore()
 const planStore = usePlanStore()
 const router = useRouter()
 
-const props = defineProps<{ task: Task }>()
+const props = withDefaults(defineProps<{
+  task: Task
+  editable?: boolean
+  showRemove?: boolean
+  showDetailLink?: boolean
+  compact?: boolean
+}>(), {
+  editable: true,
+  showRemove: true,
+  showDetailLink: true,
+  compact: false,
+})
 const emit = defineEmits<{
   (e: 'update', task: Task): void
   (e: 'remove'): void
@@ -69,12 +80,12 @@ const milestoneColors = computed(() =>
   <li class="group rounded-lg transition-colors"
       :style="milestoneColors.length ? {
         border: `2px solid ${milestoneColors[0]}`,
-        padding: '4px 8px',
+        padding: compact ? '2px 4px' : '4px 8px',
         outline: milestoneColors.length > 1
           ? `2px solid ${milestoneColors[1]}`
           : undefined,
         outlineOffset: milestoneColors.length > 1 ? '1px' : undefined,
-      } : { padding: '4px 8px' }">
+      } : { padding: compact ? '2px 4px' : '4px 8px' }">
     <div class="flex gap-2 items-center">
     <button
       @click="cycleStatus"
@@ -82,10 +93,15 @@ const milestoneColors = computed(() =>
       :title="task.status"
       class="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5 transition-colors cursor-pointer" />
     <input
+      v-if="editable"
       :value="task.text"
       :class="task.status === 'done' ? 'line-through opacity-40' : ''"
       @change="updateText"
       class="flex-1 bg-transparent border-b border-white/20 focus:border-white/60 outline-none text-sm py-0.5" />
+    <span
+      v-else
+      class="flex-1 text-sm"
+      :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
     <span
       v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
       @click="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
@@ -95,13 +111,15 @@ const milestoneColors = computed(() =>
       {{ m.name }}
     </span>
     <button
+      v-if="showRemove"
       @click="emit('remove')"
       class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
     <button
+      v-if="showDetailLink"
       @click="router.push(`/plan/day/${planStore.activeDate}/task/${task.id}`)"
       class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
       title="Open details">↗</button>
-    <div>
+    <div v-if="showDetailLink && !compact">
       <button
         @click="openFollowup"
         class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity ml-1">

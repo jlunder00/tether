@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Task } from '../stores/plan'
-import TaskItem from './TaskItem.vue'
+import TaskItem from './TaskCard.vue'
 
 const props = defineProps<{ tasks: Task[] }>()
 const emit = defineEmits<{ (e: 'update', tasks: Task[]): void }>()
