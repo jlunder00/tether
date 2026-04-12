@@ -57,14 +57,6 @@ const router = createRouter({
     },
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
     {
-      path: '/backlog',
-      name: 'backlog',
-      component: () => import('./views/BacklogView.vue'),
-      children: [
-        { path: 'task/:taskId', name: 'backlog-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
-      ],
-    },
-    {
       path: '/kanban',
       name: 'kanban',
       component: () => import('./views/KanbanView.vue'),

@@ -16,31 +16,49 @@ const props = defineProps<{
 }>()
 
 const store = usePlanStore()
-const ulRef = ref<HTMLElement | null>(null)
-const dragOver = ref(false)
+const tasksRef = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
 const anchorPlan = computed(() => dayPlan.value?.anchors[props.anchorId] ?? { tasks: [], notes: '' })
 
 const milestoneStore = useMilestoneStore()
 
-const groupedTasks = computed(() => {
-  const byMilestone: Record<string, { milestone: Milestone; tasks: { task: Task; index: number }[] }> = {}
-  const ungrouped: { task: Task; index: number }[] = []
+type TaskWithIndex = { task: Task; index: number }
+
+const groupedByContext = computed(() => {
+  const byContext: Record<string, {
+    milestoneGroups: { milestone: Milestone; tasks: TaskWithIndex[] }[]
+    ungrouped: TaskWithIndex[]
+  }> = {}
 
   anchorPlan.value.tasks.forEach((task, index) => {
+    const ctx = task.context_subject ?? 'Uncategorized'
+    if (!byContext[ctx]) byContext[ctx] = { milestoneGroups: [], ungrouped: [] }
+
     const milestones = milestoneStore.taskMilestones[task.id]
     if (milestones?.length) {
       const m = milestones[0]
-      if (!byMilestone[m.id]) byMilestone[m.id] = { milestone: m, tasks: [] }
-      byMilestone[m.id].tasks.push({ task, index })
+      let group = byContext[ctx].milestoneGroups.find(g => g.milestone.id === m.id)
+      if (!group) {
+        group = { milestone: m, tasks: [] }
+        byContext[ctx].milestoneGroups.push(group)
+      }
+      group.tasks.push({ task, index })
     } else {
-      ungrouped.push({ task, index })
+      byContext[ctx].ungrouped.push({ task, index })
     }
   })
 
-  return { milestoneGroups: Object.values(byMilestone), ungrouped }
+  return Object.entries(byContext).sort(([a], [b]) => {
+    if (a === 'Uncategorized') return 1
+    if (b === 'Uncategorized') return -1
+    return a.localeCompare(b)
+  })
 })
+
+function contextTaskCount(ctx: { milestoneGroups: { tasks: TaskWithIndex[] }[]; ungrouped: TaskWithIndex[] }): number {
+  return ctx.milestoneGroups.reduce((sum, g) => sum + g.tasks.length, 0) + ctx.ungrouped.length
+}
 
 function onUpdate(task: Task, index: number) {
   const updated = [...anchorPlan.value.tasks]
@@ -70,32 +88,13 @@ function onAddNewTask() {
     context_subject: null,
   })
   nextTick(() => {
-    const inputs = ulRef.value?.querySelectorAll('input')
+    const inputs = tasksRef.value?.querySelectorAll('input')
     if (inputs?.length) (inputs[inputs.length - 1] as HTMLInputElement).focus()
   })
 }
 
 // ── Drag and drop (native HTML5 DnD) ─────────────────────────────────────────
-// The wrapper <div> is NOT draggable by default so inputs/buttons work normally.
-// Pressing the handle dynamically enables draggable on the wrapper, making the
-// entire row the drag ghost. Releasing the mouse removes draggable.
-
-let activeDragEl: HTMLElement | null = null
-
-function onHandleMouseDown(evt: MouseEvent) {
-  const row = (evt.currentTarget as HTMLElement).parentElement
-  if (!row) return
-  row.setAttribute('draggable', 'true')
-  activeDragEl = row
-  document.addEventListener('mouseup', clearDraggable, { once: true })
-}
-
-function clearDraggable() {
-  if (activeDragEl) {
-    activeDragEl.removeAttribute('draggable')
-    activeDragEl = null
-  }
-}
+// Drag handle removed; these handlers remain on wrapper divs for future card-level DnD.
 
 function onDragStart(evt: DragEvent, task: Task) {
   if (!task.id) { evt.preventDefault(); return }
@@ -107,20 +106,7 @@ function onDragStart(evt: DragEvent, task: Task) {
   }))
 }
 
-function onDragEnd() {
-  clearDraggable()
-}
-
-function onDragOver() {
-  dragOver.value = true
-}
-
-function onDragLeave() {
-  dragOver.value = false
-}
-
 function onDrop(evt: DragEvent, toIndex: number) {
-  dragOver.value = false
   const raw = evt.dataTransfer?.getData('text/plain')
   if (!raw) return
   try {
@@ -141,63 +127,74 @@ function onDrop(evt: DragEvent, toIndex: number) {
       <span class="text-xs text-white/30">{{ anchorPlan.tasks.length }}</span>
     </template>
 
-    <!-- Milestone groups -->
-    <GroupContainer
-      v-for="group in groupedTasks.milestoneGroups"
-      :key="group.milestone.id"
-      :label="group.milestone.name"
-      :color="group.milestone.color ?? undefined"
-      :level="1"
-      class="mb-2">
-      <div
-        v-for="{ task, index: i } in group.tasks"
-        :key="task.id || i"
-        :data-task-id="task.id"
-        class="group flex items-center"
-        @dragstart="onDragStart($event, task)"
-        @dragend="onDragEnd"
-        @dragover.prevent="onDragOver"
-        @dragleave="onDragLeave"
-        @drop.stop.prevent="onDrop($event, i)">
-        <span
-          class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
-          @mousedown="onHandleMouseDown">⠿</span>
-        <TaskCard
-          class="flex-1 min-w-0"
-          :task="task"
-          @update="onUpdate($event, i)"
-          @remove="onRemove(i)" />
-      </div>
-    </GroupContainer>
+    <div ref="tasksRef" class="space-y-1">
+      <template v-for="[ctxName, ctx] in groupedByContext" :key="ctxName">
+        <!-- Context has only 1 task total — show standalone (no context GroupContainer) -->
+        <template v-if="contextTaskCount(ctx) === 1">
+          <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
+            <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
+                 :data-task-id="task.id"
+                 @dragstart="onDragStart($event, task)"
+                 @dragover.prevent
+                 @drop.stop.prevent="onDrop($event, i)">
+              <TaskCard class="min-w-0" :task="task" :hideTags="false"
+                        @update="onUpdate($event, i)" @remove="onRemove(i)" />
+            </div>
+          </template>
+          <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
+               :data-task-id="task.id"
+               @dragstart="onDragStart($event, task)"
+               @dragover.prevent
+               @drop.stop.prevent="onDrop($event, i)">
+            <TaskCard class="min-w-0" :task="task" :hideTags="false"
+                      @update="onUpdate($event, i)" @remove="onRemove(i)" />
+          </div>
+        </template>
 
-    <!-- Ungrouped tasks -->
-    <ul
-      ref="ulRef"
-      class="space-y-1 min-h-[2rem] rounded transition-colors"
-      :class="dragOver ? 'bg-white/10 ring-2 ring-white/30' : ''"
-      @dragover.prevent="onDragOver"
-      @dragleave="onDragLeave"
-      @drop.prevent="onDrop($event, anchorPlan.tasks.length)">
-      <div
-        v-for="{ task, index: i } in groupedTasks.ungrouped"
-        :key="task.id || i"
-        :data-task-id="task.id"
-        class="group flex items-center"
-        @dragstart="onDragStart($event, task)"
-        @dragend="onDragEnd"
-        @dragover.prevent="onDragOver"
-        @dragleave="onDragLeave"
-        @drop.stop.prevent="onDrop($event, i)">
-        <span
-          class="cursor-grab text-white/30 hover:text-white/60 select-none px-1 flex-shrink-0 leading-none"
-          @mousedown="onHandleMouseDown">⠿</span>
-        <TaskCard
-          class="flex-1 min-w-0"
-          :task="task"
-          @update="onUpdate($event, i)"
-          @remove="onRemove(i)" />
-      </div>
-    </ul>
+        <!-- Context has >1 task — wrap in context GroupContainer -->
+        <GroupContainer v-else :label="ctxName" :collapsible="true" :level="1" class="mb-2">
+          <!-- Milestone sub-groups -->
+          <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
+            <!-- Milestone group has 1 task — show standalone with tags visible -->
+            <template v-if="mg.tasks.length === 1">
+              <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
+                   :data-task-id="task.id"
+                   @dragstart="onDragStart($event, task)"
+                   @dragover.prevent
+                   @drop.stop.prevent="onDrop($event, i)">
+                <TaskCard class="min-w-0" :task="task" :hideTags="false"
+                          @update="onUpdate($event, i)" @remove="onRemove(i)" />
+              </div>
+            </template>
+            <!-- Milestone group has >1 task — wrap in milestone GroupContainer -->
+            <GroupContainer v-else
+              :label="mg.milestone.name"
+              :color="mg.milestone.color ?? undefined"
+              :level="1"
+              class="mb-1">
+              <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
+                   :data-task-id="task.id"
+                   @dragstart="onDragStart($event, task)"
+                   @dragover.prevent
+                   @drop.stop.prevent="onDrop($event, i)">
+                <TaskCard class="min-w-0" :task="task" :hideTags="true"
+                          @update="onUpdate($event, i)" @remove="onRemove(i)" />
+              </div>
+            </GroupContainer>
+          </template>
+
+          <!-- Ungrouped tasks within this context -->
+          <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
+               :data-task-id="task.id"
+               @dragstart="onDragStart($event, task)"
+               @dragover.prevent
+               @drop.stop.prevent="onDrop($event, i)">
+            <TaskCard class="min-w-0" :task="task" :hideTags="true"
+                      @update="onUpdate($event, i)" @remove="onRemove(i)" />
+          </div>
+        </GroupContainer>
+      </template>
+    </div>
 
     <button type="button" @click="onAddNewTask"
             class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>

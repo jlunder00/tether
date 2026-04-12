@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { usePlanStore } from '../stores/plan'
 import { useKanbanStore } from '../stores/kanban'
@@ -12,6 +13,7 @@ interface KanbanTask extends Task {
   anchor_id: string | null
 }
 
+const router = useRouter()
 const planStore = usePlanStore()
 const kanbanStore = useKanbanStore()
 const milestoneStore = useMilestoneStore()
@@ -23,6 +25,15 @@ onMounted(() => {
   milestoneStore.fetchAll()
   backlogStore.fetchTasks()
 })
+
+async function onAddTask() {
+  try {
+    const task = await backlogStore.createTask('New task')
+    router.push({ name: 'kanban-task', params: { taskId: task.id } })
+  } catch (e) {
+    console.error('Failed to create task:', e)
+  }
+}
 
 /** Combine all tasks (plan + backlog) into a single list with scheduling info */
 const allTasks = computed<KanbanTask[]>(() => {
@@ -106,7 +117,8 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         v-for="col in kanbanStore.columns"
         :key="col.id"
         :column="col"
-        :tasks="columnTasks[col.id] ?? []" />
+        :tasks="columnTasks[col.id] ?? []"
+        @add-task="onAddTask" />
     </div>
 
     <router-view />
