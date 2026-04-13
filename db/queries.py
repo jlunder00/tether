@@ -206,7 +206,7 @@ def upsert_tasks(
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
     """Update allowed fields on a task. Returns updated task dict or None if not found."""
-    allowed = {"text", "status", "position", "followup_config", "description", "context_subject", "plan_date"}
+    allowed = {"text", "status", "position", "followup_config", "description", "context_subject", "plan_date", "anchor_id"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
@@ -1081,7 +1081,7 @@ def seed_kanban_columns(db_path: Path) -> None:
         defaults = [
             ("col_backlog", "Backlog", 0, None,
              json.dumps({"plan_date": None, "status": "pending"}),
-             json.dumps({})),
+             json.dumps({"set_status": "pending", "unschedule": True})),
             ("col_pending", "Pending", 1, "#3b82f6",
              json.dumps({"status": "pending", "plan_date": "not_null"}),
              json.dumps({"set_status": "pending", "prompt_schedule": True})),
@@ -1105,13 +1105,14 @@ def seed_kanban_columns(db_path: Path) -> None:
         )
 
 
-def migrate_backlog_match_rules(db_path: Path) -> None:
-    """Tighten Backlog match_rules to also require status=pending (fixes drag-drop)."""
-    new_rules = json.dumps({"plan_date": None, "status": "pending"})
+def migrate_backlog_column(db_path: Path) -> None:
+    """Tighten Backlog match_rules and add unschedule entry_rule (fixes drag-drop)."""
+    new_match = json.dumps({"plan_date": None, "status": "pending"})
+    new_entry = json.dumps({"set_status": "pending", "unschedule": True})
     with get_db(db_path) as conn:
         conn.execute(
-            "UPDATE kanban_columns SET match_rules=? WHERE id='col_backlog'",
-            (new_rules,),
+            "UPDATE kanban_columns SET match_rules=?, entry_rules=? WHERE id='col_backlog'",
+            (new_match, new_entry),
         )
 
 

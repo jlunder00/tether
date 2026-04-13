@@ -71,11 +71,15 @@ async function onTaskDrop(taskId: string, columnId: string) {
   if (typeof setStatus !== 'string') return
   if (!VALID_STATUSES.has(setStatus)) return
 
-  // Build the patch — status change + optional plan_date for scheduling
+  // Build the patch — status change + schedule/unschedule
   const patch: Record<string, unknown> = {}
   if (task.status !== setStatus) patch.status = setStatus
   if (rules['prompt_schedule'] && !task.plan_date) {
     patch.plan_date = new Date().toISOString().slice(0, 10) // default to today
+  }
+  if (rules['unschedule'] && task.plan_date) {
+    patch.plan_date = null
+    patch.anchor_id = null
   }
 
   if (!Object.keys(patch).length) return
@@ -84,7 +88,7 @@ async function onTaskDrop(taskId: string, columnId: string) {
   const oldStatus = task.status
   const oldPlanDate = task.plan_date
   if (patch.status) task.status = patch.status as TaskStatus
-  if (patch.plan_date) task.plan_date = patch.plan_date as string
+  if ('plan_date' in patch) task.plan_date = patch.plan_date as string | null
   pendingDrops.add(taskId)
 
   try {
