@@ -66,29 +66,38 @@ async function onTaskDrop(taskId: string, columnId: string) {
   const task = allTasks.value.find(t => t.id === taskId)
   if (!task) return
 
-  // Read entry_rules — only handle set_status for now
-  const setStatus = column.entry_rules['set_status']
+  const rules = column.entry_rules
+  const setStatus = rules['set_status']
   if (typeof setStatus !== 'string') return
   if (!VALID_STATUSES.has(setStatus)) return
 
-  // No-op if task already has this status
-  if (task.status === setStatus) return
+  // Build the patch — status change + optional plan_date for scheduling
+  const patch: Record<string, unknown> = {}
+  if (task.status !== setStatus) patch.status = setStatus
+  if (rules['prompt_schedule'] && !task.plan_date) {
+    patch.plan_date = new Date().toISOString().slice(0, 10) // default to today
+  }
 
-  // Optimistic update — card moves instantly
+  if (!Object.keys(patch).length) return
+
+  // Optimistic update
   const oldStatus = task.status
-  task.status = setStatus as TaskStatus
+  const oldPlanDate = task.plan_date
+  if (patch.status) task.status = patch.status as TaskStatus
+  if (patch.plan_date) task.plan_date = patch.plan_date as string
   pendingDrops.add(taskId)
 
   try {
     const resp = await api(`/api/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: setStatus }),
+      body: JSON.stringify(patch),
     })
     if (!resp.ok) throw new Error(`PATCH failed: ${resp.status}`)
   } catch (e) {
-    console.error('Failed to update task status:', e)
+    console.error('Failed to update task:', e)
     task.status = oldStatus
+    task.plan_date = oldPlanDate
     await fetchAllTasks()
   } finally {
     pendingDrops.delete(taskId)

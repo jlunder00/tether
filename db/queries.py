@@ -206,7 +206,7 @@ def upsert_tasks(
 
 def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | None:
     """Update allowed fields on a task. Returns updated task dict or None if not found."""
-    allowed = {"text", "status", "position", "followup_config", "description", "context_subject"}
+    allowed = {"text", "status", "position", "followup_config", "description", "context_subject", "plan_date"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return None
