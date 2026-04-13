@@ -160,28 +160,30 @@ function toggleFollowup(enabled: boolean) {
         :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
     </div>
 
-    <!-- Tags row (milestone + context + schedule) — hidden when inside a GroupContainer that shows them -->
-    <div v-if="!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject || (task as any).plan_date)" class="flex flex-wrap gap-1">
+    <!-- Tags row — date/anchor always visible; context/milestone hidden when hideTags (shown by GroupContainer) -->
+    <div v-if="(task as any).plan_date || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))" class="flex flex-wrap gap-1">
       <span
         v-if="(task as any).plan_date"
         @click.stop
         class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
         {{ (task as any).plan_date }}{{ (task as any).anchor_id ? ' · ' + (task as any).anchor_id : '' }}
       </span>
-      <span
-        v-if="task.context_subject"
-        @click.stop
-        class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/40">
-        {{ task.context_subject }}
-      </span>
-      <span
-        v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
-        @click.stop="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
-        :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-        class="text-[10px] px-1.5 py-0.5 rounded border cursor-pointer"
-        :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">
-        {{ m.name }}
-      </span>
+      <template v-if="!hideTags">
+        <span
+          v-if="task.context_subject"
+          @click.stop
+          class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/40">
+          {{ task.context_subject }}
+        </span>
+        <span
+          v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
+          @click.stop="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
+          :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
+          class="text-[10px] px-1.5 py-0.5 rounded border cursor-pointer"
+          :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">
+          {{ m.name }}
+        </span>
+      </template>
     </div>
 
     <!-- Action buttons (visible on hover) -->
