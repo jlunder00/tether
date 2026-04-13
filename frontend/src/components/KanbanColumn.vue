@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
 import type { Task } from '../stores/plan'
@@ -12,7 +12,10 @@ const props = defineProps<{
   tasks: Task[]
 }>()
 
-defineEmits<{ (e: 'add-task'): void }>()
+const emit = defineEmits<{
+  (e: 'add-task'): void
+  (e: 'task-drop', taskId: string, columnId: string): void
+}>()
 
 async function onTaskUpdate(task: Task) {
   // Patch via API — status change, text change, etc.
@@ -66,6 +69,49 @@ const grouped = computed(() => {
     }
   })
 })
+
+// ── Drop target (dragenter counter avoids highlight flicker on child elements) ──
+
+const dragEnterCount = ref(0)
+
+function onColumnDragEnter() {
+  dragEnterCount.value++
+}
+
+function onColumnDragOver(evt: DragEvent) {
+  evt.preventDefault()
+  if (evt.dataTransfer) {
+    evt.dataTransfer.dropEffect = 'move'
+  }
+}
+
+function onColumnDragLeave() {
+  dragEnterCount.value = Math.max(0, dragEnterCount.value - 1)
+}
+
+function onColumnDrop(evt: DragEvent) {
+  evt.preventDefault()
+  evt.stopPropagation()
+  dragEnterCount.value = 0
+  const raw = evt.dataTransfer?.getData('text/plain')
+  if (!raw) return
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return // ignore drops from external sources (files, other apps)
+  }
+
+  if (
+    parsed !== null &&
+    typeof parsed === 'object' &&
+    'taskId' in parsed &&
+    typeof (parsed as Record<string, unknown>).taskId === 'string'
+  ) {
+    emit('task-drop', (parsed as { taskId: string }).taskId, props.column.id)
+  }
+}
 </script>
 
 <template>
@@ -81,7 +127,12 @@ const grouped = computed(() => {
     </div>
 
     <!-- Scrollable body (fills remaining column height) -->
-    <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0">
+    <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0 transition-all"
+         :class="dragEnterCount > 0 ? 'ring-2 ring-blue-400/50 bg-blue-400/5' : ''"
+         @dragenter="onColumnDragEnter"
+         @dragover="onColumnDragOver"
+         @dragleave="onColumnDragLeave"
+         @drop="onColumnDrop">
       <template v-if="!tasks.length">
         <p class="text-white/20 text-xs text-center py-4">No tasks</p>
       </template>
@@ -127,7 +178,7 @@ const grouped = computed(() => {
         </GroupContainer>
       </template>
 
-      <button @click="$emit('add-task')" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+      <button @click="emit('add-task')" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
         + Add task
       </button>
     </div>
