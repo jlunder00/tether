@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
 import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { KanbanColumn } from '../stores/kanban'
 import { api } from '../lib/api'
+
+const router = useRouter()
 
 const props = defineProps<{
   column: KanbanColumn
@@ -47,14 +50,14 @@ const grouped = computed(() => {
   return sorted.map(([ctx, tasks]) => {
     const label = ctx === '__uncategorized__' ? 'Uncategorized' : ctx
     // Sub-group by milestone
-    const byMilestone: Record<string, { name: string; color: string | null; tasks: Task[] }> = {}
+    const byMilestone: Record<string, { id: string; name: string; color: string | null; tasks: Task[] }> = {}
     const ungrouped: Task[] = []
 
     for (const task of tasks) {
       const milestones = milestoneStore.taskMilestones[task.id]
       if (milestones?.length) {
         const m = milestones[0]
-        if (!byMilestone[m.id]) byMilestone[m.id] = { name: m.name, color: m.color, tasks: [] }
+        if (!byMilestone[m.id]) byMilestone[m.id] = { id: m.id, name: m.name, color: m.color, tasks: [] }
         byMilestone[m.id].tasks.push(task)
       } else {
         ungrouped.push(task)
@@ -151,7 +154,8 @@ function onColumnDrop(evt: DragEvent) {
             :color="mg.color ?? undefined"
             :level="1"
             :stickyOffset="0"
-            class="mb-1">
+            class="mb-1"
+            @header-click="router.push(`/kanban/milestone/${mg.id}`)">
             <div class="space-y-1">
               <TaskCard
                 v-for="task in mg.tasks"

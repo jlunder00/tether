@@ -1080,7 +1080,7 @@ def seed_kanban_columns(db_path: Path) -> None:
             return
         defaults = [
             ("col_backlog", "Backlog", 0, None,
-             json.dumps({"plan_date": None}),
+             json.dumps({"plan_date": None, "status": "pending"}),
              json.dumps({})),
             ("col_pending", "Pending", 1, "#3b82f6",
              json.dumps({"status": "pending", "plan_date": "not_null"}),
@@ -1102,6 +1102,16 @@ def seed_kanban_columns(db_path: Path) -> None:
             "INSERT OR IGNORE INTO kanban_columns (id, name, position, color, match_rules, entry_rules) "
             "VALUES (?,?,?,?,?,?)",
             defaults,
+        )
+
+
+def migrate_backlog_match_rules(db_path: Path) -> None:
+    """Tighten Backlog match_rules to also require status=pending (fixes drag-drop)."""
+    new_rules = json.dumps({"plan_date": None, "status": "pending"})
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE kanban_columns SET match_rules=? WHERE id='col_backlog'",
+            (new_rules,),
         )
 
 
