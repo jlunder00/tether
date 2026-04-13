@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { useKanbanStore } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
-import type { Task } from '../stores/plan'
+import type { Task, TaskStatus } from '../stores/plan'
 import { api } from '../lib/api'
 
 interface KanbanTask extends Task {
@@ -51,6 +51,47 @@ async function onAddTask() {
     router.push({ name: 'kanban-task', params: { taskId: task.id } })
   } catch (e) {
     console.error('Failed to create task:', e)
+  }
+}
+
+const VALID_STATUSES: Set<string> = new Set(['pending', 'in_progress', 'done', 'skipped', 'blocked'])
+const pendingDrops = new Set<string>()
+
+async function onTaskDrop(taskId: string, columnId: string) {
+  if (pendingDrops.has(taskId)) return // ignore while a drop is in-flight for this task
+
+  const column = kanbanStore.columns.find(c => c.id === columnId)
+  if (!column) return
+
+  const task = allTasks.value.find(t => t.id === taskId)
+  if (!task) return
+
+  // Read entry_rules — only handle set_status for now
+  const setStatus = column.entry_rules['set_status']
+  if (typeof setStatus !== 'string') return
+  if (!VALID_STATUSES.has(setStatus)) return
+
+  // No-op if task already has this status
+  if (task.status === setStatus) return
+
+  // Optimistic update — card moves instantly
+  const oldStatus = task.status
+  task.status = setStatus as TaskStatus
+  pendingDrops.add(taskId)
+
+  try {
+    const resp = await api(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: setStatus }),
+    })
+    if (!resp.ok) throw new Error(`PATCH failed: ${resp.status}`)
+  } catch (e) {
+    console.error('Failed to update task status:', e)
+    task.status = oldStatus
+    await fetchAllTasks()
+  } finally {
+    pendingDrops.delete(taskId)
   }
 }
 
@@ -108,7 +149,8 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         :key="col.id"
         :column="col"
         :tasks="columnTasks[col.id] ?? []"
-        @add-task="onAddTask" />
+        @add-task="onAddTask"
+        @task-drop="onTaskDrop" />
     </div>
 
     <router-view />
