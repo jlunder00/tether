@@ -90,6 +90,17 @@ function updateText(e: Event) {
   emit('update', { ...props.task, text: (e.target as HTMLInputElement).value })
 }
 
+function onDragStart(evt: DragEvent) {
+  if (!props.task.id) {
+    console.warn('[TaskCard] dragstart blocked: task has no id', props.task)
+    evt.preventDefault()
+    return
+  }
+  if (!evt.dataTransfer) return
+  evt.dataTransfer.effectAllowed = 'move'
+  evt.dataTransfer.setData('text/plain', JSON.stringify({ taskId: props.task.id }))
+}
+
 function toggleFollowup(enabled: boolean) {
   const fc: FollowupConfig = {
     enabled,
@@ -106,6 +117,8 @@ function toggleFollowup(enabled: boolean) {
 <template>
   <div class="group rounded-lg transition-colors border border-white/[0.08] cursor-pointer relative"
       :style="STATUS_CARD_STYLE[task.status]"
+      :draggable="!editable && !!task.id"
+      @dragstart="onDragStart"
       @click="task.id && router.push(`${routeBase}/task/${task.id}`)">
     <div class="flex flex-col gap-1 p-2">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
