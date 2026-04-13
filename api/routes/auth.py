@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os
+
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -170,13 +170,12 @@ async def me(request: Request, _auth=Depends(auth_dependency)):
 
 @router.get("/auth/github")
 async def github_oauth():
-    client_id = os.environ.get("GITHUB_CLIENT_ID")
-    if not client_id:
+    if not cfg.GITHUB_CLIENT_ID:
         raise HTTPException(status_code=404, detail="OAuth not configured")
-    callback_url = os.environ.get("GITHUB_CALLBACK_URL", "http://localhost:8000/auth/github/callback")
+    callback_url = cfg.GITHUB_CALLBACK_URL
     url = (
         f"https://github.com/login/oauth/authorize"
-        f"?client_id={client_id}"
+        f"?client_id={cfg.GITHUB_CLIENT_ID}"
         f"&redirect_uri={callback_url}"
         f"&scope=user:email"
     )
@@ -185,21 +184,17 @@ async def github_oauth():
 
 @router.get("/auth/github/callback")
 async def github_callback(code: str, request: Request):
-    client_id = os.environ.get("GITHUB_CLIENT_ID")
-    client_secret = os.environ.get("GITHUB_CLIENT_SECRET")
-    if not client_id or not client_secret:
+    if not cfg.GITHUB_CLIENT_ID or not cfg.GITHUB_CLIENT_SECRET:
         raise HTTPException(status_code=404, detail="OAuth not configured")
-
-    callback_url = os.environ.get("GITHUB_CALLBACK_URL", "http://localhost:8000/auth/github/callback")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             "https://github.com/login/oauth/access_token",
             json={
-                "client_id": client_id,
-                "client_secret": client_secret,
+                "client_id": cfg.GITHUB_CLIENT_ID,
+                "client_secret": cfg.GITHUB_CLIENT_SECRET,
                 "code": code,
-                "redirect_uri": callback_url,
+                "redirect_uri": cfg.GITHUB_CALLBACK_URL,
             },
             headers={"Accept": "application/json"},
         )
@@ -246,14 +241,12 @@ async def github_callback(code: str, request: Request):
 
 @router.get("/auth/google")
 async def google_oauth():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    if not client_id:
+    if not cfg.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=404, detail="OAuth not configured")
-    callback_url = os.environ.get("GOOGLE_CALLBACK_URL", "http://localhost:8000/auth/google/callback")
     url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
-        f"?client_id={client_id}"
-        f"&redirect_uri={callback_url}"
+        f"?client_id={cfg.GOOGLE_CLIENT_ID}"
+        f"&redirect_uri={cfg.GOOGLE_CALLBACK_URL}"
         "&response_type=code"
         "&scope=openid%20email%20profile"
     )
@@ -262,21 +255,17 @@ async def google_oauth():
 
 @router.get("/auth/google/callback")
 async def google_callback(code: str, request: Request):
-    client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
-    if not client_id or not client_secret:
+    if not cfg.GOOGLE_CLIENT_ID or not cfg.GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=404, detail="OAuth not configured")
-
-    callback_url = os.environ.get("GOOGLE_CALLBACK_URL", "http://localhost:8000/auth/google/callback")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id": client_id,
-                "client_secret": client_secret,
+                "client_id": cfg.GOOGLE_CLIENT_ID,
+                "client_secret": cfg.GOOGLE_CLIENT_SECRET,
                 "code": code,
-                "redirect_uri": callback_url,
+                "redirect_uri": cfg.GOOGLE_CALLBACK_URL,
                 "grant_type": "authorization_code",
             },
         )
