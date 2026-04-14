@@ -1,14 +1,12 @@
-from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from db.queries import (
     create_node, get_node, get_node_by_path, get_node_path,
-    get_children, get_subtree, move_node, rename_node, delete_node,
-    archive_node, unarchive_node,
+    get_children, get_subtree, move_node, delete_node,
+    patch_node_fields,
     get_sections, get_section, upsert_section, append_section, delete_section,
     search_sections,
-    link_task_to_node, unlink_task_from_node, get_node_tasks, get_task_nodes,
-    get_milestone_nodes,
+    link_task_to_node, unlink_task_from_node, get_node_tasks,
 )
 from api.ws import manager
 from api.auth import auth_dependency
@@ -73,13 +71,9 @@ async def create_node_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
-    kwargs = {}
-    if body.target_date is not None:
-        kwargs["target_date"] = body.target_date
+    kwargs = {"target_date": body.target_date, "color": body.color}
     if body.status is not None:
         kwargs["status"] = body.status
-    if body.color is not None:
-        kwargs["color"] = body.color
     result = create_node(
         request.state.db_path, body.parent_id, body.name,
         node_type=body.node_type, **kwargs,
@@ -131,50 +125,17 @@ async def patch_node_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
-    # Verify node exists
     node = get_node(request.state.db_path, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    changed = False
+    fields = body.model_dump(exclude_unset=True)
+    updated = patch_node_fields(request.state.db_path, node_id, fields)
 
-    if body.name is not None:
-        rename_node(request.state.db_path, node_id, body.name)
-        changed = True
-
-    if body.archived is True:
-        archive_node(request.state.db_path, node_id)
-        changed = True
-    elif body.archived is False:
-        unarchive_node(request.state.db_path, node_id)
-        changed = True
-
-    # Handle fields that need direct SQL (target_date, status, color)
-    direct_updates: dict[str, str | None] = {}
-    if body.target_date is not None:
-        direct_updates["target_date"] = body.target_date
-    if body.status is not None:
-        direct_updates["status"] = body.status
-        direct_updates["status_override"] = "1"
-    if body.color is not None:
-        direct_updates["color"] = body.color
-
-    if direct_updates:
-        from db.schema import get_db
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        direct_updates["updated_at"] = now
-        set_clause = ", ".join(f"{k}=?" for k in direct_updates)
-        with get_db(request.state.db_path) as conn:
-            conn.execute(
-                f"UPDATE context_nodes SET {set_clause} WHERE id=?",
-                (*direct_updates.values(), node_id),
-            )
-        changed = True
-
-    if changed:
+    if fields:
         await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
 
-    return get_node(request.state.db_path, node_id)
+    return updated
 
 
 @router.delete("/nodes/{node_id}")
@@ -198,6 +159,9 @@ async def get_node_children(
     _auth=Depends(auth_dependency),
     include_archived: bool = False,
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     return get_children(request.state.db_path, parent_id=node_id, include_archived=include_archived)
 
 
@@ -208,6 +172,9 @@ async def get_node_subtree(
     _auth=Depends(auth_dependency),
     include_archived: bool = False,
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     return get_subtree(request.state.db_path, node_id, include_archived=include_archived)
 
 
@@ -249,6 +216,9 @@ async def list_sections(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     return get_sections(request.state.db_path, node_id)
 
 
@@ -273,6 +243,9 @@ async def upsert_section_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     result = upsert_section(request.state.db_path, node_id, section_type, body.body)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
@@ -286,6 +259,9 @@ async def append_section_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     result = append_section(request.state.db_path, node_id, section_type, body.content)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
@@ -313,6 +289,9 @@ async def list_node_tasks(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     return get_node_tasks(request.state.db_path, node_id)
 
 
@@ -323,6 +302,9 @@ async def link_task_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     link_task_to_node(request.state.db_path, node_id, body.task_id)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}

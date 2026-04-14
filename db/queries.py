@@ -1082,6 +1082,29 @@ def unarchive_node(db_path: Path, node_id: str) -> None:
         )
 
 
+def patch_node_fields(db_path: Path, node_id: str, fields: dict) -> dict | None:
+    """Update allowed fields on a context node. Returns updated node dict or None."""
+    allowed = {"name", "target_date", "status", "color", "archived"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_node(db_path, node_id)
+    # Convert archived bool to int for SQLite
+    if "archived" in updates:
+        updates["archived"] = int(updates["archived"])
+    # Setting status implies a manual override
+    if "status" in updates:
+        updates["status_override"] = 1
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updates["updated_at"] = now
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE context_nodes SET {set_clause} WHERE id=?",
+            (*updates.values(), node_id),
+        )
+    return get_node(db_path, node_id)
+
+
 # ---------------------------------------------------------------------------
 # Section operations (node_sections)
 # ---------------------------------------------------------------------------
