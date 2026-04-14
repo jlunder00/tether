@@ -95,6 +95,22 @@ const taskGroups = computed(() => {
     .filter(g => g.tasks.length > 0)
 })
 
+const PROGRESS_BAR_SEGMENTS = [
+  { status: 'done', color: '#22c55e' },
+  { status: 'in_progress', color: '#3b82f6' },
+  { status: 'pending', color: 'rgba(255,255,255,0.15)' },
+  { status: 'blocked', color: '#ef4444' },
+  { status: 'skipped', color: '#94a3b8' },
+]
+
+const taskStatusCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const t of nodeTasks.value) {
+    counts[t.status] = (counts[t.status] || 0) + 1
+  }
+  return counts
+})
+
 const tasksDoneCount = computed(() => nodeTasks.value.filter(t => t.status === 'done').length)
 const tasksTotalCount = computed(() => nodeTasks.value.length)
 const tasksProgressPct = computed(() =>
@@ -176,6 +192,9 @@ async function toggleExpand() {
       await fetchNodeTasks()
     } else {
       await loadTabFiles(activeTab.value)
+      if (props.node.node_type === 'milestone') {
+        fetchNodeTasks()  // fire-and-forget for header progress bar
+      }
     }
   } catch (e) {
     expanded.value = false
@@ -501,6 +520,15 @@ async function addChild() {
           <button @click="deleteWithConfirm"
                   class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
         </div>
+      </div>
+
+      <!-- Segmented progress bar for milestones -->
+      <div v-if="node.node_type === 'milestone' && tasksTotalCount > 0"
+           class="flex h-1.5 rounded-full overflow-hidden mt-1">
+        <div v-for="seg in PROGRESS_BAR_SEGMENTS"
+             :key="seg.status"
+             v-show="taskStatusCounts[seg.status]"
+             :style="{ width: ((taskStatusCounts[seg.status] || 0) / tasksTotalCount * 100) + '%', backgroundColor: seg.color }" />
       </div>
 
       <!-- Collapsed: show description or details preview -->
