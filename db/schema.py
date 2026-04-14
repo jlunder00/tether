@@ -208,6 +208,36 @@ CREATE TABLE IF NOT EXISTS user_settings (
     value   TEXT NOT NULL,
     PRIMARY KEY (user_id, key)
 );
+
+CREATE TABLE IF NOT EXISTS context_nodes (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT REFERENCES context_nodes(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    node_type TEXT NOT NULL DEFAULT 'context',
+    archived INTEGER NOT NULL DEFAULT 0,
+    target_date TEXT,
+    status TEXT DEFAULT 'pending',
+    status_override INTEGER NOT NULL DEFAULT 0,
+    color TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(parent_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS node_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL REFERENCES context_nodes(id) ON DELETE CASCADE,
+    section_type TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(node_id, section_type)
+);
+
+CREATE TABLE IF NOT EXISTS node_tasks (
+    node_id TEXT NOT NULL REFERENCES context_nodes(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL,
+    PRIMARY KEY (node_id, task_id)
+);
 """
 
 _SESSIONS_DDL = """
@@ -238,4 +268,11 @@ def get_db(db_path: Path) -> sqlite3.Connection:
 def init_db(db_path: Path) -> None:
     with get_db(db_path) as conn:
         conn.executescript(DDL)
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS node_sections_fts USING fts5(
+                body,
+                content='node_sections',
+                content_rowid='id'
+            )
+        """)
         conn.executescript(_SESSIONS_DDL)
