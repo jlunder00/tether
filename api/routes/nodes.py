@@ -1,3 +1,4 @@
+import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from db.queries import (
@@ -5,8 +6,11 @@ from db.queries import (
     get_children, get_subtree, move_node, delete_node,
     patch_node_fields,
     get_sections, get_section, upsert_section, append_section, delete_section,
+    list_section_files, create_section_file, rename_section_file, reorder_section_files,
     search_sections,
     link_task_to_node, unlink_task_from_node, get_node_tasks,
+    get_auto_archivable_nodes, archive_node,
+    get_user_setting,
 )
 from api.ws import manager
 from api.auth import auth_dependency
@@ -33,6 +37,7 @@ class PatchNodeBody(BaseModel):
     target_date: str | None = None
     status: str | None = None
     color: str | None = None
+    description: str | None = None
 
 
 class UpsertSectionBody(BaseModel):
@@ -47,8 +52,54 @@ class LinkTaskBody(BaseModel):
     task_id: str
 
 
+class CreateSectionFileBody(BaseModel):
+    name: str
+    body: str = ""
+
+
+class RenameSectionFileBody(BaseModel):
+    new_name: str
+
+
+class ReorderSectionFilesBody(BaseModel):
+    name_order: list[str]
+
+
 class MoveNodeBody(BaseModel):
     new_parent_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Auto-archive
+# ---------------------------------------------------------------------------
+
+@router.post("/nodes/auto-archive")
+async def auto_archive_nodes(
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Run auto-archive check using the user's saved rules and archive matching nodes."""
+    db = request.state.db_path
+    uid = request.state.user_id
+
+    raw_completed = get_user_setting(db, uid, "auto_archive_days_completed")
+    raw_inactive = get_user_setting(db, uid, "auto_archive_days_inactive")
+
+    days_completed = int(raw_completed) if raw_completed else None
+    days_inactive = int(raw_inactive) if raw_inactive else None
+
+    nodes = get_auto_archivable_nodes(db, days_completed=days_completed, days_inactive=days_inactive)
+
+    for n in nodes:
+        archive_node(db, n["id"])
+
+    if nodes:
+        await manager.broadcast({"type": "nodes_updated"}, uid)
+
+    return {
+        "archived_count": len(nodes),
+        "archived_nodes": [{"id": n["id"], "name": n["name"]} for n in nodes],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -216,65 +267,166 @@ async def list_sections(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    """List section types with file counts for a node."""
     node = get_node(request.state.db_path, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-    return get_sections(request.state.db_path, node_id)
+    rows = get_sections(request.state.db_path, node_id)
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["section_type"]] = counts.get(r["section_type"], 0) + 1
+    return [{"section_type": t, "file_count": c} for t, c in counts.items()]
 
 
 @router.get("/nodes/{node_id}/sections/{section_type}")
-async def get_section_route(
+async def list_section_files_route(
     node_id: str,
     section_type: str,
     request: Request,
     _auth=Depends(auth_dependency),
 ):
-    section = get_section(request.state.db_path, node_id, section_type)
+    """List files within a section type [{name, size, position, updated_at}]."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    return list_section_files(request.state.db_path, node_id, section_type)
+
+
+@router.post("/nodes/{node_id}/sections/{section_type}")
+async def create_section_file_route(
+    node_id: str,
+    section_type: str,
+    body: CreateSectionFileBody,
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Create a new named file within a section type."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        result = create_section_file(
+            request.state.db_path, node_id, section_type, body.name, body.body,
+        )
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"File '{body.name}' already exists in {section_type}")
+    await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
+    return result
+
+
+@router.post("/nodes/{node_id}/sections/{section_type}/reorder")
+async def reorder_section_files_route(
+    node_id: str,
+    section_type: str,
+    body: ReorderSectionFilesBody,
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Reorder files within a section type."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        reorder_section_files(request.state.db_path, node_id, section_type, body.name_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
+    return {"ok": True}
+
+
+@router.get("/nodes/{node_id}/sections/{section_type}/{name}")
+async def get_section_file_route(
+    node_id: str,
+    section_type: str,
+    name: str,
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Get a specific section file body."""
+    section = get_section(request.state.db_path, node_id, section_type, name=name)
     if not section:
-        raise HTTPException(status_code=404, detail="Section not found")
+        raise HTTPException(status_code=404, detail="Section file not found")
     return section
 
 
-@router.put("/nodes/{node_id}/sections/{section_type}")
-async def upsert_section_route(
+@router.put("/nodes/{node_id}/sections/{section_type}/{name}")
+async def upsert_section_file_route(
     node_id: str,
     section_type: str,
+    name: str,
     body: UpsertSectionBody,
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    """Upsert a specific section file."""
     node = get_node(request.state.db_path, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-    result = upsert_section(request.state.db_path, node_id, section_type, body.body)
+    result = upsert_section(request.state.db_path, node_id, section_type, body.body, name=name)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
 
 
-@router.post("/nodes/{node_id}/sections/{section_type}/append")
-async def append_section_route(
+@router.post("/nodes/{node_id}/sections/{section_type}/{name}/append")
+async def append_section_file_route(
     node_id: str,
     section_type: str,
+    name: str,
     body: AppendSectionBody,
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    """Append to a specific section file."""
     node = get_node(request.state.db_path, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-    result = append_section(request.state.db_path, node_id, section_type, body.content)
+    result = append_section(request.state.db_path, node_id, section_type, body.content, name=name)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
 
 
-@router.delete("/nodes/{node_id}/sections/{section_type}")
-async def delete_section_route(
+@router.post("/nodes/{node_id}/sections/{section_type}/{name}/rename")
+async def rename_section_file_route(
     node_id: str,
     section_type: str,
+    name: str,
+    body: RenameSectionFileBody,
     request: Request,
     _auth=Depends(auth_dependency),
 ):
-    delete_section(request.state.db_path, node_id, section_type)
+    """Rename a section file."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        result = rename_section_file(
+            request.state.db_path, node_id, section_type, name, body.new_name,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "already exists" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=404, detail=msg)
+    await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
+    return result
+
+
+@router.delete("/nodes/{node_id}/sections/{section_type}/{name}")
+async def delete_section_file_route(
+    node_id: str,
+    section_type: str,
+    name: str,
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Delete a specific section file."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    section = get_section(request.state.db_path, node_id, section_type, name=name)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section file not found")
+    delete_section(request.state.db_path, node_id, section_type, name=name)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}
 
@@ -317,6 +469,9 @@ async def unlink_task_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     unlink_task_from_node(request.state.db_path, node_id, task_id)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}

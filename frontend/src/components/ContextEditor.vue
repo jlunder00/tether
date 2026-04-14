@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useContextStore } from '../stores/context'
 import { useMilestoneStore } from '../stores/milestones'
+import { useAutoScrollDrag } from '../composables/useAutoScrollDrag'
 import ContextTreeNode from './ContextTreeNode.vue'
 
 const contextStore = useContextStore()
 const milestoneStore = useMilestoneStore()
+const { onDragOver: autoScrollDragOver, cleanup: autoScrollCleanup } = useAutoScrollDrag()
 const error = ref<string | null>(null)
 const newName = ref('')
 const rootDropOver = ref(false)
@@ -55,6 +57,17 @@ async function loadRootSections() {
   await Promise.allSettled(nodes.map(n => contextStore.fetchSection(n.id, 'details')))
 }
 
+watch(() => contextStore.showArchived, async () => {
+  try {
+    error.value = null
+    await contextStore.fetchRootNodes()
+    await loadRootSections()
+  } catch (e) {
+    console.error('showArchived toggle error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to reload context data'
+  }
+})
+
 onMounted(async () => {
   try {
     await contextStore.fetchRootNodes()
@@ -68,8 +81,17 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
-    <h2 class="text-lg font-semibold mb-4">Context</h2>
+  <div class="min-h-screen bg-gray-900 text-white p-6"
+       @dragover="autoScrollDragOver"
+       @drop="autoScrollCleanup">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold">Context</h2>
+      <label class="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 cursor-pointer select-none">
+        <input type="checkbox" v-model="contextStore.showArchived"
+               class="accent-blue-500 w-3.5 h-3.5" />
+        Show archived
+      </label>
+    </div>
     <p v-if="error" class="text-red-400 text-sm mb-2">{{ error }}</p>
 
     <div class="flex flex-col gap-3">

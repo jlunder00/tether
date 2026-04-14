@@ -69,6 +69,62 @@ function resetLLMDefaults() {
   llmConfig.value.llm = { ...llmConfig.value.defaults.llm } as LLMConfig['llm']
 }
 
+// ---------------------------------------------------------------------------
+// Auto-archive rules
+// ---------------------------------------------------------------------------
+
+const archiveDaysCompleted = ref<number | null>(null)
+const archiveDaysInactive = ref<number | null>(null)
+const archiveStatus = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
+const archiveMessage = ref('')
+
+async function loadArchiveSettings() {
+  try {
+    const resp = await api('/api/settings')
+    if (resp.ok) {
+      const data = await resp.json()
+      if (data.auto_archive_days_completed)
+        archiveDaysCompleted.value = parseInt(data.auto_archive_days_completed, 10)
+      if (data.auto_archive_days_inactive)
+        archiveDaysInactive.value = parseInt(data.auto_archive_days_inactive, 10)
+    }
+  } catch { /* ignore */ }
+}
+
+async function saveArchiveSettings() {
+  archiveStatus.value = 'saving'
+  archiveMessage.value = ''
+  try {
+    const puts: Promise<Response>[] = []
+    if (archiveDaysCompleted.value != null) {
+      puts.push(api('/api/settings/auto_archive_days_completed', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: String(archiveDaysCompleted.value) }),
+      }))
+    }
+    if (archiveDaysInactive.value != null) {
+      puts.push(api('/api/settings/auto_archive_days_inactive', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: String(archiveDaysInactive.value) }),
+      }))
+    }
+    const results = await Promise.all(puts)
+    if (results.every(r => r.ok)) {
+      archiveStatus.value = 'saved'
+      archiveMessage.value = 'Auto-archive rules saved.'
+      setTimeout(() => { archiveStatus.value = 'idle'; archiveMessage.value = '' }, 2000)
+    } else {
+      archiveStatus.value = 'error'
+      archiveMessage.value = 'Failed to save.'
+    }
+  } catch {
+    archiveStatus.value = 'error'
+    archiveMessage.value = 'Network error.'
+  }
+}
+
 // Telegram link
 const telegramCode = ref('')
 const telegramStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -77,6 +133,7 @@ const telegramLinked = ref(false)
 
 onMounted(async () => {
   loadLLMConfig()
+  loadArchiveSettings()
   try {
     const resp = await fetch('/auth/me', { credentials: 'include' })
     if (resp.ok) {
@@ -232,6 +289,52 @@ function connectGoogle() {
             </svg>
             Connect Google
           </button>
+        </div>
+      </section>
+
+      <!-- Auto-Archive Rules -->
+      <section class="mb-8">
+        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Auto-Archive Rules</h2>
+        <div class="bg-gray-800 rounded-xl p-4 space-y-4">
+          <p class="text-sm text-white/60">
+            Automatically archive context nodes when they become stale. Leave blank to disable a rule.
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 mb-1 block">Archive after completion (days)</label>
+              <input
+                type="number"
+                v-model.number="archiveDaysCompleted"
+                min="1"
+                placeholder="e.g. 7"
+                class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+              />
+              <p class="text-xs text-gray-500 mt-1">Archive nodes whose tasks are all done for X days</p>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 mb-1 block">Archive after inactivity (days)</label>
+              <input
+                type="number"
+                v-model.number="archiveDaysInactive"
+                min="1"
+                placeholder="e.g. 30"
+                class="w-full bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+              />
+              <p class="text-xs text-gray-500 mt-1">Archive nodes with no updates for X days</p>
+            </div>
+          </div>
+          <div class="flex gap-2 pt-1">
+            <button
+              @click="saveArchiveSettings"
+              :disabled="archiveStatus === 'saving'"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            >
+              {{ archiveStatus === 'saving' ? 'Saving...' : 'Save' }}
+            </button>
+          </div>
+          <p v-if="archiveMessage" :class="archiveStatus === 'saved' ? 'text-green-400' : 'text-red-400'" class="text-sm">
+            {{ archiveMessage }}
+          </p>
         </div>
       </section>
 

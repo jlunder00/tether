@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useContextStore } from '../stores/context'
-import type { ContextNode } from '../stores/context'
-import { useMilestoneStore } from '../stores/milestones'
-import MilestoneDetail from './MilestoneDetail.vue'
+import type { ContextNode, SectionFileInfo } from '../stores/context'
 import ContextTreeNode from './ContextTreeNode.vue'
 
 const props = withDefaults(defineProps<{
@@ -14,11 +12,12 @@ const props = withDefaults(defineProps<{
 })
 
 const contextStore = useContextStore()
-const milestoneStore = useMilestoneStore()
 
 // --- Local state (per-instance) ---
 const expanded = ref(false)
 const activeTab = ref<string>('details')
+const activeFileName = ref<string>('main')
+const sectionFiles = ref<SectionFileInfo[]>([])
 const editingSection = ref<string | null>(null)
 const editBody = ref('')
 const renaming = ref(false)
@@ -26,9 +25,6 @@ const renameValue = ref('')
 const error = ref<string | null>(null)
 const addingChild = ref(false)
 const newChildName = ref('')
-const expandedMilestones = ref<Set<string>>(new Set())
-const addingMilestone = ref(false)
-const newMilestoneName = ref('')
 const showAddSection = ref(false)
 const newSectionName = ref('')
 const localSectionTypes = ref<string[]>([])
@@ -36,14 +32,17 @@ const dragOver = ref(false)
 const newChildType = ref<'context' | 'milestone'>('context')
 const newChildTargetDate = ref('')
 const newChildColor = ref('#3b82f6')
+const editingDescription = ref(false)
+const descriptionDraft = ref('')
+const addingFile = ref(false)
+const newFileName = ref('')
 
 // --- Computed ---
 const children = computed(() => contextStore.childrenOf(props.node.id))
 const hasChildren = computed(() =>
   children.value.length > 0 || props.node.children_count == null || props.node.children_count > 0
 )
-const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details`]?.body ?? '')
-const milestones = computed(() => milestoneStore.bySubject[props.node.name] ?? [])
+const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details::main`]?.body ?? '')
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-white/20', in_progress: 'bg-blue-400',
@@ -58,17 +57,29 @@ const allSectionTypes = computed(() => {
 })
 
 const activeBody = computed(() => {
-  const key = `${props.node.id}::${activeTab.value}`
+  const key = `${props.node.id}::${activeTab.value}::${activeFileName.value}`
   return contextStore.sectionCache[key]?.body ?? ''
+})
+
+const collapsedPreview = computed(() => {
+  if (props.node.description) return props.node.description
+  return nodeBody.value || '(empty)'
 })
 
 const depthStyle = computed(() => ({
   paddingLeft: props.depth * 16 + 'px',
 }))
 
-const cardStyle = computed(() => ({
-  backgroundColor: 'rgba(255,255,255,' + (0.03 + props.depth * 0.01) + ')',
-}))
+const cardStyle = computed(() => {
+  const base: Record<string, string> = {
+    backgroundColor: 'rgba(255,255,255,' + (0.03 + props.depth * 0.01) + ')',
+  }
+  if (props.node.node_type === 'milestone' && props.node.color) {
+    base.borderLeftColor = props.node.color
+    base.borderLeftWidth = '3px'
+  }
+  return base
+})
 
 // --- Drag & Drop ---
 
@@ -105,6 +116,16 @@ async function onDrop(evt: DragEvent) {
 
 // --- Actions ---
 
+// Re-fetch children when "Show archived" toggles while this node is expanded
+watch(() => contextStore.showArchived, async () => {
+  if (!expanded.value) return
+  try {
+    await contextStore.fetchChildren(props.node.id)
+  } catch (e) {
+    console.error('showArchived re-fetch error:', e)
+  }
+})
+
 async function toggleExpand() {
   if (expanded.value) {
     expanded.value = false
@@ -114,9 +135,9 @@ async function toggleExpand() {
   try {
     error.value = null
     const fetched = await contextStore.fetchChildren(props.node.id)
-    await Promise.allSettled(fetched.map(c => contextStore.fetchSection(c.id, 'details')))
-    // Fetch the active tab's section for this node
-    await contextStore.fetchSection(props.node.id, activeTab.value)
+    await Promise.allSettled(fetched.map(c => contextStore.fetchSection(c.id, 'details', 'main')))
+    // Fetch file list for the active tab and load the active file
+    await loadTabFiles(activeTab.value)
   } catch (e) {
     expanded.value = false
     console.error('toggleExpand error:', e)
@@ -124,16 +145,48 @@ async function toggleExpand() {
   }
 }
 
+async function loadTabFiles(sectionType: string) {
+  try {
+    const files = await contextStore.fetchSectionFiles(props.node.id, sectionType)
+    sectionFiles.value = files
+    // Pick active file: prefer current activeFileName if it exists, else first file, else 'main'
+    const match = files.find(f => f.name === activeFileName.value)
+    if (!match && files.length > 0) {
+      activeFileName.value = files[0].name
+    } else if (!match) {
+      activeFileName.value = 'main'
+    }
+    // Fetch the body for the active file
+    const key = `${props.node.id}::${sectionType}::${activeFileName.value}`
+    if (!contextStore.sectionCache[key]) {
+      await contextStore.fetchSection(props.node.id, sectionType, activeFileName.value)
+    }
+  } catch (e) {
+    // If the section type has no files yet, that's OK
+    sectionFiles.value = []
+    activeFileName.value = 'main'
+    console.error('loadTabFiles error:', e)
+  }
+}
+
 async function switchTab(sectionType: string) {
   activeTab.value = sectionType
   editingSection.value = null
-  const key = `${props.node.id}::${sectionType}`
+  activeFileName.value = 'main'
+  addingFile.value = false
+  await loadTabFiles(sectionType)
+}
+
+async function selectFile(fileName: string) {
+  activeFileName.value = fileName
+  editingSection.value = null
+  const key = `${props.node.id}::${activeTab.value}::${fileName}`
   if (!contextStore.sectionCache[key]) {
     try {
-      await contextStore.fetchSection(props.node.id, sectionType)
+      await contextStore.fetchSection(props.node.id, activeTab.value, fileName)
     } catch (e) {
-      console.error('switchTab fetch error:', e)
-      error.value = e instanceof Error ? e.message : 'Failed to load section'
+      console.error('selectFile fetch error:', e)
+      error.value = e instanceof Error ? e.message : 'Failed to load file'
     }
   }
 }
@@ -141,7 +194,7 @@ async function switchTab(sectionType: string) {
 async function startEdit() {
   editingSection.value = activeTab.value
   try {
-    const section = await contextStore.fetchSection(props.node.id, activeTab.value)
+    const section = await contextStore.fetchSection(props.node.id, activeTab.value, activeFileName.value)
     editBody.value = section?.body ?? ''
   } catch (e) {
     editingSection.value = null
@@ -154,8 +207,10 @@ async function saveEdit() {
   if (!editingSection.value) return
   try {
     error.value = null
-    await contextStore.saveSection(props.node.id, editingSection.value, editBody.value)
+    await contextStore.saveSection(props.node.id, editingSection.value, editBody.value, activeFileName.value)
     editingSection.value = null
+    // Refresh file list to get updated size
+    await loadTabFiles(activeTab.value)
   } catch (e) {
     console.error('saveEdit error:', e)
     error.value = e instanceof Error ? e.message : 'Failed to save'
@@ -174,14 +229,65 @@ async function addSection() {
   }
   try {
     error.value = null
-    await contextStore.saveSection(props.node.id, name, '')
+    await contextStore.createSectionFile(props.node.id, name, 'main', '')
     localSectionTypes.value.push(name)
     showAddSection.value = false
     newSectionName.value = ''
     activeTab.value = name
+    activeFileName.value = 'main'
+    await loadTabFiles(name)
   } catch (e) {
     console.error('addSection error:', e)
     error.value = e instanceof Error ? e.message : 'Failed to add section'
+  }
+}
+
+async function addFile() {
+  const name = newFileName.value.trim()
+  if (!name) return
+  // Check if file already exists in current tab
+  if (sectionFiles.value.some(f => f.name === name)) {
+    error.value = `File "${name}" already exists in ${activeTab.value}`
+    return
+  }
+  try {
+    error.value = null
+    await contextStore.createSectionFile(props.node.id, activeTab.value, name, '')
+    addingFile.value = false
+    newFileName.value = ''
+    activeFileName.value = name
+    await loadTabFiles(activeTab.value)
+  } catch (e) {
+    console.error('addFile error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to add file'
+  }
+}
+
+async function deleteFile(fileName: string) {
+  if (!confirm(`Delete file "${fileName}" from ${activeTab.value}?`)) return
+  try {
+    error.value = null
+    await contextStore.deleteSectionFile(props.node.id, activeTab.value, fileName)
+    await loadTabFiles(activeTab.value)
+  } catch (e) {
+    console.error('deleteFile error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to delete file'
+  }
+}
+
+function startDescriptionEdit() {
+  editingDescription.value = true
+  descriptionDraft.value = props.node.description ?? ''
+}
+
+async function saveDescription() {
+  try {
+    error.value = null
+    await contextStore.patchNode(props.node.id, { description: descriptionDraft.value || null })
+    editingDescription.value = false
+  } catch (e) {
+    console.error('saveDescription error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to save description'
   }
 }
 
@@ -242,30 +348,12 @@ async function addChild() {
   }
 }
 
-function toggleMilestone(id: string) {
-  const next = new Set(expandedMilestones.value)
-  if (next.has(id)) next.delete(id); else next.add(id)
-  expandedMilestones.value = next
-}
-
-async function addMilestone() {
-  if (!newMilestoneName.value.trim()) return
-  try {
-    error.value = null
-    await milestoneStore.createMilestone(props.node.name, newMilestoneName.value.trim())
-    newMilestoneName.value = ''
-    addingMilestone.value = false
-  } catch (e) {
-    console.error('addMilestone error:', e)
-    error.value = e instanceof Error ? e.message : 'Failed to add milestone'
-  }
-}
 </script>
 
 <template>
   <div :style="depthStyle">
     <div class="border border-white/10 rounded-xl p-4 transition-shadow"
-         :class="dragOver ? 'ring-2 ring-blue-400/50' : ''"
+         :class="[dragOver ? 'ring-2 ring-blue-400/50' : '', node.archived ? 'opacity-50' : '']"
          :style="cardStyle"
          :draggable="true"
          @dragstart.stop="onDragStart"
@@ -295,7 +383,31 @@ async function addMilestone() {
               (renames node, {{ children.length }} children unaffected)
             </span>
           </template>
-          <h3 v-else class="font-semibold text-sm truncate">{{ node.name }}</h3>
+          <template v-else>
+            <!-- Milestone color dot -->
+            <span v-if="node.node_type === 'milestone'"
+                  class="w-2 h-2 rounded-full shrink-0"
+                  :class="node.color ? '' : (STATUS_COLORS[node.status ?? ''] ?? 'bg-white/20')"
+                  :style="node.color ? { backgroundColor: node.color } : {}" />
+            <h3 class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-white/40' : ''">{{ node.name }}</h3>
+          </template>
+          <!-- Milestone status badge -->
+          <span v-if="node.node_type === 'milestone' && node.status"
+                class="text-[9px] px-1.5 py-0.5 rounded shrink-0"
+                :class="{
+                  'bg-white/10 text-white/50': node.status === 'pending',
+                  'bg-blue-500/20 text-blue-300': node.status === 'in_progress',
+                  'bg-green-500/20 text-green-300': node.status === 'done',
+                  'bg-red-500/20 text-red-300': node.status === 'blocked',
+                }">
+            {{ node.status.replace('_', ' ') }}
+          </span>
+          <!-- Milestone target date -->
+          <span v-if="node.node_type === 'milestone' && node.target_date"
+                class="text-[9px] text-white/40 shrink-0">
+            {{ node.target_date }}
+          </span>
+          <span v-if="node.archived" class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400/80 shrink-0">Archived</span>
         </div>
 
         <div class="flex gap-2 shrink-0">
@@ -305,16 +417,40 @@ async function addMilestone() {
           </template>
           <button v-else @click="startRename"
                   class="text-xs text-white/50 hover:text-white">Rename</button>
+          <button v-if="node.archived"
+                  @click="contextStore.patchNode(node.id, { archived: false })"
+                  class="text-xs text-yellow-400/60 hover:text-yellow-400">Unarchive</button>
+          <button v-else
+                  @click="contextStore.patchNode(node.id, { archived: true })"
+                  class="text-xs text-white/40 hover:text-white/70">Archive</button>
           <button @click="deleteWithConfirm"
                   class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
         </div>
       </div>
 
-      <!-- Collapsed: show details preview -->
-      <p v-if="!expanded" class="text-xs text-white/50 line-clamp-2">{{ nodeBody || '(empty)' }}</p>
+      <!-- Collapsed: show description or details preview -->
+      <p v-if="!expanded" class="text-xs text-white/50 line-clamp-2">{{ collapsedPreview }}</p>
 
-      <!-- Expanded: section tabs + content -->
+      <!-- Expanded: description + section tabs + content -->
       <template v-if="expanded">
+        <!-- Description area -->
+        <div class="mb-2">
+          <div v-if="editingDescription" class="flex flex-col gap-1">
+            <textarea v-model="descriptionDraft" rows="2" placeholder="Node description..."
+                      class="w-full bg-transparent border border-white/20 rounded p-2 text-xs outline-none focus:border-white/50 resize-none" />
+            <div class="flex gap-2">
+              <button @click="saveDescription" class="text-[10px] text-green-400/70 hover:text-green-400">Save</button>
+              <button @click="editingDescription = false" class="text-[10px] text-white/40 hover:text-white/70">Cancel</button>
+            </div>
+          </div>
+          <div v-else class="flex items-start gap-1">
+            <p v-if="node.description" class="text-xs text-white/60 italic flex-1">{{ node.description }}</p>
+            <p v-else class="text-xs text-white/30 italic flex-1">(no description)</p>
+            <button @click="startDescriptionEdit"
+                    class="text-[10px] text-white/30 hover:text-white/60 shrink-0">edit</button>
+          </div>
+        </div>
+
         <!-- Tab bar -->
         <div class="flex gap-1 mt-1 flex-wrap items-center">
           <button v-for="st in allSectionTypes" :key="st"
@@ -338,6 +474,48 @@ async function addMilestone() {
           </button>
         </div>
 
+        <!-- File list within active tab -->
+        <div v-if="sectionFiles.length > 1 || addingFile" class="mt-1 flex gap-1 flex-wrap items-center">
+          <button v-for="f in sectionFiles" :key="f.name"
+                  @click.stop="selectFile(f.name)"
+                  class="text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 group"
+                  :class="activeFileName === f.name
+                    ? 'border-blue-400/40 bg-blue-500/15 text-blue-200'
+                    : 'border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'">
+            {{ f.name }}
+            <span class="text-white/20 text-[8px]">{{ f.size }}c</span>
+            <span v-if="sectionFiles.length > 1"
+                  @click.stop="deleteFile(f.name)"
+                  class="text-red-400/0 group-hover:text-red-400/50 hover:!text-red-400 cursor-pointer ml-0.5"
+                  title="Delete file">&times;</span>
+          </button>
+          <div v-if="addingFile" class="flex items-center gap-1">
+            <input v-model="newFileName" placeholder="file name..."
+                   @keydown.enter="addFile"
+                   @keydown.escape="addingFile = false; newFileName = ''"
+                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
+            <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+            <button @click="addingFile = false; newFileName = ''"
+                    class="text-[10px] text-white/40">cancel</button>
+          </div>
+          <button v-else @click.stop="addingFile = true"
+                  class="text-[10px] px-1 py-0.5 text-white/25 hover:text-white/50">+ file</button>
+        </div>
+        <!-- If only one file (or none), just show a small add-file button -->
+        <div v-else class="mt-1">
+          <div v-if="addingFile" class="flex items-center gap-1">
+            <input v-model="newFileName" placeholder="file name..."
+                   @keydown.enter="addFile"
+                   @keydown.escape="addingFile = false; newFileName = ''"
+                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
+            <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+            <button @click="addingFile = false; newFileName = ''"
+                    class="text-[10px] text-white/40">cancel</button>
+          </div>
+          <button v-else @click.stop="addingFile = true"
+                  class="text-[10px] text-white/25 hover:text-white/50">+ file</button>
+        </div>
+
         <!-- Active tab content -->
         <div class="mt-2">
           <div v-if="editingSection === activeTab">
@@ -351,40 +529,10 @@ async function addMilestone() {
           <div v-else>
             <p class="text-xs text-white/50 whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
             <button @click="startEdit"
-                    class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}</button>
+                    class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}/{{ activeFileName }}</button>
           </div>
         </div>
       </template>
-
-      <!-- Milestone chips -->
-      <div v-if="milestones.length" class="mt-2 flex flex-wrap gap-1">
-        <button
-          v-for="m in milestones" :key="m.id"
-          @click="toggleMilestone(m.id)"
-          :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-          class="text-xs px-1.5 py-0.5 rounded border flex items-center gap-1"
-          :class="m.color ? 'hover:opacity-80' : 'bg-white/10 hover:bg-white/20 border-transparent'">
-          <span :class="STATUS_COLORS[m.status] ?? 'bg-white/20'"
-                class="w-1.5 h-1.5 rounded-full" />
-          {{ m.name }} {{ m.done_count }}/{{ m.task_count }}
-        </button>
-      </div>
-      <template v-for="m in milestones" :key="'detail-' + m.id">
-        <MilestoneDetail
-          v-if="expandedMilestones.has(m.id)"
-          :milestone="m"
-          @close="toggleMilestone(m.id)" />
-      </template>
-      <div v-if="addingMilestone" class="mt-2 flex gap-2">
-        <input v-model="newMilestoneName" placeholder="Milestone name..."
-               @keydown.enter="addMilestone"
-               class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs" />
-        <button @click="addMilestone" class="text-xs text-white/60 hover:text-white">Add</button>
-        <button @click="addingMilestone = false; newMilestoneName = ''"
-                class="text-xs text-white/40">cancel</button>
-      </div>
-      <button v-else @click="addingMilestone = true"
-              class="mt-1 text-xs text-white/30 hover:text-white/60">+ milestone</button>
 
       <!-- Children (expanded) -->
       <template v-if="expanded">

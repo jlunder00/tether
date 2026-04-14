@@ -534,39 +534,74 @@ def get_node_by_path(path: str) -> dict:
 # Section-level read/write (token-efficient)
 @mcp.tool()
 def list_node_sections(node_id: str) -> list[dict]:
-    """List section types and their sizes for a node, WITHOUT returning full body content. Use read_section to get specific content."""
+    """List section types for a node with file counts per type. Does NOT return body content. Use list_section_files to see individual files, then read_section to get content."""
     from db.queries import get_sections
     sections = get_sections(_db(), node_id)
-    return [{"section_type": s["section_type"], "size": len(s["body"]), "updated_at": s["updated_at"]} for s in sections]
+    grouped: dict[str, dict] = {}
+    for s in sections:
+        st = s["section_type"]
+        if st not in grouped:
+            grouped[st] = {"section_type": st, "file_count": 0, "total_size": 0, "updated_at": s["updated_at"]}
+        grouped[st]["file_count"] += 1
+        grouped[st]["total_size"] += len(s["body"])
+        if s["updated_at"] > grouped[st]["updated_at"]:
+            grouped[st]["updated_at"] = s["updated_at"]
+    return list(grouped.values())
 
 
 @mcp.tool()
-def read_section(node_id: str, section_type: str) -> dict:
-    """Read the full body of a specific section of a node."""
+def read_section(node_id: str, section_type: str, name: str = "main") -> dict:
+    """Read the full body of a specific section file. Use name='main' (default) for the primary file, or pass a specific name for named files."""
     from db.queries import get_section
-    result = get_section(_db(), node_id, section_type)
+    result = get_section(_db(), node_id, section_type, name=name)
     if result is None:
-        return {"error": f"Section '{section_type}' not found on node {node_id}"}
+        return {"error": f"Section '{section_type}' file '{name}' not found on node {node_id}"}
     return result
 
 
 @mcp.tool()
-def write_section(node_id: str, section_type: str, body: str) -> dict:
-    """Write (create or replace) a section on a node."""
+def write_section(node_id: str, section_type: str, body: str, name: str = "main") -> dict:
+    """Write (create or replace) a section file on a node. Use name='main' (default) for the primary file, or pass a specific name for named files."""
+    import sqlite3
     from db.queries import upsert_section
-    return upsert_section(_db(), node_id, section_type, body)
+    try:
+        return upsert_section(_db(), node_id, section_type, body, name=name)
+    except sqlite3.IntegrityError as e:
+        return {"error": f"Write failed: {e}. Check that node_id '{node_id}' exists."}
 
 
 @mcp.tool()
-def append_to_section(node_id: str, section_type: str, content: str) -> dict:
-    """Append text to a section with a double-newline separator. Creates the section if it doesn't exist."""
+def append_to_section(node_id: str, section_type: str, content: str, name: str = "main") -> dict:
+    """Append text to a section file with a double-newline separator. Creates the section if it doesn't exist. Use name='main' (default) for the primary file, or pass a specific name for named files."""
+    import sqlite3
     from db.queries import append_section
-    return append_section(_db(), node_id, section_type, content)
+    try:
+        return append_section(_db(), node_id, section_type, content, name=name)
+    except sqlite3.IntegrityError as e:
+        return {"error": f"Append failed: {e}. Check that node_id '{node_id}' exists."}
+
+
+@mcp.tool()
+def list_section_files(node_id: str, section_type: str) -> list[dict]:
+    """List individual files within a section type. Returns [{name, size, position, updated_at}] without body content — token-efficient for browsing. Use read_section with name param to get a specific file's content."""
+    from db.queries import list_section_files as _list_section_files
+    return _list_section_files(_db(), node_id, section_type)
+
+
+@mcp.tool()
+def create_section_file(node_id: str, section_type: str, name: str, body: str = "") -> dict:
+    """Create a new named file within a section type. Position is auto-assigned. Use write_section with name param to update an existing file."""
+    import sqlite3
+    from db.queries import create_section_file as _create_section_file
+    try:
+        return _create_section_file(_db(), node_id, section_type, name, body=body)
+    except sqlite3.IntegrityError:
+        return {"error": f"Section file '{name}' already exists in '{section_type}'. Use write_section to update it."}
 
 
 @mcp.tool()
 def search_sections(query: str, node_id: str = "") -> list[dict]:
-    """Full-text search across all node sections. Returns matching snippets. Optionally scope to a node's subtree."""
+    """Full-text search across all node sections. Returns matching snippets with name field. Optionally scope to a node's subtree."""
     from db.queries import search_sections as _search
     nid = node_id if node_id else None
     return _search(_db(), query, nid)

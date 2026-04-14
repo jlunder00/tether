@@ -898,7 +898,7 @@ def create_node(
         )
     return {
         "id": node_id, "parent_id": parent_id, "name": name,
-        "node_type": node_type, "archived": 0,
+        "node_type": node_type, "description": None, "archived": 0,
         "target_date": target_date, "status": status,
         "status_override": status_override, "color": color,
         "created_at": now, "updated_at": now,
@@ -915,7 +915,7 @@ def get_node(db_path: Path, node_id: str) -> dict | None:
             return None
         d = dict(row)
         sections = conn.execute(
-            "SELECT section_type FROM node_sections WHERE node_id = ? ORDER BY section_type",
+            "SELECT DISTINCT section_type FROM node_sections WHERE node_id = ? ORDER BY section_type",
             (node_id,),
         ).fetchall()
         d["section_types"] = [s["section_type"] for s in sections]
@@ -1085,7 +1085,7 @@ def unarchive_node(db_path: Path, node_id: str) -> None:
 
 def patch_node_fields(db_path: Path, node_id: str, fields: dict) -> dict | None:
     """Update allowed fields on a context node. Returns updated node dict or None."""
-    allowed = {"name", "target_date", "status", "color", "archived"}
+    allowed = {"name", "target_date", "status", "color", "archived", "description"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_node(db_path, node_id)
@@ -1115,58 +1115,155 @@ def get_sections(db_path: Path, node_id: str) -> list[dict]:
     """Get all sections for a node."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT section_type, body, updated_at FROM node_sections "
-            "WHERE node_id = ? ORDER BY section_type",
+            "SELECT section_type, name, body, position, updated_at FROM node_sections "
+            "WHERE node_id = ? ORDER BY section_type, position",
             (node_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_section(db_path: Path, node_id: str, section_type: str) -> dict | None:
-    """Get a single section by type."""
+def get_section(db_path: Path, node_id: str, section_type: str, name: str = "main") -> dict | None:
+    """Get a single section by type and name."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT section_type, body, updated_at FROM node_sections "
-            "WHERE node_id = ? AND section_type = ?",
-            (node_id, section_type),
+            "SELECT section_type, name, body, position, updated_at FROM node_sections "
+            "WHERE node_id = ? AND section_type = ? AND name = ?",
+            (node_id, section_type, name),
         ).fetchone()
     return dict(row) if row else None
 
 
-def upsert_section(db_path: Path, node_id: str, section_type: str, body: str) -> dict:
+def upsert_section(db_path: Path, node_id: str, section_type: str, body: str, name: str = "main") -> dict:
     """Insert or update a section. Also update node's updated_at."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
+        next_pos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM node_sections "
+            "WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchone()[0]
         conn.execute(
-            """INSERT INTO node_sections (node_id, section_type, body, updated_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(node_id, section_type) DO UPDATE SET
+            """INSERT INTO node_sections (node_id, section_type, name, body, position, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(node_id, section_type, name) DO UPDATE SET
                    body = excluded.body, updated_at = excluded.updated_at""",
-            (node_id, section_type, body, now),
+            (node_id, section_type, name, body, next_pos, now),
         )
         conn.execute(
             "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
             (now, node_id),
         )
-    return {"section_type": section_type, "body": body, "updated_at": now}
+    return {"section_type": section_type, "name": name, "body": body, "updated_at": now}
 
 
-def append_section(db_path: Path, node_id: str, section_type: str, content: str) -> dict:
+def append_section(db_path: Path, node_id: str, section_type: str, content: str, name: str = "main") -> dict:
     """Append text to a section with '\\n\\n' separator. Create if missing."""
-    existing = get_section(db_path, node_id, section_type)
+    existing = get_section(db_path, node_id, section_type, name=name)
     if existing and existing["body"]:
         new_body = existing["body"] + "\n\n" + content
     else:
         new_body = content
-    return upsert_section(db_path, node_id, section_type, new_body)
+    return upsert_section(db_path, node_id, section_type, new_body, name=name)
 
 
-def delete_section(db_path: Path, node_id: str, section_type: str) -> None:
+def delete_section(db_path: Path, node_id: str, section_type: str, name: str = "main") -> None:
     """Delete a section."""
     with get_db(db_path) as conn:
         conn.execute(
-            "DELETE FROM node_sections WHERE node_id = ? AND section_type = ?",
+            "DELETE FROM node_sections WHERE node_id = ? AND section_type = ? AND name = ?",
+            (node_id, section_type, name),
+        )
+
+
+def list_section_files(db_path: Path, node_id: str, section_type: str) -> list[dict]:
+    """List files within a section type: [{name, size, position, updated_at}] -- no body content.
+
+    size = length(body) in characters.
+    """
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """SELECT name, length(body) AS size, position, updated_at
+               FROM node_sections
+               WHERE node_id = ? AND section_type = ?
+               ORDER BY position""",
             (node_id, section_type),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_section_file(db_path: Path, node_id: str, section_type: str, name: str, body: str = "") -> dict:
+    """Create a new named file within a section type.
+
+    Sets position to max(position)+1 within that section_type. Returns the created dict.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM node_sections "
+            "WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchone()
+        position = row["next_pos"]
+        conn.execute(
+            """INSERT INTO node_sections (node_id, section_type, name, body, position, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (node_id, section_type, name, body, position, now),
+        )
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+    return {"section_type": section_type, "name": name, "body": body,
+            "position": position, "updated_at": now}
+
+
+def rename_section_file(db_path: Path, node_id: str, section_type: str, old_name: str, new_name: str) -> dict:
+    """Rename a section file. Raises ValueError if old_name not found or new_name already exists."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        try:
+            cur = conn.execute(
+                """UPDATE node_sections SET name = ?, updated_at = ?
+                   WHERE node_id = ? AND section_type = ? AND name = ?""",
+                (new_name, now, node_id, section_type, old_name),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"Section file '{new_name}' already exists in {section_type}")
+        if cur.rowcount == 0:
+            raise ValueError(f"Section file '{old_name}' not found in {section_type}")
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+    return get_section(db_path, node_id, section_type, name=new_name)
+
+
+def reorder_section_files(db_path: Path, node_id: str, section_type: str, name_order: list[str]) -> None:
+    """Reorder files by updating position values based on list order.
+    Raises ValueError if name_order contains unknown names or omits existing files."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        existing = conn.execute(
+            "SELECT name FROM node_sections WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchall()
+        existing_names = {r["name"] for r in existing}
+        order_set = set(name_order)
+        unknown = order_set - existing_names
+        if unknown:
+            raise ValueError(f"Names not found in {section_type}: {unknown}")
+        missing = existing_names - order_set
+        if missing:
+            raise ValueError(f"Existing files omitted from ordering: {missing}")
+        for position, name in enumerate(name_order):
+            conn.execute(
+                """UPDATE node_sections SET position = ?, updated_at = ?
+                   WHERE node_id = ? AND section_type = ? AND name = ?""",
+                (position, now, node_id, section_type, name),
+            )
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
         )
 
 
@@ -1175,7 +1272,7 @@ def search_sections(
 ) -> list[dict]:
     """FTS5 search across node_sections.
 
-    Returns [{node_id, section_type, snippet}].
+    Returns [{node_id, section_type, name, snippet}].
     If node_id is provided, filter to that node's subtree.
     """
     # Wrap in double quotes for literal matching; escape embedded quotes.
@@ -1198,7 +1295,7 @@ def search_sections(
                 return []
             ph = ",".join("?" for _ in id_set)
             rows = conn.execute(
-                f"""SELECT ns.node_id, ns.section_type,
+                f"""SELECT ns.node_id, ns.section_type, ns.name,
                            snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
                     FROM node_sections_fts fts
                     JOIN node_sections ns ON ns.id = fts.rowid
@@ -1209,7 +1306,7 @@ def search_sections(
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT ns.node_id, ns.section_type,
+                """SELECT ns.node_id, ns.section_type, ns.name,
                           snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
                    FROM node_sections_fts fts
                    JOIN node_sections ns ON ns.id = fts.rowid
@@ -1650,3 +1747,95 @@ def update_kanban_column(db_path: Path, column_id: str, fields: dict) -> dict | 
 def delete_kanban_column(db_path: Path, column_id: str) -> None:
     with get_db(db_path) as conn:
         conn.execute("DELETE FROM kanban_columns WHERE id=?", (column_id,))
+
+
+# ---------------------------------------------------------------------------
+# User settings (user_settings table)
+# ---------------------------------------------------------------------------
+
+
+def get_user_setting(db_path: Path, user_id: str, key: str) -> str | None:
+    """Get a single user setting value, or None if not set."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+            (user_id, key),
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def get_all_user_settings(db_path: Path, user_id: str) -> dict[str, str]:
+    """Get all settings for a user as a {key: value} dict."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def set_user_setting(db_path: Path, user_id: str, key: str, value: str) -> None:
+    """Upsert a user setting."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, key, value),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Auto-archive query
+# ---------------------------------------------------------------------------
+
+
+def get_auto_archivable_nodes(
+    db_path: Path,
+    days_completed: int | None = None,
+    days_inactive: int | None = None,
+) -> list[dict]:
+    """Find non-archived context nodes that match auto-archive criteria.
+
+    - days_completed: all linked tasks are done AND the node's updated_at
+      is more than X days ago (proxy for completion time since tasks lack
+      a completed_at timestamp).
+    - days_inactive: node's updated_at is more than X days ago.
+
+    Returns the union of both criteria (a node matching either is included).
+    """
+    if days_completed is None and days_inactive is None:
+        return []
+
+    results: dict[str, dict] = {}
+
+    with get_db(db_path) as conn:
+        if days_inactive is not None:
+            rows = conn.execute(
+                """SELECT * FROM context_nodes
+                   WHERE archived = 0
+                     AND updated_at <= datetime('now', ?)""",
+                (f"-{days_inactive} days",),
+            ).fetchall()
+            for r in rows:
+                results[r["id"]] = dict(r)
+
+        if days_completed is not None:
+            # Nodes where: (a) at least one linked task exists,
+            # (b) ALL linked tasks are done, and
+            # (c) updated_at is old enough.
+            rows = conn.execute(
+                """SELECT cn.*
+                   FROM context_nodes cn
+                   JOIN node_tasks nt ON nt.node_id = cn.id
+                   JOIN tasks t ON t.uuid = nt.task_id
+                   WHERE cn.archived = 0
+                     AND cn.updated_at <= datetime('now', ?)
+                   GROUP BY cn.id
+                   HAVING COUNT(t.uuid) > 0
+                      AND COUNT(t.uuid) = SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END)""",
+                (f"-{days_completed} days",),
+            ).fetchall()
+            for r in rows:
+                results[r["id"]] = dict(r)
+
+    return list(results.values())

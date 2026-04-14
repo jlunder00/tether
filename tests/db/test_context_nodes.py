@@ -465,3 +465,164 @@ class TestMilestoneNodes:
         assert len(q.get_milestone_nodes(
             db_path, parent_id=parent["id"], include_archived=True
         )) == 1
+
+
+# ---------------------------------------------------------------------------
+# Named section files
+# ---------------------------------------------------------------------------
+
+class TestNamedSectionFiles:
+    def test_upsert_section_with_name(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        result = q.upsert_section(db_path, node["id"], "notes", "Main notes")
+        assert result["name"] == "main"
+        assert result["body"] == "Main notes"
+
+        result2 = q.upsert_section(db_path, node["id"], "notes", "Ideas", name="ideas")
+        assert result2["name"] == "ideas"
+        assert result2["body"] == "Ideas"
+
+        # Both should coexist
+        sections = q.get_sections(db_path, node["id"])
+        assert len(sections) == 2
+        names = {s["name"] for s in sections}
+        assert names == {"main", "ideas"}
+
+        # get_section with default name still returns the 'main' one
+        main = q.get_section(db_path, node["id"], "notes")
+        assert main["body"] == "Main notes"
+
+        # get_section with explicit name
+        ideas = q.get_section(db_path, node["id"], "notes", name="ideas")
+        assert ideas["body"] == "Ideas"
+
+    def test_list_section_files(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.upsert_section(db_path, node["id"], "notes", "File A content", name="a")
+        q.upsert_section(db_path, node["id"], "notes", "File B longer content", name="b")
+
+        files = q.list_section_files(db_path, node["id"], "notes")
+        assert len(files) == 2
+        # Check returned fields
+        for f in files:
+            assert "name" in f
+            assert "size" in f
+            assert "updated_at" in f
+            assert "position" in f
+            # body should NOT be in the result
+            assert "body" not in f
+
+        names = [f["name"] for f in files]
+        assert "a" in names
+        assert "b" in names
+
+        # size should be character count of body
+        a_file = next(f for f in files if f["name"] == "a")
+        assert a_file["size"] == len("File A content")
+
+    def test_create_section_file(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        result = q.create_section_file(db_path, node["id"], "notes", "readme")
+        assert result["name"] == "readme"
+        assert result["body"] == ""
+        assert result["position"] == 0
+
+        result2 = q.create_section_file(db_path, node["id"], "notes", "changelog", body="v1.0")
+        assert result2["name"] == "changelog"
+        assert result2["body"] == "v1.0"
+        assert result2["position"] == 1
+
+        # Verify we can read them back
+        fetched = q.get_section(db_path, node["id"], "notes", name="readme")
+        assert fetched is not None
+        assert fetched["body"] == ""
+
+        fetched2 = q.get_section(db_path, node["id"], "notes", name="changelog")
+        assert fetched2["body"] == "v1.0"
+
+    def test_create_section_file_duplicate_raises(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.create_section_file(db_path, node["id"], "notes", "readme")
+        with pytest.raises(sqlite3.IntegrityError):
+            q.create_section_file(db_path, node["id"], "notes", "readme")
+
+    def test_rename_section_file(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.create_section_file(db_path, node["id"], "notes", "old_name", body="content")
+
+        result = q.rename_section_file(db_path, node["id"], "notes", "old_name", "new_name")
+        assert result["name"] == "new_name"
+        assert result["body"] == "content"
+
+        # Old name should be gone
+        assert q.get_section(db_path, node["id"], "notes", name="old_name") is None
+
+    def test_rename_section_file_missing_raises(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        with pytest.raises(ValueError, match="not found"):
+            q.rename_section_file(db_path, node["id"], "notes", "nonexistent", "new")
+
+    def test_reorder_section_files(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.create_section_file(db_path, node["id"], "notes", "a")
+        q.create_section_file(db_path, node["id"], "notes", "b")
+        q.create_section_file(db_path, node["id"], "notes", "c")
+
+        # Reorder: c, a, b
+        q.reorder_section_files(db_path, node["id"], "notes", ["c", "a", "b"])
+
+        files = q.list_section_files(db_path, node["id"], "notes")
+        names_in_order = [f["name"] for f in files]
+        assert names_in_order == ["c", "a", "b"]
+
+    def test_search_includes_name(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.upsert_section(db_path, node["id"], "notes", "important search text", name="ideas")
+
+        results = q.search_sections(db_path, "important search")
+        assert len(results) == 1
+        assert results[0]["name"] == "ideas"
+        assert results[0]["section_type"] == "notes"
+
+    def test_append_section_with_name(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.upsert_section(db_path, node["id"], "log", "Entry 1", name="daily")
+        result = q.append_section(db_path, node["id"], "log", "Entry 2", name="daily")
+        assert result["body"] == "Entry 1\n\nEntry 2"
+        assert result["name"] == "daily"
+
+    def test_delete_section_with_name(self, db_path):
+        node = q.create_node(db_path, None, "Node")
+        q.upsert_section(db_path, node["id"], "notes", "Main", name="main")
+        q.upsert_section(db_path, node["id"], "notes", "Extra", name="extra")
+
+        q.delete_section(db_path, node["id"], "notes", name="extra")
+        # main should still exist
+        assert q.get_section(db_path, node["id"], "notes", name="main") is not None
+        # extra should be gone
+        assert q.get_section(db_path, node["id"], "notes", name="extra") is None
+
+
+# ---------------------------------------------------------------------------
+# Node description
+# ---------------------------------------------------------------------------
+
+class TestNodeDescription:
+    def test_patch_node_fields_with_description(self, db_path):
+        node = q.create_node(db_path, None, "MyNode")
+        assert node["description"] is None
+
+        updated = q.patch_node_fields(db_path, node["id"], {"description": "A useful desc"})
+        assert updated["description"] == "A useful desc"
+
+    def test_get_node_returns_description(self, db_path):
+        node = q.create_node(db_path, None, "MyNode")
+        q.patch_node_fields(db_path, node["id"], {"description": "Hello there"})
+
+        fetched = q.get_node(db_path, node["id"])
+        assert fetched["description"] == "Hello there"
+
+    def test_create_node_has_null_description(self, db_path):
+        node = q.create_node(db_path, None, "MyNode")
+        fetched = q.get_node(db_path, node["id"])
+        assert fetched["description"] is None

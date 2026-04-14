@@ -10,6 +10,7 @@ export interface ContextNode {
   id: string
   parent_id: string | null
   name: string
+  description: string | null
   node_type: 'context' | 'milestone'
   archived: boolean
   target_date: string | null
@@ -25,8 +26,22 @@ export interface ContextNode {
 
 export interface NodeSection {
   section_type: string
+  name: string
   body: string
+  position: number
   updated_at: string
+}
+
+export interface SectionFileInfo {
+  name: string
+  size: number
+  position: number
+  updated_at: string
+}
+
+export interface SectionTypeSummary {
+  section_type: string
+  file_count: number
 }
 
 // ---------------------------------------------------------------------------
@@ -37,14 +52,17 @@ export const useContextStore = defineStore('context', () => {
   /** Flat cache of all fetched nodes, keyed by id */
   const nodes = ref<Record<string, ContextNode>>({})
 
-  /** Sections cache keyed by `${nodeId}::${sectionType}` */
+  /** Sections cache keyed by `${nodeId}::${sectionType}::${name}` */
   const sectionCache = ref<Record<string, NodeSection>>({})
+
+  /** Whether to include archived nodes in tree views */
+  const showArchived = ref(false)
 
   // -- Computed helpers ------------------------------------------------------
 
   const rootNodes = computed<ContextNode[]>(() =>
     Object.values(nodes.value)
-      .filter(n => n.parent_id === null && !n.archived)
+      .filter(n => n.parent_id === null && (showArchived.value || !n.archived))
       .sort((a, b) => a.name.localeCompare(b.name))
   )
 
@@ -54,7 +72,7 @@ export const useContextStore = defineStore('context', () => {
 
   function childrenOf(parentId: string): ContextNode[] {
     return Object.values(nodes.value)
-      .filter(n => n.parent_id === parentId && !n.archived)
+      .filter(n => n.parent_id === parentId && (showArchived.value || !n.archived))
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
@@ -67,7 +85,8 @@ export const useContextStore = defineStore('context', () => {
   // -- API methods -----------------------------------------------------------
 
   async function fetchRootNodes(): Promise<ContextNode[]> {
-    const resp = await api('/api/nodes')
+    const qs = showArchived.value ? '?include_archived=1' : ''
+    const resp = await api(`/api/nodes${qs}`)
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchRootNodes: ${resp.status} ${detail}`)
@@ -80,7 +99,8 @@ export const useContextStore = defineStore('context', () => {
   }
 
   async function fetchChildren(parentId: string): Promise<ContextNode[]> {
-    const resp = await api(`/api/nodes/${parentId}/children`)
+    const qs = showArchived.value ? '?include_archived=1' : ''
+    const resp = await api(`/api/nodes/${parentId}/children${qs}`)
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchChildren: ${resp.status} ${detail}`)
@@ -125,7 +145,7 @@ export const useContextStore = defineStore('context', () => {
 
   async function patchNode(
     nodeId: string,
-    fields: Partial<Pick<ContextNode, 'name' | 'archived' | 'target_date' | 'status' | 'color'>>,
+    fields: Partial<Pick<ContextNode, 'name' | 'archived' | 'target_date' | 'status' | 'color' | 'description'>>,
   ): Promise<ContextNode> {
     const resp = await api(`/api/nodes/${nodeId}`, {
       method: 'PATCH',
@@ -174,33 +194,38 @@ export const useContextStore = defineStore('context', () => {
     }
   }
 
-  async function fetchSections(nodeId: string): Promise<NodeSection[]> {
+  async function fetchSections(nodeId: string): Promise<SectionTypeSummary[]> {
     const resp = await api(`/api/nodes/${nodeId}/sections`)
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchSections: ${resp.status} ${detail}`)
     }
-    const data: NodeSection[] = await resp.json()
-    for (const s of data) {
-      sectionCache.value[`${nodeId}::${s.section_type}`] = s
-    }
-    return data
+    return await resp.json()
   }
 
-  async function fetchSection(nodeId: string, sectionType: string): Promise<NodeSection | null> {
+  async function fetchSectionFiles(nodeId: string, sectionType: string): Promise<SectionFileInfo[]> {
     const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchSectionFiles: ${resp.status} ${detail}`)
+    }
+    return await resp.json()
+  }
+
+  async function fetchSection(nodeId: string, sectionType: string, name: string = 'main'): Promise<NodeSection | null> {
+    const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}/${encodeURIComponent(name)}`)
     if (resp.status === 404) return null
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchSection: ${resp.status} ${detail}`)
     }
     const data: NodeSection = await resp.json()
-    sectionCache.value[`${nodeId}::${sectionType}`] = data
+    sectionCache.value[`${nodeId}::${sectionType}::${name}`] = data
     return data
   }
 
-  async function saveSection(nodeId: string, sectionType: string, body: string): Promise<NodeSection> {
-    const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}`, {
+  async function saveSection(nodeId: string, sectionType: string, body: string, name: string = 'main'): Promise<NodeSection> {
+    const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body }),
@@ -210,14 +235,41 @@ export const useContextStore = defineStore('context', () => {
       throw new Error(`saveSection: ${resp.status} ${detail}`)
     }
     const data: NodeSection = await resp.json()
-    sectionCache.value[`${nodeId}::${sectionType}`] = data
+    sectionCache.value[`${nodeId}::${sectionType}::${name}`] = data
     return data
+  }
+
+  async function createSectionFile(nodeId: string, sectionType: string, name: string, body: string = ''): Promise<NodeSection> {
+    const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, body }),
+    })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`createSectionFile: ${resp.status} ${detail}`)
+    }
+    const data: NodeSection = await resp.json()
+    sectionCache.value[`${nodeId}::${sectionType}::${name}`] = data
+    return data
+  }
+
+  async function deleteSectionFile(nodeId: string, sectionType: string, name: string): Promise<void> {
+    const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`deleteSectionFile: ${resp.status} ${detail}`)
+    }
+    delete sectionCache.value[`${nodeId}::${sectionType}::${name}`]
   }
 
   return {
     // State
     nodes,
     sectionCache,
+    showArchived,
 
     // Computed
     rootNodes,
@@ -238,7 +290,10 @@ export const useContextStore = defineStore('context', () => {
 
     // Sections
     fetchSections,
+    fetchSectionFiles,
     fetchSection,
     saveSection,
+    createSectionFile,
+    deleteSectionFile,
   }
 })
