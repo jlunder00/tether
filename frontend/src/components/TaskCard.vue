@@ -24,12 +24,14 @@ const props = withDefaults(defineProps<{
   showDetailLink?: boolean
   compact?: boolean
   hideTags?: boolean  // hide milestone/context tags (when inside a GroupContainer that already shows them)
+  navigable?: boolean  // whether clicking the card navigates to detail panel
 }>(), {
   editable: true,
   showRemove: true,
   showDetailLink: true,
   compact: false,
   hideTags: false,
+  navigable: true,
 })
 const emit = defineEmits<{
   (e: 'update', task: Task): void
@@ -119,7 +121,7 @@ function toggleFollowup(enabled: boolean) {
       :style="STATUS_CARD_STYLE[task.status]"
       :draggable="!editable && !!task.id"
       @dragstart="onDragStart"
-      @click="task.id && router.push(`${routeBase}/task/${task.id}`)">
+      @click="navigable && task.id && router.push(`${routeBase}/task/${task.id}`)">
     <div class="flex flex-col gap-1 p-2">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
     <div class="absolute top-1.5 right-1.5">
