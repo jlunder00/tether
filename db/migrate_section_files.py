@@ -33,6 +33,12 @@ def migrate_section_files(db_path: Path) -> None:
         # 2. Check if node_sections already has the name column
         if _column_exists(conn, "node_sections", "name"):
             print("  node_sections already has name column — skipping table recreation")
+            # Still ensure FTS triggers and index are intact (in case prior run crashed mid-migration)
+            try:
+                conn.execute("INSERT INTO node_sections_fts(node_sections_fts) VALUES('integrity-check')")
+            except sqlite3.OperationalError:
+                conn.execute("INSERT INTO node_sections_fts(node_sections_fts) VALUES('rebuild')")
+                print("  Rebuilt FTS index (was stale or missing)")
             return
 
         # 3. Recreate node_sections with new schema
@@ -57,29 +63,42 @@ def migrate_section_files(db_path: Path) -> None:
             FROM node_sections
         """)
 
+        # Validate row count to prevent silent data loss
+        old_count = conn.execute("SELECT COUNT(*) FROM node_sections").fetchone()[0]
+        new_count = conn.execute("SELECT COUNT(*) FROM node_sections_new").fetchone()[0]
+        if old_count != new_count:
+            raise RuntimeError(
+                f"Row count mismatch: {old_count} in old table, {new_count} in new. "
+                "Aborting to prevent data loss."
+            )
+
         # DROP TABLE silently removes triggers attached to it
         conn.execute("DROP TABLE node_sections")
         conn.execute("ALTER TABLE node_sections_new RENAME TO node_sections")
 
         # Recreate FTS5 sync triggers (lost when old table was dropped)
-        conn.executescript("""
+        # NOTE: use individual conn.execute() — NOT executescript(), which silently
+        # commits the pending transaction and breaks rollback safety.
+        conn.execute("""
             CREATE TRIGGER IF NOT EXISTS node_sections_fts_ai
             AFTER INSERT ON node_sections BEGIN
                 INSERT INTO node_sections_fts(rowid, body) VALUES (new.id, new.body);
-            END;
-
+            END
+        """)
+        conn.execute("""
             CREATE TRIGGER IF NOT EXISTS node_sections_fts_ad
             AFTER DELETE ON node_sections BEGIN
                 INSERT INTO node_sections_fts(node_sections_fts, rowid, body)
                 VALUES ('delete', old.id, old.body);
-            END;
-
+            END
+        """)
+        conn.execute("""
             CREATE TRIGGER IF NOT EXISTS node_sections_fts_au
             AFTER UPDATE ON node_sections BEGIN
                 INSERT INTO node_sections_fts(node_sections_fts, rowid, body)
                 VALUES ('delete', old.id, old.body);
                 INSERT INTO node_sections_fts(rowid, body) VALUES (new.id, new.body);
-            END;
+            END
         """)
 
         # 4. Rebuild FTS5 index
@@ -87,9 +106,11 @@ def migrate_section_files(db_path: Path) -> None:
             conn.execute("INSERT INTO node_sections_fts(node_sections_fts) VALUES('rebuild')")
         except sqlite3.OperationalError as e:
             if "no such table" in str(e).lower():
-                print("  INFO: node_sections_fts table does not exist — skipping FTS rebuild")
-            else:
-                raise
+                raise RuntimeError(
+                    "FTS table node_sections_fts does not exist after init_db() — "
+                    "schema initialization may have failed"
+                ) from e
+            raise
 
         conn.execute("COMMIT")
         print("  Migrated node_sections: added name, position columns")
@@ -97,8 +118,10 @@ def migrate_section_files(db_path: Path) -> None:
         conn.execute("ROLLBACK")
         raise
     finally:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.close()
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":
