@@ -221,7 +221,7 @@ async function fetchNodeTasks() {
   } catch (e) {
     console.error('fetchNodeTasks error:', e)
     error.value = e instanceof Error ? e.message : 'Failed to fetch tasks'
-    nodeTasks.value = []
+    // Don't clear nodeTasks — stale data is better than showing "(no linked tasks)" after a fetch failure
   } finally {
     loadingTasks.value = false
   }
@@ -373,6 +373,16 @@ async function saveRename() {
   }
 }
 
+async function setArchived(archived: boolean) {
+  try {
+    error.value = null
+    await contextStore.patchNode(props.node.id, { archived })
+  } catch (e) {
+    console.error('setArchived error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to update archive status'
+  }
+}
+
 async function deleteWithConfirm() {
   const childCount = children.value.length
   const msg = childCount > 0
@@ -483,10 +493,10 @@ async function addChild() {
           <button v-else @click="startRename"
                   class="text-xs text-white/50 hover:text-white">Rename</button>
           <button v-if="node.archived"
-                  @click="contextStore.patchNode(node.id, { archived: false })"
+                  @click="setArchived(false)"
                   class="text-xs text-yellow-400/60 hover:text-yellow-400">Unarchive</button>
           <button v-else
-                  @click="contextStore.patchNode(node.id, { archived: true })"
+                  @click="setArchived(true)"
                   class="text-xs text-white/40 hover:text-white/70">Archive</button>
           <button @click="deleteWithConfirm"
                   class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
@@ -638,7 +648,8 @@ async function addChild() {
                   :compact="true"
                   :editable="false"
                   :showRemove="false"
-                  :hideTags="false" />
+                  :hideTags="false"
+                  :navigable="false" />
               </div>
             </GroupContainer>
           </div>
