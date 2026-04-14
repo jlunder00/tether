@@ -55,11 +55,14 @@ export const useContextStore = defineStore('context', () => {
   /** Sections cache keyed by `${nodeId}::${sectionType}::${name}` */
   const sectionCache = ref<Record<string, NodeSection>>({})
 
+  /** Whether to include archived nodes in tree views */
+  const showArchived = ref(false)
+
   // -- Computed helpers ------------------------------------------------------
 
   const rootNodes = computed<ContextNode[]>(() =>
     Object.values(nodes.value)
-      .filter(n => n.parent_id === null && !n.archived)
+      .filter(n => n.parent_id === null && (showArchived.value || !n.archived))
       .sort((a, b) => a.name.localeCompare(b.name))
   )
 
@@ -69,7 +72,7 @@ export const useContextStore = defineStore('context', () => {
 
   function childrenOf(parentId: string): ContextNode[] {
     return Object.values(nodes.value)
-      .filter(n => n.parent_id === parentId && !n.archived)
+      .filter(n => n.parent_id === parentId && (showArchived.value || !n.archived))
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
@@ -82,7 +85,8 @@ export const useContextStore = defineStore('context', () => {
   // -- API methods -----------------------------------------------------------
 
   async function fetchRootNodes(): Promise<ContextNode[]> {
-    const resp = await api('/api/nodes')
+    const qs = showArchived.value ? '?include_archived=1' : ''
+    const resp = await api(`/api/nodes${qs}`)
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchRootNodes: ${resp.status} ${detail}`)
@@ -95,7 +99,8 @@ export const useContextStore = defineStore('context', () => {
   }
 
   async function fetchChildren(parentId: string): Promise<ContextNode[]> {
-    const resp = await api(`/api/nodes/${parentId}/children`)
+    const qs = showArchived.value ? '?include_archived=1' : ''
+    const resp = await api(`/api/nodes/${parentId}/children${qs}`)
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '')
       throw new Error(`fetchChildren: ${resp.status} ${detail}`)
@@ -264,6 +269,7 @@ export const useContextStore = defineStore('context', () => {
     // State
     nodes,
     sectionCache,
+    showArchived,
 
     // Computed
     rootNodes,

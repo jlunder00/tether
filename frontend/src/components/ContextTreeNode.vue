@@ -361,7 +361,7 @@ async function addMilestone() {
 <template>
   <div :style="depthStyle">
     <div class="border border-white/10 rounded-xl p-4 transition-shadow"
-         :class="dragOver ? 'ring-2 ring-blue-400/50' : ''"
+         :class="[dragOver ? 'ring-2 ring-blue-400/50' : '', node.archived ? 'opacity-50' : '']"
          :style="cardStyle"
          :draggable="true"
          @dragstart.stop="onDragStart"
@@ -391,7 +391,8 @@ async function addMilestone() {
               (renames node, {{ children.length }} children unaffected)
             </span>
           </template>
-          <h3 v-else class="font-semibold text-sm truncate">{{ node.name }}</h3>
+          <h3 v-else class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-white/40' : ''">{{ node.name }}</h3>
+          <span v-if="node.archived" class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400/80 shrink-0">Archived</span>
         </div>
 
         <div class="flex gap-2 shrink-0">
@@ -401,6 +402,12 @@ async function addMilestone() {
           </template>
           <button v-else @click="startRename"
                   class="text-xs text-white/50 hover:text-white">Rename</button>
+          <button v-if="node.archived"
+                  @click="contextStore.patchNode(node.id, { archived: false })"
+                  class="text-xs text-yellow-400/60 hover:text-yellow-400">Unarchive</button>
+          <button v-else
+                  @click="contextStore.patchNode(node.id, { archived: true })"
+                  class="text-xs text-white/40 hover:text-white/70">Archive</button>
           <button @click="deleteWithConfirm"
                   class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
         </div>
