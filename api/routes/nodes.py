@@ -1,3 +1,4 @@
+import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from db.queries import (
@@ -272,10 +273,8 @@ async def create_section_file_route(
         result = create_section_file(
             request.state.db_path, node_id, section_type, body.name, body.body,
         )
-    except (ValueError, Exception) as exc:
-        if "UNIQUE constraint" in str(exc) or "already exists" in str(exc).lower():
-            raise HTTPException(status_code=409, detail=f"File '{body.name}' already exists in {section_type}")
-        raise
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail=f"File '{body.name}' already exists in {section_type}")
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
 
@@ -292,7 +291,10 @@ async def reorder_section_files_route(
     node = get_node(request.state.db_path, node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-    reorder_section_files(request.state.db_path, node_id, section_type, body.name_order)
+    try:
+        reorder_section_files(request.state.db_path, node_id, section_type, body.name_order)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}
 
@@ -366,11 +368,10 @@ async def rename_section_file_route(
             request.state.db_path, node_id, section_type, name, body.new_name,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except Exception as exc:
-        if "UNIQUE constraint" in str(exc):
-            raise HTTPException(status_code=409, detail=f"File '{body.new_name}' already exists")
-        raise
+        msg = str(exc)
+        if "already exists" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=404, detail=msg)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return result
 
@@ -384,6 +385,12 @@ async def delete_section_file_route(
     _auth=Depends(auth_dependency),
 ):
     """Delete a specific section file."""
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    section = get_section(request.state.db_path, node_id, section_type, name=name)
+    if not section:
+        raise HTTPException(status_code=404, detail="Section file not found")
     delete_section(request.state.db_path, node_id, section_type, name=name)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}
@@ -427,6 +434,9 @@ async def unlink_task_route(
     request: Request,
     _auth=Depends(auth_dependency),
 ):
+    node = get_node(request.state.db_path, node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
     unlink_task_from_node(request.state.db_path, node_id, task_id)
     await manager.broadcast({"type": "nodes_updated"}, request.state.user_id)
     return {"ok": True}
