@@ -898,7 +898,7 @@ def create_node(
         )
     return {
         "id": node_id, "parent_id": parent_id, "name": name,
-        "node_type": node_type, "archived": 0,
+        "node_type": node_type, "description": None, "archived": 0,
         "target_date": target_date, "status": status,
         "status_override": status_override, "color": color,
         "created_at": now, "updated_at": now,
@@ -915,7 +915,7 @@ def get_node(db_path: Path, node_id: str) -> dict | None:
             return None
         d = dict(row)
         sections = conn.execute(
-            "SELECT section_type FROM node_sections WHERE node_id = ? ORDER BY section_type",
+            "SELECT DISTINCT section_type FROM node_sections WHERE node_id = ? ORDER BY section_type",
             (node_id,),
         ).fetchall()
         d["section_types"] = [s["section_type"] for s in sections]
@@ -1085,7 +1085,7 @@ def unarchive_node(db_path: Path, node_id: str) -> None:
 
 def patch_node_fields(db_path: Path, node_id: str, fields: dict) -> dict | None:
     """Update allowed fields on a context node. Returns updated node dict or None."""
-    allowed = {"name", "target_date", "status", "color", "archived"}
+    allowed = {"name", "target_date", "status", "color", "archived", "description"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_node(db_path, node_id)
@@ -1115,58 +1115,134 @@ def get_sections(db_path: Path, node_id: str) -> list[dict]:
     """Get all sections for a node."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT section_type, body, updated_at FROM node_sections "
-            "WHERE node_id = ? ORDER BY section_type",
+            "SELECT section_type, name, body, position, updated_at FROM node_sections "
+            "WHERE node_id = ? ORDER BY section_type, position",
             (node_id,),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def get_section(db_path: Path, node_id: str, section_type: str) -> dict | None:
-    """Get a single section by type."""
+def get_section(db_path: Path, node_id: str, section_type: str, name: str = "main") -> dict | None:
+    """Get a single section by type and name."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT section_type, body, updated_at FROM node_sections "
-            "WHERE node_id = ? AND section_type = ?",
-            (node_id, section_type),
+            "SELECT section_type, name, body, position, updated_at FROM node_sections "
+            "WHERE node_id = ? AND section_type = ? AND name = ?",
+            (node_id, section_type, name),
         ).fetchone()
     return dict(row) if row else None
 
 
-def upsert_section(db_path: Path, node_id: str, section_type: str, body: str) -> dict:
+def upsert_section(db_path: Path, node_id: str, section_type: str, body: str, name: str = "main") -> dict:
     """Insert or update a section. Also update node's updated_at."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
         conn.execute(
-            """INSERT INTO node_sections (node_id, section_type, body, updated_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(node_id, section_type) DO UPDATE SET
+            """INSERT INTO node_sections (node_id, section_type, name, body, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(node_id, section_type, name) DO UPDATE SET
                    body = excluded.body, updated_at = excluded.updated_at""",
-            (node_id, section_type, body, now),
+            (node_id, section_type, name, body, now),
         )
         conn.execute(
             "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
             (now, node_id),
         )
-    return {"section_type": section_type, "body": body, "updated_at": now}
+    return {"section_type": section_type, "name": name, "body": body, "updated_at": now}
 
 
-def append_section(db_path: Path, node_id: str, section_type: str, content: str) -> dict:
+def append_section(db_path: Path, node_id: str, section_type: str, content: str, name: str = "main") -> dict:
     """Append text to a section with '\\n\\n' separator. Create if missing."""
-    existing = get_section(db_path, node_id, section_type)
+    existing = get_section(db_path, node_id, section_type, name=name)
     if existing and existing["body"]:
         new_body = existing["body"] + "\n\n" + content
     else:
         new_body = content
-    return upsert_section(db_path, node_id, section_type, new_body)
+    return upsert_section(db_path, node_id, section_type, new_body, name=name)
 
 
-def delete_section(db_path: Path, node_id: str, section_type: str) -> None:
+def delete_section(db_path: Path, node_id: str, section_type: str, name: str = "main") -> None:
     """Delete a section."""
     with get_db(db_path) as conn:
         conn.execute(
-            "DELETE FROM node_sections WHERE node_id = ? AND section_type = ?",
+            "DELETE FROM node_sections WHERE node_id = ? AND section_type = ? AND name = ?",
+            (node_id, section_type, name),
+        )
+
+
+def list_section_files(db_path: Path, node_id: str, section_type: str) -> list[dict]:
+    """List files within a section type: [{name, size, position, updated_at}] -- no body content.
+
+    size = length(body) in characters.
+    """
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """SELECT name, length(body) AS size, position, updated_at
+               FROM node_sections
+               WHERE node_id = ? AND section_type = ?
+               ORDER BY position""",
             (node_id, section_type),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def create_section_file(db_path: Path, node_id: str, section_type: str, name: str, body: str = "") -> dict:
+    """Create a new named file within a section type.
+
+    Sets position to max(position)+1 within that section_type. Returns the created dict.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_pos FROM node_sections "
+            "WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchone()
+        position = row["next_pos"]
+        conn.execute(
+            """INSERT INTO node_sections (node_id, section_type, name, body, position, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (node_id, section_type, name, body, position, now),
+        )
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+    return {"section_type": section_type, "name": name, "body": body,
+            "position": position, "updated_at": now}
+
+
+def rename_section_file(db_path: Path, node_id: str, section_type: str, old_name: str, new_name: str) -> dict:
+    """Rename a section file. Raises ValueError if old_name not found."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        cur = conn.execute(
+            """UPDATE node_sections SET name = ?, updated_at = ?
+               WHERE node_id = ? AND section_type = ? AND name = ?""",
+            (new_name, now, node_id, section_type, old_name),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"Section file '{old_name}' not found in {section_type}")
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+    return get_section(db_path, node_id, section_type, name=new_name)
+
+
+def reorder_section_files(db_path: Path, node_id: str, section_type: str, name_order: list[str]) -> None:
+    """Reorder files by updating position values based on list order."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        for position, name in enumerate(name_order):
+            conn.execute(
+                """UPDATE node_sections SET position = ?, updated_at = ?
+                   WHERE node_id = ? AND section_type = ? AND name = ?""",
+                (position, now, node_id, section_type, name),
+            )
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
         )
 
 
@@ -1175,7 +1251,7 @@ def search_sections(
 ) -> list[dict]:
     """FTS5 search across node_sections.
 
-    Returns [{node_id, section_type, snippet}].
+    Returns [{node_id, section_type, name, snippet}].
     If node_id is provided, filter to that node's subtree.
     """
     # Wrap in double quotes for literal matching; escape embedded quotes.
@@ -1198,7 +1274,7 @@ def search_sections(
                 return []
             ph = ",".join("?" for _ in id_set)
             rows = conn.execute(
-                f"""SELECT ns.node_id, ns.section_type,
+                f"""SELECT ns.node_id, ns.section_type, ns.name,
                            snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
                     FROM node_sections_fts fts
                     JOIN node_sections ns ON ns.id = fts.rowid
@@ -1209,7 +1285,7 @@ def search_sections(
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT ns.node_id, ns.section_type,
+                """SELECT ns.node_id, ns.section_type, ns.name,
                           snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
                    FROM node_sections_fts fts
                    JOIN node_sections ns ON ns.id = fts.rowid
