@@ -36,6 +36,15 @@ export const useAnchorStore = defineStore('anchors', () => {
     }
   }
 
+  async function createAnchor(anchor: Omit<Anchor, 'id'>) {
+    await api('/api/anchors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(anchor),
+    })
+    await fetchAnchors()
+  }
+
   async function updateAnchor(anchor: Anchor) {
     const { id, ...body } = anchor
     await api(`/api/anchors/${id}`, {
@@ -46,5 +55,10 @@ export const useAnchorStore = defineStore('anchors', () => {
     await fetchAnchors()
   }
 
-  return { anchors, fetchAnchors, updateAnchor }
+  async function deleteAnchor(anchorId: string) {
+    await api(`/api/anchors/${anchorId}`, { method: 'DELETE' })
+    await fetchAnchors()
+  }
+
+  return { anchors, fetchAnchors, createAnchor, updateAnchor, deleteAnchor }
 })
