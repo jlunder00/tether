@@ -47,6 +47,26 @@ def upsert_anchor(db_path: Path, anchor: dict) -> None:
         """, {**anchor, "followup_config": fc_json})
 
 
+def seed_default_anchors(db_path: Path) -> None:
+    """Create a simple default schedule for new users. Skips if anchors already exist."""
+    with get_db(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM anchors").fetchone()[0]
+        if count > 0:
+            return
+    defaults = [
+        {"id": "morning", "name": "Morning", "time": "08:00", "duration_minutes": 120,
+         "flexibility": "flexible", "strictness": 3, "color": "#5b8dee", "position": 0},
+        {"id": "midday", "name": "Midday", "time": "10:00", "duration_minutes": 150,
+         "flexibility": "flexible", "strictness": 3, "color": "#7c6af7", "position": 1},
+        {"id": "afternoon", "name": "Afternoon", "time": "13:00", "duration_minutes": 180,
+         "flexibility": "flexible", "strictness": 3, "color": "#e05c5c", "position": 2},
+        {"id": "evening", "name": "Evening", "time": "17:00", "duration_minutes": 120,
+         "flexibility": "flexible", "strictness": 2, "color": "#4caf8c", "position": 3},
+    ]
+    for anchor in defaults:
+        upsert_anchor(db_path, anchor)
+
+
 def get_anchors(db_path: Path) -> list[dict]:
     with get_db(db_path) as conn:
         rows = conn.execute("SELECT * FROM anchors ORDER BY position").fetchall()

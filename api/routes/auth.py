@@ -31,6 +31,14 @@ from db.auth_queries import (
 )
 from db.auth_schema import init_auth_db
 from db.schema import init_db
+from db.queries import seed_default_anchors, seed_kanban_columns
+
+
+def _init_user_db(user_db_path):
+    """Initialize a new user's DB with schema, default anchors, and kanban columns."""
+    init_db(user_db_path)
+    seed_default_anchors(user_db_path)
+    seed_kanban_columns(user_db_path)
 
 router = APIRouter()
 
@@ -107,7 +115,7 @@ async def register(body: RegisterBody, response: Response):
 
     # Create the user's personal DB
     user_db_path = get_user_db_path(user["id"])
-    init_db(user_db_path)
+    _init_user_db(user_db_path)
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     _set_auth_cookie(response, token)
@@ -227,7 +235,7 @@ async def github_callback(code: str, request: Request):
         user = create_user(cfg.AUTH_DB_PATH, username, email, password_hash=None, is_admin=(count == 0))
         create_oauth_connection(cfg.AUTH_DB_PATH, user["id"], "github", provider_user_id, access_token)
         user_db_path = get_user_db_path(user["id"])
-        init_db(user_db_path)
+        _init_user_db(user_db_path)
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     response = RedirectResponse("/plan/day")
@@ -297,7 +305,7 @@ async def google_callback(code: str, request: Request):
         user = create_user(cfg.AUTH_DB_PATH, username, email, password_hash=None, is_admin=(count == 0))
         create_oauth_connection(cfg.AUTH_DB_PATH, user["id"], "google", provider_user_id, access_token)
         user_db_path = get_user_db_path(user["id"])
-        init_db(user_db_path)
+        _init_user_db(user_db_path)
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     response = RedirectResponse("/plan/day")
