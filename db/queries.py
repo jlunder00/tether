@@ -22,6 +22,7 @@ def _row_to_task(row, *, include_schedule: bool = False) -> dict:
         "position": r.get("position", 0),
         "description": r.get("description"),
         "context_subject": r.get("context_subject"),
+        "context_node_id": r.get("context_node_id"),
         "followup_config": json.loads(fc) if fc else None,
         "blocks": [],
         "blocked_by": [],
@@ -222,7 +223,7 @@ def upsert_tasks(
 
         # Return ALL tasks for this anchor (including untouched ones)
         all_rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE plan_date=? AND anchor_id=? ORDER BY position",
             (date, anchor_id),
         ).fetchall()
@@ -258,7 +259,7 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     """Get a single task by UUID."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     if not row:
@@ -1386,7 +1387,7 @@ def create_unscheduled_task(
             (task_uuid, text, status, description, context_subject),
         )
         row = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     return _row_to_task(row)
@@ -1396,7 +1397,7 @@ def get_unscheduled_tasks(db_path: Path) -> list[dict]:
     """Get all tasks with no plan_date (backlog), with context_subject."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
         ).fetchall()
     return [_row_to_task(r) for r in rows]
@@ -1407,7 +1408,7 @@ def get_all_tasks(db_path: Path) -> list[dict]:
     with get_db(db_path) as conn:
         rows = conn.execute(
             "SELECT uuid, text, status, position, followup_config, description, "
-            "context_subject, plan_date, anchor_id "
+            "context_subject, context_node_id, plan_date, anchor_id "
             "FROM tasks ORDER BY plan_date DESC NULLS LAST, position"
         ).fetchall()
     return [_row_to_task(r, include_schedule=True) for r in rows]

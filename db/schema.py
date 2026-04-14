@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     followup_config TEXT,
     notes TEXT NOT NULL DEFAULT '',
     description TEXT,
-    context_subject TEXT
+    context_subject TEXT,
+    context_node_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_dependencies (
