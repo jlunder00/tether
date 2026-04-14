@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useContextStore } from '../stores/context'
 import type { ContextNode, SectionFileInfo } from '../stores/context'
 import { useMilestoneStore } from '../stores/milestones'
@@ -115,6 +115,16 @@ async function onDrop(evt: DragEvent) {
 }
 
 // --- Actions ---
+
+// Re-fetch children when "Show archived" toggles while this node is expanded
+watch(() => contextStore.showArchived, async () => {
+  if (!expanded.value) return
+  try {
+    await contextStore.fetchChildren(props.node.id)
+  } catch (e) {
+    console.error('showArchived re-fetch error:', e)
+  }
+})
 
 async function toggleExpand() {
   if (expanded.value) {
