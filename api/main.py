@@ -74,6 +74,13 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(nodes_routes.router, prefix="/api")
     app.include_router(settings_routes.router, prefix="/api")
 
+    # --- Premium plugin hook ---
+    try:
+        from tether_premium.register import register_premium_routes
+        register_premium_routes(app)
+    except ImportError:
+        pass
+
     @app.post("/api/notify")
     async def notify():
         await manager.broadcast({"type": "plan_updated"})

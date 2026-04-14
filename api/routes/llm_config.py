@@ -16,10 +16,16 @@ _MODEL_ROLES = [
     "satisfaction_eval", "response_builder", "quick_classifier",
 ]
 
-# v3 role defaults (imported lazily to avoid circular import at module level)
+# Role defaults — try premium first (has full role definitions), fall back to basic
 def _get_default_roles() -> dict:
-    from bot.llm import _DEFAULT_ROLES
-    return _DEFAULT_ROLES
+    try:
+        from tether_premium.bot.router import _DEFAULT_ROLES
+        return _DEFAULT_ROLES
+    except ImportError:
+        return {
+            "main_agent": {"vendor": "anthropic", "model": "claude-sonnet-4-6"},
+            "classifier": {"vendor": "anthropic", "model": "claude-haiku-4-5-20251001"},
+        }
 
 # v3 defaults
 _DEFAULTS = {
