@@ -335,7 +335,19 @@ def remove_dependency(db_path: Path, dep_id: int) -> None:
 
 def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dict:
     """Return {"blocks": [...], "blocked_by": [...]} for an entity.
-    Each item: {"id": dep_id, "type": blocker/blocked type, "entity_id": the other entity's id}"""
+    Each item: {"id": dep_id, "type": blocker/blocked type, "entity_id": the other entity's id, "name": resolved name}"""
+
+    def _resolve_name(conn, etype, eid):
+        if etype == 'task':
+            row = conn.execute("SELECT text FROM tasks WHERE uuid=?", (eid,)).fetchone()
+            return row["text"] if row else None
+        elif etype == 'milestone':
+            row = conn.execute("SELECT name FROM context_nodes WHERE id=?", (eid,)).fetchone()
+            if not row:
+                row = conn.execute("SELECT name FROM milestones WHERE id=?", (eid,)).fetchone()
+            return row["name"] if row else None
+        return None
+
     with get_db(db_path) as conn:
         blocker_rows = conn.execute(
             "SELECT id, blocked_type, blocked_id FROM dependencies WHERE blocker_type=? AND blocker_id=?",
@@ -345,10 +357,12 @@ def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dic
             "SELECT id, blocker_type, blocker_id FROM dependencies WHERE blocked_type=? AND blocked_id=?",
             (entity_type, entity_id),
         ).fetchall()
-    blocks = [{"id": r["id"], "type": r["blocked_type"], "entity_id": r["blocked_id"]}
-              for r in blocker_rows]
-    blocked_by = [{"id": r["id"], "type": r["blocker_type"], "entity_id": r["blocker_id"]}
-                  for r in blocked_rows]
+        blocks = [{"id": r["id"], "type": r["blocked_type"], "entity_id": r["blocked_id"],
+                    "name": _resolve_name(conn, r["blocked_type"], r["blocked_id"])}
+                  for r in blocker_rows]
+        blocked_by = [{"id": r["id"], "type": r["blocker_type"], "entity_id": r["blocker_id"],
+                       "name": _resolve_name(conn, r["blocker_type"], r["blocker_id"])}
+                      for r in blocked_rows]
     return {"blocks": blocks, "blocked_by": blocked_by}
 
 

@@ -462,7 +462,7 @@ onMounted(async () => {
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ depLabel(d.type, d.entity_id) }}</span>
+              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
               <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
               <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>
@@ -477,7 +477,7 @@ onMounted(async () => {
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ depLabel(d.type, d.entity_id) }}</span>
+              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
               <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
               <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>

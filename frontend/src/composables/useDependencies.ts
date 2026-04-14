@@ -5,6 +5,7 @@ export interface Dependency {
   id: number
   type: string      // the OTHER entity's type
   entity_id: string  // the OTHER entity's id
+  name?: string     // resolved human-readable name
 }
 
 export interface Dependencies {
