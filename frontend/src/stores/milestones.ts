@@ -15,6 +15,8 @@ export interface MilestoneTask {
 export interface Milestone {
   id: string
   context_subject: string
+  /** The context_nodes id for this milestone (same as id in the new system) */
+  node_id?: string
   name: string
   description: string | null
   target_date: string | null

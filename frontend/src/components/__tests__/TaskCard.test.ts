@@ -20,6 +20,7 @@ const baseTask: Task = {
   blocks: [],
   blocked_by: [],
   context_subject: null,
+  context_node_id: null,
 }
 
 describe('TaskCard drag behavior', () => {

@@ -12,7 +12,7 @@ function add() {
   emit('update', [
     ...props.tasks,
     { id: '', text: '', description: null, status: 'pending', position: props.tasks.length,
-      followup_config: null, blocks: [], blocked_by: [], context_subject: null },
+      followup_config: null, blocks: [], blocked_by: [], context_subject: null, context_node_id: null },
   ])
 }
 function remove(i: number) {

@@ -17,6 +17,7 @@ export interface Task {
   blocks: string[]
   blocked_by: string[]
   context_subject: string | null
+  context_node_id: string | null
 }
 
 export interface AnchorPlan { tasks: Task[]; notes: string }

@@ -30,13 +30,18 @@ type TaskWithIndex = { task: Task; index: number }
 
 const groupedByContext = computed(() => {
   const byContext: Record<string, {
+    label: string
     milestoneGroups: { milestone: Milestone; tasks: TaskWithIndex[] }[]
     ungrouped: TaskWithIndex[]
   }> = {}
 
   anchorPlan.value.tasks.forEach((task, index) => {
-    const ctx = task.context_subject ?? 'Uncategorized'
-    if (!byContext[ctx]) byContext[ctx] = { milestoneGroups: [], ungrouped: [] }
+    const key = task.context_node_id ?? task.context_subject ?? '__uncategorized__'
+    if (!byContext[key]) {
+      const label = task.context_subject ?? (key === '__uncategorized__' ? 'Uncategorized' : key)
+      byContext[key] = { label, milestoneGroups: [], ungrouped: [] }
+    }
+    const ctx = key
 
     const milestones = milestoneStore.taskMilestones[task.id]
     if (milestones?.length) {
@@ -52,10 +57,10 @@ const groupedByContext = computed(() => {
     }
   })
 
-  return Object.entries(byContext).sort(([a], [b]) => {
-    if (a === 'Uncategorized') return 1
-    if (b === 'Uncategorized') return -1
-    return a.localeCompare(b)
+  return Object.entries(byContext).sort(([, a], [, b]) => {
+    if (a.label === 'Uncategorized') return 1
+    if (b.label === 'Uncategorized') return -1
+    return a.label.localeCompare(b.label)
   })
 })
 
@@ -89,6 +94,7 @@ function onAddNewTask() {
     id: '', text: '', description: null, status: 'pending' as const,
     position: tasks.length, followup_config: null, blocks: [], blocked_by: [],
     context_subject: null,
+    context_node_id: null,
   })
   nextTick(() => {
     const inputs = tasksRef.value?.querySelectorAll('input')
@@ -155,7 +161,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
         </template>
 
         <!-- Context has >1 task — wrap in context GroupContainer -->
-        <GroupContainer v-else :label="ctxName" :collapsible="true" :level="1" class="mb-2">
+        <GroupContainer v-else :label="ctx.label" :collapsible="true" :level="1" class="mb-2">
           <!-- Milestone sub-groups -->
           <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
             <!-- Milestone group has 1 task — show standalone with tags visible -->
