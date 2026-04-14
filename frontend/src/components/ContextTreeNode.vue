@@ -2,8 +2,6 @@
 import { ref, computed, watch } from 'vue'
 import { useContextStore } from '../stores/context'
 import type { ContextNode, SectionFileInfo } from '../stores/context'
-import { useMilestoneStore } from '../stores/milestones'
-import MilestoneDetail from './MilestoneDetail.vue'
 import ContextTreeNode from './ContextTreeNode.vue'
 
 const props = withDefaults(defineProps<{
@@ -14,7 +12,6 @@ const props = withDefaults(defineProps<{
 })
 
 const contextStore = useContextStore()
-const milestoneStore = useMilestoneStore()
 
 // --- Local state (per-instance) ---
 const expanded = ref(false)
@@ -28,9 +25,6 @@ const renameValue = ref('')
 const error = ref<string | null>(null)
 const addingChild = ref(false)
 const newChildName = ref('')
-const expandedMilestones = ref<Set<string>>(new Set())
-const addingMilestone = ref(false)
-const newMilestoneName = ref('')
 const showAddSection = ref(false)
 const newSectionName = ref('')
 const localSectionTypes = ref<string[]>([])
@@ -49,7 +43,6 @@ const hasChildren = computed(() =>
   children.value.length > 0 || props.node.children_count == null || props.node.children_count > 0
 )
 const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details::main`]?.body ?? '')
-const milestones = computed(() => milestoneStore.bySubject[props.node.name] ?? [])
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'bg-white/20', in_progress: 'bg-blue-400',
@@ -77,9 +70,16 @@ const depthStyle = computed(() => ({
   paddingLeft: props.depth * 16 + 'px',
 }))
 
-const cardStyle = computed(() => ({
-  backgroundColor: 'rgba(255,255,255,' + (0.03 + props.depth * 0.01) + ')',
-}))
+const cardStyle = computed(() => {
+  const base: Record<string, string> = {
+    backgroundColor: 'rgba(255,255,255,' + (0.03 + props.depth * 0.01) + ')',
+  }
+  if (props.node.node_type === 'milestone' && props.node.color) {
+    base.borderLeftColor = props.node.color
+    base.borderLeftWidth = '3px'
+  }
+  return base
+})
 
 // --- Drag & Drop ---
 
@@ -348,24 +348,6 @@ async function addChild() {
   }
 }
 
-function toggleMilestone(id: string) {
-  const next = new Set(expandedMilestones.value)
-  if (next.has(id)) next.delete(id); else next.add(id)
-  expandedMilestones.value = next
-}
-
-async function addMilestone() {
-  if (!newMilestoneName.value.trim()) return
-  try {
-    error.value = null
-    await milestoneStore.createMilestone(props.node.name, newMilestoneName.value.trim())
-    newMilestoneName.value = ''
-    addingMilestone.value = false
-  } catch (e) {
-    console.error('addMilestone error:', e)
-    error.value = e instanceof Error ? e.message : 'Failed to add milestone'
-  }
-}
 </script>
 
 <template>
@@ -401,7 +383,30 @@ async function addMilestone() {
               (renames node, {{ children.length }} children unaffected)
             </span>
           </template>
-          <h3 v-else class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-white/40' : ''">{{ node.name }}</h3>
+          <template v-else>
+            <!-- Milestone color dot -->
+            <span v-if="node.node_type === 'milestone'"
+                  class="w-2 h-2 rounded-full shrink-0"
+                  :class="node.color ? '' : (STATUS_COLORS[node.status ?? ''] ?? 'bg-white/20')"
+                  :style="node.color ? { backgroundColor: node.color } : {}" />
+            <h3 class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-white/40' : ''">{{ node.name }}</h3>
+          </template>
+          <!-- Milestone status badge -->
+          <span v-if="node.node_type === 'milestone' && node.status"
+                class="text-[9px] px-1.5 py-0.5 rounded shrink-0"
+                :class="{
+                  'bg-white/10 text-white/50': node.status === 'pending',
+                  'bg-blue-500/20 text-blue-300': node.status === 'in_progress',
+                  'bg-green-500/20 text-green-300': node.status === 'done',
+                  'bg-red-500/20 text-red-300': node.status === 'blocked',
+                }">
+            {{ node.status.replace('_', ' ') }}
+          </span>
+          <!-- Milestone target date -->
+          <span v-if="node.node_type === 'milestone' && node.target_date"
+                class="text-[9px] text-white/40 shrink-0">
+            {{ node.target_date }}
+          </span>
           <span v-if="node.archived" class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400/80 shrink-0">Archived</span>
         </div>
 
@@ -528,36 +533,6 @@ async function addMilestone() {
           </div>
         </div>
       </template>
-
-      <!-- Milestone chips -->
-      <div v-if="milestones.length" class="mt-2 flex flex-wrap gap-1">
-        <button
-          v-for="m in milestones" :key="m.id"
-          @click="toggleMilestone(m.id)"
-          :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-          class="text-xs px-1.5 py-0.5 rounded border flex items-center gap-1"
-          :class="m.color ? 'hover:opacity-80' : 'bg-white/10 hover:bg-white/20 border-transparent'">
-          <span :class="STATUS_COLORS[m.status] ?? 'bg-white/20'"
-                class="w-1.5 h-1.5 rounded-full" />
-          {{ m.name }} {{ m.done_count }}/{{ m.task_count }}
-        </button>
-      </div>
-      <template v-for="m in milestones" :key="'detail-' + m.id">
-        <MilestoneDetail
-          v-if="expandedMilestones.has(m.id)"
-          :milestone="m"
-          @close="toggleMilestone(m.id)" />
-      </template>
-      <div v-if="addingMilestone" class="mt-2 flex gap-2">
-        <input v-model="newMilestoneName" placeholder="Milestone name..."
-               @keydown.enter="addMilestone"
-               class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs" />
-        <button @click="addMilestone" class="text-xs text-white/60 hover:text-white">Add</button>
-        <button @click="addingMilestone = false; newMilestoneName = ''"
-                class="text-xs text-white/40">cancel</button>
-      </div>
-      <button v-else @click="addingMilestone = true"
-              class="mt-1 text-xs text-white/30 hover:text-white/60">+ milestone</button>
 
       <!-- Children (expanded) -->
       <template v-if="expanded">
