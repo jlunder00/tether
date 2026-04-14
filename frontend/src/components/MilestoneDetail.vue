@@ -8,6 +8,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const store = useMilestoneStore()
 
 const editing = ref(false)
+const error = ref<string | null>(null)
 const editName = ref(props.milestone.name)
 const editDesc = ref(props.milestone.description ?? '')
 const editDate = ref(props.milestone.target_date ?? '')
@@ -18,24 +19,36 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 async function save() {
-  await store.patchMilestone(props.milestone.id, {
-    name: editName.value,
-    description: editDesc.value || null,
-    target_date: editDate.value || null,
-  })
-  editing.value = false
+  try {
+    error.value = null
+    await store.patchMilestone(props.milestone.id, {
+      name: editName.value,
+      description: editDesc.value || null,
+      target_date: editDate.value || null,
+    })
+    editing.value = false
+  } catch (e) {
+    console.error('save error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to save milestone'
+  }
 }
 
 async function remove() {
-  if (confirm(`Delete milestone "${props.milestone.name}"?`)) {
+  if (!confirm(`Delete milestone "${props.milestone.name}"?`)) return
+  try {
+    error.value = null
     await store.deleteMilestone(props.milestone.id)
     emit('close')
+  } catch (e) {
+    console.error('remove error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to delete milestone'
   }
 }
 </script>
 
 <template>
   <div class="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3 mt-2">
+    <p v-if="error" class="text-red-400 text-sm">{{ error }}</p>
     <div class="flex items-center gap-2">
       <span :class="STATUS_COLORS[milestone.status]" class="w-2.5 h-2.5 rounded-full flex-shrink-0" />
       <span v-if="!editing" class="font-semibold text-sm flex-1">{{ milestone.name }}</span>

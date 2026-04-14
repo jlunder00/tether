@@ -158,6 +158,22 @@ export const useContextStore = defineStore('context', () => {
     }
   }
 
+  async function moveNode(nodeId: string, newParentId: string | null): Promise<void> {
+    const resp = await api(`/api/nodes/${nodeId}/move`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_parent_id: newParentId }),
+    })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`moveNode: ${resp.status} ${detail}`)
+    }
+    // Update cache: change the node's parent_id
+    if (nodes.value[nodeId]) {
+      nodes.value[nodeId].parent_id = newParentId
+    }
+  }
+
   async function fetchSections(nodeId: string): Promise<NodeSection[]> {
     const resp = await api(`/api/nodes/${nodeId}/sections`)
     if (!resp.ok) {
@@ -218,6 +234,7 @@ export const useContextStore = defineStore('context', () => {
     createNode,
     patchNode,
     deleteNode,
+    moveNode,
 
     // Sections
     fetchSections,
