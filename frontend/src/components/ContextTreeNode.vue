@@ -17,7 +17,8 @@ const milestoneStore = useMilestoneStore()
 
 // --- Local state (per-instance) ---
 const expanded = ref(false)
-const editing = ref(false)
+const activeTab = ref<string>('details')
+const editingSection = ref<string | null>(null)
 const editBody = ref('')
 const renaming = ref(false)
 const renameValue = ref('')
@@ -27,12 +28,27 @@ const newChildName = ref('')
 const expandedMilestones = ref<Set<string>>(new Set())
 const addingMilestone = ref(false)
 const newMilestoneName = ref('')
+const showAddSection = ref(false)
+const newSectionName = ref('')
+const localSectionTypes = ref<string[]>([])
 
 // --- Computed ---
 const children = computed(() => contextStore.childrenOf(props.node.id))
 const hasChildren = computed(() => children.value.length > 0 || (props.node.children_count ?? 0) > 0)
 const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details`]?.body ?? '')
 const milestones = computed(() => milestoneStore.bySubject[props.node.name] ?? [])
+
+const allSectionTypes = computed(() => {
+  const defaults = ['details', 'plans', 'notes']
+  const fromNode = props.node.section_types ?? []
+  const local = localSectionTypes.value
+  return [...new Set([...defaults, ...fromNode, ...local])]
+})
+
+const activeBody = computed(() => {
+  const key = `${props.node.id}::${activeTab.value}`
+  return contextStore.sectionCache[key]?.body ?? ''
+})
 
 const depthStyle = computed(() => ({
   paddingLeft: props.depth * 16 + 'px',
@@ -54,6 +70,8 @@ async function toggleExpand() {
     error.value = null
     const fetched = await contextStore.fetchChildren(props.node.id)
     await Promise.allSettled(fetched.map(c => contextStore.fetchSection(c.id, 'details')))
+    // Fetch the active tab's section for this node
+    await contextStore.fetchSection(props.node.id, activeTab.value)
   } catch (e) {
     expanded.value = false
     console.error('toggleExpand error:', e)
@@ -61,10 +79,24 @@ async function toggleExpand() {
   }
 }
 
+async function switchTab(sectionType: string) {
+  activeTab.value = sectionType
+  editingSection.value = null
+  const key = `${props.node.id}::${sectionType}`
+  if (!contextStore.sectionCache[key]) {
+    try {
+      await contextStore.fetchSection(props.node.id, sectionType)
+    } catch (e) {
+      console.error('switchTab fetch error:', e)
+      error.value = e instanceof Error ? e.message : 'Failed to load section'
+    }
+  }
+}
+
 async function startEdit() {
-  editing.value = true
+  editingSection.value = activeTab.value
   try {
-    const section = await contextStore.fetchSection(props.node.id, 'details')
+    const section = await contextStore.fetchSection(props.node.id, activeTab.value)
     editBody.value = section?.body ?? ''
   } catch (e) {
     console.error('startEdit error:', e)
@@ -73,13 +105,37 @@ async function startEdit() {
 }
 
 async function saveEdit() {
+  if (!editingSection.value) return
   try {
     error.value = null
-    await contextStore.saveSection(props.node.id, 'details', editBody.value)
-    editing.value = false
+    await contextStore.saveSection(props.node.id, editingSection.value, editBody.value)
+    editingSection.value = null
   } catch (e) {
     console.error('saveEdit error:', e)
     error.value = e instanceof Error ? e.message : 'Failed to save'
+  }
+}
+
+async function addSection() {
+  const name = newSectionName.value.trim().toLowerCase()
+  if (!name) return
+  if (allSectionTypes.value.includes(name)) {
+    // Section type already exists, just switch to it
+    showAddSection.value = false
+    newSectionName.value = ''
+    await switchTab(name)
+    return
+  }
+  try {
+    error.value = null
+    await contextStore.saveSection(props.node.id, name, '')
+    localSectionTypes.value.push(name)
+    showAddSection.value = false
+    newSectionName.value = ''
+    activeTab.value = name
+  } catch (e) {
+    console.error('addSection error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to add section'
   }
 }
 
@@ -183,8 +239,6 @@ async function addMilestone() {
         </div>
 
         <div class="flex gap-2 shrink-0">
-          <button @click="startEdit"
-                  class="text-xs text-white/50 hover:text-white">Edit</button>
           <template v-if="renaming">
             <button @click="saveRename" class="text-xs text-green-400/70 hover:text-green-400">Save</button>
             <button @click="renaming = false" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
@@ -196,17 +250,51 @@ async function addMilestone() {
         </div>
       </div>
 
-      <!-- Edit mode -->
-      <div v-if="editing">
-        <textarea v-model="editBody" rows="4"
-                  class="w-full bg-transparent border border-white/20 rounded p-2 text-sm outline-none focus:border-white/50 resize-none" />
-        <div class="flex gap-2 mt-2">
-          <button @click="saveEdit" class="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded">Save</button>
-          <button @click="editing = false" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+      <!-- Collapsed: show details preview -->
+      <p v-if="!expanded" class="text-xs text-white/50 line-clamp-2">{{ nodeBody || '(empty)' }}</p>
+
+      <!-- Expanded: section tabs + content -->
+      <template v-if="expanded">
+        <!-- Tab bar -->
+        <div class="flex gap-1 mt-1 flex-wrap items-center">
+          <button v-for="st in allSectionTypes" :key="st"
+                  @click.stop="switchTab(st)"
+                  class="text-[10px] px-2 py-0.5 rounded-full"
+                  :class="activeTab === st ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40 hover:bg-white/20'">
+            {{ st }}
+          </button>
+          <div v-if="showAddSection" class="flex items-center gap-1">
+            <input v-model="newSectionName" placeholder="section name..."
+                   @keydown.enter="addSection"
+                   @keydown.escape="showAddSection = false; newSectionName = ''"
+                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-24" />
+            <button @click="addSection" class="text-[10px] text-white/60 hover:text-white">add</button>
+            <button @click="showAddSection = false; newSectionName = ''"
+                    class="text-[10px] text-white/40">cancel</button>
+          </div>
+          <button v-else @click.stop="showAddSection = true"
+                  class="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-white/30 hover:text-white/50">
+            +
+          </button>
         </div>
-      </div>
-      <!-- Body display -->
-      <p v-else class="text-xs text-white/50 line-clamp-2">{{ nodeBody || '(empty)' }}</p>
+
+        <!-- Active tab content -->
+        <div class="mt-2">
+          <div v-if="editingSection === activeTab">
+            <textarea v-model="editBody" rows="4"
+                      class="w-full bg-transparent border border-white/20 rounded p-2 text-sm outline-none focus:border-white/50 resize-none" />
+            <div class="flex gap-2 mt-2">
+              <button @click="saveEdit" class="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded">Save</button>
+              <button @click="editingSection = null" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+            </div>
+          </div>
+          <div v-else>
+            <p class="text-xs text-white/50 whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
+            <button @click="startEdit"
+                    class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}</button>
+          </div>
+        </div>
+      </template>
 
       <!-- Milestone chips -->
       <div v-if="milestones.length" class="mt-2 flex flex-wrap gap-1">
