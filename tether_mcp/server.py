@@ -500,6 +500,125 @@ async def session_done(summary: str = "") -> str:
     return f"Session done acknowledged. Summary: {summary or '(none provided)'}"
 
 
+# --- Context tree tools ---
+
+# Tree browsing
+@mcp.tool()
+def list_context_nodes(parent_id: str = "") -> list[dict]:
+    """List context nodes. If parent_id is empty, returns root nodes. Otherwise returns children of the given node."""
+    from db.queries import get_children
+    pid = parent_id if parent_id else None
+    return get_children(_db(), pid)
+
+
+@mcp.tool()
+def get_context_node(node_id: str) -> dict:
+    """Get a single context node by ID, including section types and children count."""
+    from db.queries import get_node
+    result = get_node(_db(), node_id)
+    if result is None:
+        return {"error": f"Node {node_id} not found"}
+    return result
+
+
+@mcp.tool()
+def get_node_by_path(path: str) -> dict:
+    """Resolve a slash-separated path like 'School/ML/Project' to a node."""
+    from db.queries import get_node_by_path as _get
+    result = _get(_db(), path)
+    if result is None:
+        return {"error": f"Path '{path}' not found"}
+    return result
+
+
+# Section-level read/write (token-efficient)
+@mcp.tool()
+def list_node_sections(node_id: str) -> list[dict]:
+    """List section types and their sizes for a node, WITHOUT returning full body content. Use read_section to get specific content."""
+    from db.queries import get_sections
+    sections = get_sections(_db(), node_id)
+    return [{"section_type": s["section_type"], "size": len(s["body"]), "updated_at": s["updated_at"]} for s in sections]
+
+
+@mcp.tool()
+def read_section(node_id: str, section_type: str) -> dict:
+    """Read the full body of a specific section of a node."""
+    from db.queries import get_section
+    result = get_section(_db(), node_id, section_type)
+    if result is None:
+        return {"error": f"Section '{section_type}' not found on node {node_id}"}
+    return result
+
+
+@mcp.tool()
+def write_section(node_id: str, section_type: str, body: str) -> dict:
+    """Write (create or replace) a section on a node."""
+    from db.queries import upsert_section
+    return upsert_section(_db(), node_id, section_type, body)
+
+
+@mcp.tool()
+def append_to_section(node_id: str, section_type: str, content: str) -> dict:
+    """Append text to a section with a double-newline separator. Creates the section if it doesn't exist."""
+    from db.queries import append_section
+    return append_section(_db(), node_id, section_type, content)
+
+
+@mcp.tool()
+def search_sections(query: str, node_id: str = "") -> list[dict]:
+    """Full-text search across all node sections. Returns matching snippets. Optionally scope to a node's subtree."""
+    from db.queries import search_sections as _search
+    nid = node_id if node_id else None
+    return _search(_db(), query, nid)
+
+
+# Node management
+@mcp.tool()
+def create_context_node(parent_id: str = "", name: str = "", node_type: str = "context",
+                        target_date: str = "", color: str = "") -> dict:
+    """Create a new context node or milestone. parent_id empty = root node."""
+    from db.queries import create_node
+    pid = parent_id if parent_id else None
+    kwargs = {}
+    if target_date: kwargs["target_date"] = target_date
+    if color: kwargs["color"] = color
+    return create_node(_db(), pid, name, node_type, **kwargs)
+
+
+@mcp.tool()
+def archive_context_node(node_id: str) -> dict:
+    """Archive a node (hides from default views, saves tokens)."""
+    from db.queries import archive_node
+    archive_node(_db(), node_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def move_context_node(node_id: str, new_parent_id: str = "") -> dict:
+    """Move a node to a new parent. Empty new_parent_id = move to root."""
+    from db.queries import move_node
+    pid = new_parent_id if new_parent_id else None
+    move_node(_db(), node_id, pid)
+    return {"ok": True}
+
+
+# Task linking (new system)
+@mcp.tool()
+def link_task_to_node(task_id: str, node_id: str) -> dict:
+    """Link a task to a context node or milestone."""
+    from db.queries import link_task_to_node as _link
+    _link(_db(), node_id, task_id)
+    return {"ok": True}
+
+
+@mcp.tool()
+def unlink_task_from_node(task_id: str, node_id: str) -> dict:
+    """Unlink a task from a context node or milestone."""
+    from db.queries import unlink_task_from_node as _unlink
+    _unlink(_db(), node_id, task_id)
+    return {"ok": True}
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
