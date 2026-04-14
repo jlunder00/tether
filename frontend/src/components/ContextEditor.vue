@@ -2,10 +2,12 @@
 import { ref, onMounted } from 'vue'
 import { useContextStore } from '../stores/context'
 import { useMilestoneStore } from '../stores/milestones'
+import { useAutoScrollDrag } from '../composables/useAutoScrollDrag'
 import ContextTreeNode from './ContextTreeNode.vue'
 
 const contextStore = useContextStore()
 const milestoneStore = useMilestoneStore()
+const { onDragOver: autoScrollDragOver, cleanup: autoScrollCleanup } = useAutoScrollDrag()
 const error = ref<string | null>(null)
 const newName = ref('')
 const rootDropOver = ref(false)
@@ -68,7 +70,9 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-gray-900 text-white p-6"
+       @dragover="autoScrollDragOver"
+       @drop="autoScrollCleanup">
     <h2 class="text-lg font-semibold mb-4">Context</h2>
     <p v-if="error" class="text-red-400 text-sm mb-2">{{ error }}</p>
 
