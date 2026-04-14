@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useContextStore } from '../stores/context'
 import type { ContextNode, SectionFileInfo } from '../stores/context'
+import { api } from '../lib/api'
 import ContextTreeNode from './ContextTreeNode.vue'
+import TaskCard from './TaskCard.vue'
+import GroupContainer from './GroupContainer.vue'
 
 const props = withDefaults(defineProps<{
   node: ContextNode
@@ -12,6 +16,7 @@ const props = withDefaults(defineProps<{
 })
 
 const contextStore = useContextStore()
+const router = useRouter()
 
 // --- Local state (per-instance) ---
 const expanded = ref(false)
@@ -36,6 +41,19 @@ const editingDescription = ref(false)
 const descriptionDraft = ref('')
 const addingFile = ref(false)
 const newFileName = ref('')
+const nodeTasks = ref<any[]>([])
+const loadingTasks = ref(false)
+
+// --- Tasks tab constants ---
+const TASK_STATUS_ORDER = ['in_progress', 'pending', 'blocked', 'done', 'skipped']
+const TASK_STATUS_LABELS: Record<string, string> = {
+  in_progress: 'In Progress', pending: 'Pending', blocked: 'Blocked',
+  done: 'Done', skipped: 'Skipped',
+}
+const TASK_STATUS_COLORS: Record<string, string> = {
+  in_progress: '#f59e0b', pending: '#3b82f6', blocked: '#ef4444',
+  done: '#22c55e', skipped: '#94a3b8',
+}
 
 // --- Computed ---
 const children = computed(() => contextStore.childrenOf(props.node.id))
@@ -65,6 +83,23 @@ const collapsedPreview = computed(() => {
   if (props.node.description) return props.node.description
   return nodeBody.value || '(empty)'
 })
+
+const taskGroups = computed(() => {
+  return TASK_STATUS_ORDER
+    .map(status => ({
+      status,
+      label: TASK_STATUS_LABELS[status],
+      color: TASK_STATUS_COLORS[status],
+      tasks: nodeTasks.value.filter(t => t.status === status),
+    }))
+    .filter(g => g.tasks.length > 0)
+})
+
+const tasksDoneCount = computed(() => nodeTasks.value.filter(t => t.status === 'done').length)
+const tasksTotalCount = computed(() => nodeTasks.value.length)
+const tasksProgressPct = computed(() =>
+  tasksTotalCount.value > 0 ? Math.round((tasksDoneCount.value / tasksTotalCount.value) * 100) : 0
+)
 
 const depthStyle = computed(() => ({
   paddingLeft: props.depth * 16 + 'px',
@@ -137,7 +172,11 @@ async function toggleExpand() {
     const fetched = await contextStore.fetchChildren(props.node.id)
     await Promise.allSettled(fetched.map(c => contextStore.fetchSection(c.id, 'details', 'main')))
     // Fetch file list for the active tab and load the active file
-    await loadTabFiles(activeTab.value)
+    if (activeTab.value === 'tasks') {
+      await fetchNodeTasks()
+    } else {
+      await loadTabFiles(activeTab.value)
+    }
   } catch (e) {
     expanded.value = false
     console.error('toggleExpand error:', e)
@@ -169,12 +208,35 @@ async function loadTabFiles(sectionType: string) {
   }
 }
 
+async function fetchNodeTasks() {
+  try {
+    loadingTasks.value = true
+    error.value = null
+    const resp = await api(`/api/nodes/${props.node.id}/tasks`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchNodeTasks: ${resp.status} ${detail}`)
+    }
+    nodeTasks.value = await resp.json()
+  } catch (e) {
+    console.error('fetchNodeTasks error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to fetch tasks'
+    nodeTasks.value = []
+  } finally {
+    loadingTasks.value = false
+  }
+}
+
 async function switchTab(sectionType: string) {
   activeTab.value = sectionType
   editingSection.value = null
   activeFileName.value = 'main'
   addingFile.value = false
-  await loadTabFiles(sectionType)
+  if (sectionType === 'tasks') {
+    await fetchNodeTasks()
+  } else {
+    await loadTabFiles(sectionType)
+  }
 }
 
 async function selectFile(fileName: string) {
@@ -411,6 +473,9 @@ async function addChild() {
         </div>
 
         <div class="flex gap-2 shrink-0">
+          <button v-if="node.node_type === 'milestone'"
+                  @click.stop="router.push(`/context/milestone/${node.id}`)"
+                  class="text-xs text-blue-400/60 hover:text-blue-400">Detail</button>
           <template v-if="renaming">
             <button @click="saveRename" class="text-xs text-green-400/70 hover:text-green-400">Save</button>
             <button @click="renaming = false" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
@@ -459,6 +524,11 @@ async function addChild() {
                   :class="activeTab === st ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40 hover:bg-white/20'">
             {{ st }}
           </button>
+          <button @click.stop="switchTab('tasks')"
+                  class="text-[10px] px-2 py-0.5 rounded-full"
+                  :class="activeTab === 'tasks' ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40 hover:bg-white/20'">
+            tasks
+          </button>
           <div v-if="showAddSection" class="flex items-center gap-1">
             <input v-model="newSectionName" placeholder="section name..."
                    @keydown.enter="addSection"
@@ -474,62 +544,103 @@ async function addChild() {
           </button>
         </div>
 
-        <!-- File list within active tab -->
-        <div v-if="sectionFiles.length > 1 || addingFile" class="mt-1 flex gap-1 flex-wrap items-center">
-          <button v-for="f in sectionFiles" :key="f.name"
-                  @click.stop="selectFile(f.name)"
-                  class="text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 group"
-                  :class="activeFileName === f.name
-                    ? 'border-blue-400/40 bg-blue-500/15 text-blue-200'
-                    : 'border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'">
-            {{ f.name }}
-            <span class="text-white/20 text-[8px]">{{ f.size }}c</span>
-            <span v-if="sectionFiles.length > 1"
-                  @click.stop="deleteFile(f.name)"
-                  class="text-red-400/0 group-hover:text-red-400/50 hover:!text-red-400 cursor-pointer ml-0.5"
-                  title="Delete file">&times;</span>
-          </button>
-          <div v-if="addingFile" class="flex items-center gap-1">
-            <input v-model="newFileName" placeholder="file name..."
-                   @keydown.enter="addFile"
-                   @keydown.escape="addingFile = false; newFileName = ''"
-                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
-            <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
-            <button @click="addingFile = false; newFileName = ''"
-                    class="text-[10px] text-white/40">cancel</button>
+        <!-- Section file list + content (hidden when tasks tab active) -->
+        <template v-if="activeTab !== 'tasks'">
+          <!-- File list within active tab -->
+          <div v-if="sectionFiles.length > 1 || addingFile" class="mt-1 flex gap-1 flex-wrap items-center">
+            <button v-for="f in sectionFiles" :key="f.name"
+                    @click.stop="selectFile(f.name)"
+                    class="text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 group"
+                    :class="activeFileName === f.name
+                      ? 'border-blue-400/40 bg-blue-500/15 text-blue-200'
+                      : 'border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'">
+              {{ f.name }}
+              <span class="text-white/20 text-[8px]">{{ f.size }}c</span>
+              <span v-if="sectionFiles.length > 1"
+                    @click.stop="deleteFile(f.name)"
+                    class="text-red-400/0 group-hover:text-red-400/50 hover:!text-red-400 cursor-pointer ml-0.5"
+                    title="Delete file">&times;</span>
+            </button>
+            <div v-if="addingFile" class="flex items-center gap-1">
+              <input v-model="newFileName" placeholder="file name..."
+                     @keydown.enter="addFile"
+                     @keydown.escape="addingFile = false; newFileName = ''"
+                     class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
+              <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+              <button @click="addingFile = false; newFileName = ''"
+                      class="text-[10px] text-white/40">cancel</button>
+            </div>
+            <button v-else @click.stop="addingFile = true"
+                    class="text-[10px] px-1 py-0.5 text-white/25 hover:text-white/50">+ file</button>
           </div>
-          <button v-else @click.stop="addingFile = true"
-                  class="text-[10px] px-1 py-0.5 text-white/25 hover:text-white/50">+ file</button>
-        </div>
-        <!-- If only one file (or none), just show a small add-file button -->
-        <div v-else class="mt-1">
-          <div v-if="addingFile" class="flex items-center gap-1">
-            <input v-model="newFileName" placeholder="file name..."
-                   @keydown.enter="addFile"
-                   @keydown.escape="addingFile = false; newFileName = ''"
-                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
-            <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
-            <button @click="addingFile = false; newFileName = ''"
-                    class="text-[10px] text-white/40">cancel</button>
+          <!-- If only one file (or none), just show a small add-file button -->
+          <div v-else class="mt-1">
+            <div v-if="addingFile" class="flex items-center gap-1">
+              <input v-model="newFileName" placeholder="file name..."
+                     @keydown.enter="addFile"
+                     @keydown.escape="addingFile = false; newFileName = ''"
+                     class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
+              <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+              <button @click="addingFile = false; newFileName = ''"
+                      class="text-[10px] text-white/40">cancel</button>
+            </div>
+            <button v-else @click.stop="addingFile = true"
+                    class="text-[10px] text-white/25 hover:text-white/50">+ file</button>
           </div>
-          <button v-else @click.stop="addingFile = true"
-                  class="text-[10px] text-white/25 hover:text-white/50">+ file</button>
-        </div>
 
-        <!-- Active tab content -->
-        <div class="mt-2">
-          <div v-if="editingSection === activeTab">
-            <textarea v-model="editBody" rows="4"
-                      class="w-full bg-transparent border border-white/20 rounded p-2 text-sm outline-none focus:border-white/50 resize-none" />
-            <div class="flex gap-2 mt-2">
-              <button @click="saveEdit" class="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded">Save</button>
-              <button @click="editingSection = null" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+          <!-- Active tab content -->
+          <div class="mt-2">
+            <div v-if="editingSection === activeTab">
+              <textarea v-model="editBody" rows="4"
+                        class="w-full bg-transparent border border-white/20 rounded p-2 text-sm outline-none focus:border-white/50 resize-none" />
+              <div class="flex gap-2 mt-2">
+                <button @click="saveEdit" class="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded">Save</button>
+                <button @click="editingSection = null" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+              </div>
+            </div>
+            <div v-else>
+              <p class="text-xs text-white/50 whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
+              <button @click="startEdit"
+                      class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}/{{ activeFileName }}</button>
             </div>
           </div>
-          <div v-else>
-            <p class="text-xs text-white/50 whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
-            <button @click="startEdit"
-                    class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}/{{ activeFileName }}</button>
+        </template>
+
+        <!-- Tasks tab content -->
+        <div v-else class="mt-2">
+          <!-- Milestone progress bar -->
+          <div v-if="node.node_type === 'milestone' && tasksTotalCount > 0" class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[10px] text-white/50">Progress</span>
+              <span class="text-[10px] text-white/50">{{ tasksDoneCount }}/{{ tasksTotalCount }} ({{ tasksProgressPct }}%)</span>
+            </div>
+            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div class="h-full bg-green-500 rounded-full transition-all"
+                   :style="{ width: tasksProgressPct + '%' }" />
+            </div>
+          </div>
+
+          <div v-if="loadingTasks" class="text-xs text-white/40">Loading tasks...</div>
+          <div v-else-if="nodeTasks.length === 0" class="text-xs text-white/40">(no linked tasks)</div>
+          <div v-else class="flex flex-col gap-2">
+            <GroupContainer
+              v-for="group in taskGroups"
+              :key="group.status"
+              :label="`${group.label} (${group.tasks.length})`"
+              :color="group.color"
+              :level="1"
+              :collapsible="true">
+              <div class="flex flex-col gap-1.5">
+                <TaskCard
+                  v-for="t in group.tasks"
+                  :key="t.id"
+                  :task="t"
+                  :compact="true"
+                  :editable="false"
+                  :showRemove="false"
+                  :hideTags="false" />
+              </div>
+            </GroupContainer>
           </div>
         </div>
       </template>
