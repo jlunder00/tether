@@ -215,6 +215,7 @@ CREATE TABLE IF NOT EXISTS context_nodes (
     parent_id TEXT REFERENCES context_nodes(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     node_type TEXT NOT NULL DEFAULT 'context',
+    description TEXT,
     archived INTEGER NOT NULL DEFAULT 0,
     target_date TEXT,
     status TEXT DEFAULT 'pending',
@@ -229,9 +230,11 @@ CREATE TABLE IF NOT EXISTS node_sections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     node_id TEXT NOT NULL REFERENCES context_nodes(id) ON DELETE CASCADE,
     section_type TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT 'main',
     body TEXT NOT NULL DEFAULT '',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(node_id, section_type)
+    position INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(node_id, section_type, name)
 );
 
 CREATE TABLE IF NOT EXISTS node_tasks (
