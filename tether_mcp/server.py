@@ -654,6 +654,16 @@ def unlink_task_from_node(task_id: str, node_id: str) -> dict:
     return {"ok": True}
 
 
+# --- Premium plugin hook ---
+# If tether-premium is installed, register additional MCP tools (mega-tools,
+# scheduling, context ops). These augment the basic tools above.
+try:
+    from tether_premium.register import register_mcp_tools
+    register_mcp_tools(mcp)
+except ImportError:
+    pass
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()

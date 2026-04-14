@@ -1071,6 +1071,17 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
 
     # --- v3 SDK path (if enabled) ---
     if _is_v3_enabled():
+        # Premium plugin hook — sessions, LLM router, role dispatch
+        try:
+            from tether_premium.register import get_premium_handler
+            final = get_premium_handler()(text, db_path, anchors, current_anchor)
+            send_fn(final)
+            insert_conversation_turn(db_path, "user", text)
+            insert_conversation_turn(db_path, "assistant", final)
+            return
+        except (ImportError, NotImplementedError):
+            pass  # Premium not installed or not yet wired
+
         try:
             final = _handle_v3_session(text, db_path, anchors, current_anchor)
             send_fn(final)
