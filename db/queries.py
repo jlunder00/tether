@@ -1747,3 +1747,95 @@ def update_kanban_column(db_path: Path, column_id: str, fields: dict) -> dict | 
 def delete_kanban_column(db_path: Path, column_id: str) -> None:
     with get_db(db_path) as conn:
         conn.execute("DELETE FROM kanban_columns WHERE id=?", (column_id,))
+
+
+# ---------------------------------------------------------------------------
+# User settings (user_settings table)
+# ---------------------------------------------------------------------------
+
+
+def get_user_setting(db_path: Path, user_id: str, key: str) -> str | None:
+    """Get a single user setting value, or None if not set."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+            (user_id, key),
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def get_all_user_settings(db_path: Path, user_id: str) -> dict[str, str]:
+    """Get all settings for a user as a {key: value} dict."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM user_settings WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def set_user_setting(db_path: Path, user_id: str, key: str, value: str) -> None:
+    """Upsert a user setting."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO user_settings (user_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value",
+            (user_id, key, value),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Auto-archive query
+# ---------------------------------------------------------------------------
+
+
+def get_auto_archivable_nodes(
+    db_path: Path,
+    days_completed: int | None = None,
+    days_inactive: int | None = None,
+) -> list[dict]:
+    """Find non-archived context nodes that match auto-archive criteria.
+
+    - days_completed: all linked tasks are done AND the node's updated_at
+      is more than X days ago (proxy for completion time since tasks lack
+      a completed_at timestamp).
+    - days_inactive: node's updated_at is more than X days ago.
+
+    Returns the union of both criteria (a node matching either is included).
+    """
+    if days_completed is None and days_inactive is None:
+        return []
+
+    results: dict[str, dict] = {}
+
+    with get_db(db_path) as conn:
+        if days_inactive is not None:
+            rows = conn.execute(
+                """SELECT * FROM context_nodes
+                   WHERE archived = 0
+                     AND updated_at <= datetime('now', ?)""",
+                (f"-{days_inactive} days",),
+            ).fetchall()
+            for r in rows:
+                results[r["id"]] = dict(r)
+
+        if days_completed is not None:
+            # Nodes where: (a) at least one linked task exists,
+            # (b) ALL linked tasks are done, and
+            # (c) updated_at is old enough.
+            rows = conn.execute(
+                """SELECT cn.*
+                   FROM context_nodes cn
+                   JOIN node_tasks nt ON nt.node_id = cn.id
+                   JOIN tasks t ON t.uuid = nt.task_id
+                   WHERE cn.archived = 0
+                     AND cn.updated_at <= datetime('now', ?)
+                   GROUP BY cn.id
+                   HAVING COUNT(t.uuid) > 0
+                      AND COUNT(t.uuid) = SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END)""",
+                (f"-{days_completed} days",),
+            ).fetchall()
+            for r in rows:
+                results[r["id"]] = dict(r)
+
+    return list(results.values())

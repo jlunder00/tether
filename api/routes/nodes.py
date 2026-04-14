@@ -9,6 +9,8 @@ from db.queries import (
     list_section_files, create_section_file, rename_section_file, reorder_section_files,
     search_sections,
     link_task_to_node, unlink_task_from_node, get_node_tasks,
+    get_auto_archivable_nodes, archive_node,
+    get_user_setting,
 )
 from api.ws import manager
 from api.auth import auth_dependency
@@ -65,6 +67,39 @@ class ReorderSectionFilesBody(BaseModel):
 
 class MoveNodeBody(BaseModel):
     new_parent_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Auto-archive
+# ---------------------------------------------------------------------------
+
+@router.post("/nodes/auto-archive")
+async def auto_archive_nodes(
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Run auto-archive check using the user's saved rules and archive matching nodes."""
+    db = request.state.db_path
+    uid = request.state.user_id
+
+    raw_completed = get_user_setting(db, uid, "auto_archive_days_completed")
+    raw_inactive = get_user_setting(db, uid, "auto_archive_days_inactive")
+
+    days_completed = int(raw_completed) if raw_completed else None
+    days_inactive = int(raw_inactive) if raw_inactive else None
+
+    nodes = get_auto_archivable_nodes(db, days_completed=days_completed, days_inactive=days_inactive)
+
+    for n in nodes:
+        archive_node(db, n["id"])
+
+    if nodes:
+        await manager.broadcast({"type": "nodes_updated"}, uid)
+
+    return {
+        "archived_count": len(nodes),
+        "archived_nodes": [{"id": n["id"], "name": n["name"]} for n in nodes],
+    }
 
 
 # ---------------------------------------------------------------------------
