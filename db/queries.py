@@ -1137,12 +1137,17 @@ def upsert_section(db_path: Path, node_id: str, section_type: str, body: str, na
     """Insert or update a section. Also update node's updated_at."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
+        next_pos = conn.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM node_sections "
+            "WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchone()[0]
         conn.execute(
-            """INSERT INTO node_sections (node_id, section_type, name, body, updated_at)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO node_sections (node_id, section_type, name, body, position, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(node_id, section_type, name) DO UPDATE SET
                    body = excluded.body, updated_at = excluded.updated_at""",
-            (node_id, section_type, name, body, now),
+            (node_id, section_type, name, body, next_pos, now),
         )
         conn.execute(
             "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
@@ -1213,14 +1218,17 @@ def create_section_file(db_path: Path, node_id: str, section_type: str, name: st
 
 
 def rename_section_file(db_path: Path, node_id: str, section_type: str, old_name: str, new_name: str) -> dict:
-    """Rename a section file. Raises ValueError if old_name not found."""
+    """Rename a section file. Raises ValueError if old_name not found or new_name already exists."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
-        cur = conn.execute(
-            """UPDATE node_sections SET name = ?, updated_at = ?
-               WHERE node_id = ? AND section_type = ? AND name = ?""",
-            (new_name, now, node_id, section_type, old_name),
-        )
+        try:
+            cur = conn.execute(
+                """UPDATE node_sections SET name = ?, updated_at = ?
+                   WHERE node_id = ? AND section_type = ? AND name = ?""",
+                (new_name, now, node_id, section_type, old_name),
+            )
+        except sqlite3.IntegrityError:
+            raise ValueError(f"Section file '{new_name}' already exists in {section_type}")
         if cur.rowcount == 0:
             raise ValueError(f"Section file '{old_name}' not found in {section_type}")
         conn.execute(
@@ -1231,9 +1239,22 @@ def rename_section_file(db_path: Path, node_id: str, section_type: str, old_name
 
 
 def reorder_section_files(db_path: Path, node_id: str, section_type: str, name_order: list[str]) -> None:
-    """Reorder files by updating position values based on list order."""
+    """Reorder files by updating position values based on list order.
+    Raises ValueError if name_order contains unknown names or omits existing files."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with get_db(db_path) as conn:
+        existing = conn.execute(
+            "SELECT name FROM node_sections WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchall()
+        existing_names = {r["name"] for r in existing}
+        order_set = set(name_order)
+        unknown = order_set - existing_names
+        if unknown:
+            raise ValueError(f"Names not found in {section_type}: {unknown}")
+        missing = existing_names - order_set
+        if missing:
+            raise ValueError(f"Existing files omitted from ordering: {missing}")
         for position, name in enumerate(name_order):
             conn.execute(
                 """UPDATE node_sections SET position = ?, updated_at = ?
