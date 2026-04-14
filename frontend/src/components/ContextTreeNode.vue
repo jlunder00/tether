@@ -32,6 +32,10 @@ const newMilestoneName = ref('')
 const showAddSection = ref(false)
 const newSectionName = ref('')
 const localSectionTypes = ref<string[]>([])
+const dragOver = ref(false)
+const newChildType = ref<'context' | 'milestone'>('context')
+const newChildTargetDate = ref('')
+const newChildColor = ref('#3b82f6')
 
 // --- Computed ---
 const children = computed(() => contextStore.childrenOf(props.node.id))
@@ -65,6 +69,39 @@ const depthStyle = computed(() => ({
 const cardStyle = computed(() => ({
   backgroundColor: 'rgba(255,255,255,' + (0.03 + props.depth * 0.01) + ')',
 }))
+
+// --- Drag & Drop ---
+
+function onDragStart(evt: DragEvent) {
+  evt.dataTransfer!.effectAllowed = 'move'
+  evt.dataTransfer!.setData('text/plain', JSON.stringify({ nodeId: props.node.id }))
+}
+
+function onDragOver(evt: DragEvent) {
+  evt.preventDefault()
+  evt.dataTransfer!.dropEffect = 'move'
+  dragOver.value = true
+}
+
+function onDragLeave() {
+  dragOver.value = false
+}
+
+async function onDrop(evt: DragEvent) {
+  evt.preventDefault()
+  evt.stopPropagation()
+  dragOver.value = false
+  const raw = evt.dataTransfer?.getData('text/plain')
+  if (!raw) return
+  try {
+    const { nodeId } = JSON.parse(raw)
+    if (!nodeId || nodeId === props.node.id) return
+    await contextStore.moveNode(nodeId, props.node.id)
+  } catch (e) {
+    console.error('Drop failed:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to move node'
+  }
+}
 
 // --- Actions ---
 
@@ -187,8 +224,16 @@ async function addChild() {
   if (!newChildName.value.trim()) return
   try {
     error.value = null
-    await contextStore.createNode(props.node.id, newChildName.value.trim())
+    const opts: { target_date?: string; color?: string } = {}
+    if (newChildType.value === 'milestone') {
+      if (newChildTargetDate.value) opts.target_date = newChildTargetDate.value
+      if (newChildColor.value) opts.color = newChildColor.value
+    }
+    await contextStore.createNode(props.node.id, newChildName.value.trim(), newChildType.value, opts)
     newChildName.value = ''
+    newChildType.value = 'context'
+    newChildTargetDate.value = ''
+    newChildColor.value = '#3b82f6'
     addingChild.value = false
     if (!expanded.value) expanded.value = true
   } catch (e) {
@@ -219,7 +264,14 @@ async function addMilestone() {
 
 <template>
   <div :style="depthStyle">
-    <div class="border border-white/10 rounded-xl p-4" :style="cardStyle">
+    <div class="border border-white/10 rounded-xl p-4 transition-shadow"
+         :class="dragOver ? 'ring-2 ring-blue-400/50' : ''"
+         :style="cardStyle"
+         :draggable="true"
+         @dragstart.stop="onDragStart"
+         @dragover="onDragOver"
+         @dragleave="onDragLeave"
+         @drop="onDrop">
       <!-- Error -->
       <p v-if="error" class="text-red-400 text-sm mb-2">{{ error }}</p>
 
@@ -345,13 +397,21 @@ async function addMilestone() {
         </div>
 
         <!-- Add child button / form -->
-        <div v-if="addingChild" class="mt-2 flex gap-2" :style="{ paddingLeft: (depth + 1) * 16 + 'px' }">
+        <div v-if="addingChild" class="mt-2 flex flex-wrap gap-2 items-center" :style="{ paddingLeft: (depth + 1) * 16 + 'px' }">
           <input v-model="newChildName" placeholder="New child name..."
                  @keyup.enter="addChild"
-                 @keyup.escape="addingChild = false"
-                 class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs" />
+                 @keyup.escape="addingChild = false; newChildType = 'context'; newChildTargetDate = ''; newChildColor = '#3b82f6'"
+                 class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs min-w-[120px]" />
+          <select v-model="newChildType" class="bg-white/10 text-white text-xs rounded px-1 py-0.5">
+            <option value="context">Context</option>
+            <option value="milestone">Milestone</option>
+          </select>
+          <template v-if="newChildType === 'milestone'">
+            <input v-model="newChildTargetDate" type="date" class="bg-white/10 text-white text-xs rounded px-2 py-0.5" />
+            <input v-model="newChildColor" type="color" class="w-6 h-6 rounded cursor-pointer" />
+          </template>
           <button @click="addChild" class="text-xs text-white/60 hover:text-white">Add</button>
-          <button @click="addingChild = false; newChildName = ''"
+          <button @click="addingChild = false; newChildName = ''; newChildType = 'context'; newChildTargetDate = ''; newChildColor = '#3b82f6'"
                   class="text-xs text-white/40">cancel</button>
         </div>
         <button v-else @click="addingChild = true"

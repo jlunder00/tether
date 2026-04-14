@@ -8,6 +8,33 @@ const contextStore = useContextStore()
 const milestoneStore = useMilestoneStore()
 const error = ref<string | null>(null)
 const newName = ref('')
+const rootDropOver = ref(false)
+
+function onRootDragOver(evt: DragEvent) {
+  evt.preventDefault()
+  evt.dataTransfer!.dropEffect = 'move'
+  rootDropOver.value = true
+}
+
+function onRootDragLeave() {
+  rootDropOver.value = false
+}
+
+async function onRootDrop(evt: DragEvent) {
+  evt.preventDefault()
+  evt.stopPropagation()
+  rootDropOver.value = false
+  const raw = evt.dataTransfer?.getData('text/plain')
+  if (!raw) return
+  try {
+    const { nodeId } = JSON.parse(raw)
+    if (!nodeId) return
+    await contextStore.moveNode(nodeId, null)
+  } catch (e) {
+    console.error('Root drop failed:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to move node to root'
+  }
+}
 
 async function addRootNode() {
   if (!newName.value.trim()) return
@@ -51,6 +78,15 @@ onMounted(async () => {
         :key="node.id"
         :node="node"
         :depth="0" />
+    </div>
+
+    <!-- Root-level drop zone for reparenting nodes to root -->
+    <div class="mt-3 border-2 border-dashed rounded-lg px-4 py-2 text-center text-xs transition-colors"
+         :class="rootDropOver ? 'border-blue-400/60 bg-blue-400/10 text-blue-300' : 'border-white/10 text-white/30'"
+         @dragover="onRootDragOver"
+         @dragleave="onRootDragLeave"
+         @drop="onRootDrop">
+      Drop here to make root-level
     </div>
 
     <!-- Add root entry form -->
