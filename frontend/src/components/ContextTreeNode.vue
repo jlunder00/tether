@@ -4,6 +4,7 @@ import { useContextStore } from '../stores/context'
 import type { ContextNode } from '../stores/context'
 import { useMilestoneStore } from '../stores/milestones'
 import MilestoneDetail from './MilestoneDetail.vue'
+import ContextTreeNode from './ContextTreeNode.vue'
 
 const props = withDefaults(defineProps<{
   node: ContextNode
@@ -34,9 +35,16 @@ const localSectionTypes = ref<string[]>([])
 
 // --- Computed ---
 const children = computed(() => contextStore.childrenOf(props.node.id))
-const hasChildren = computed(() => children.value.length > 0 || (props.node.children_count ?? 0) > 0)
+const hasChildren = computed(() =>
+  children.value.length > 0 || props.node.children_count == null || props.node.children_count > 0
+)
 const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details`]?.body ?? '')
 const milestones = computed(() => milestoneStore.bySubject[props.node.name] ?? [])
+
+const STATUS_COLORS: Record<string, string> = {
+  pending: 'bg-white/20', in_progress: 'bg-blue-400',
+  done: 'bg-green-400', blocked: 'bg-red-400',
+}
 
 const allSectionTypes = computed(() => {
   const defaults = ['details', 'plans', 'notes']
@@ -99,6 +107,7 @@ async function startEdit() {
     const section = await contextStore.fetchSection(props.node.id, activeTab.value)
     editBody.value = section?.body ?? ''
   } catch (e) {
+    editingSection.value = null
     console.error('startEdit error:', e)
     error.value = e instanceof Error ? e.message : 'Failed to load section'
   }
@@ -179,7 +188,6 @@ async function addChild() {
   try {
     error.value = null
     await contextStore.createNode(props.node.id, newChildName.value.trim())
-    await contextStore.fetchChildren(props.node.id)
     newChildName.value = ''
     addingChild.value = false
     if (!expanded.value) expanded.value = true
@@ -304,9 +312,7 @@ async function addMilestone() {
           :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
           class="text-xs px-1.5 py-0.5 rounded border flex items-center gap-1"
           :class="m.color ? 'hover:opacity-80' : 'bg-white/10 hover:bg-white/20 border-transparent'">
-          <span :class="m.status === 'done' ? 'bg-green-400'
-                      : m.status === 'in_progress' ? 'bg-blue-400'
-                      : m.status === 'blocked' ? 'bg-red-400' : 'bg-white/20'"
+          <span :class="STATUS_COLORS[m.status] ?? 'bg-white/20'"
                 class="w-1.5 h-1.5 rounded-full" />
           {{ m.name }} {{ m.done_count }}/{{ m.task_count }}
         </button>
