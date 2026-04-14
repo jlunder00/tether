@@ -275,4 +275,29 @@ def init_db(db_path: Path) -> None:
                 content_rowid='id'
             )
         """)
+        # FTS5 external content sync triggers
+        conn.executescript("""
+            CREATE TRIGGER IF NOT EXISTS node_sections_fts_ai
+            AFTER INSERT ON node_sections BEGIN
+                INSERT INTO node_sections_fts(rowid, body) VALUES (new.id, new.body);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS node_sections_fts_ad
+            AFTER DELETE ON node_sections BEGIN
+                INSERT INTO node_sections_fts(node_sections_fts, rowid, body)
+                VALUES ('delete', old.id, old.body);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS node_sections_fts_au
+            AFTER UPDATE ON node_sections BEGIN
+                INSERT INTO node_sections_fts(node_sections_fts, rowid, body)
+                VALUES ('delete', old.id, old.body);
+                INSERT INTO node_sections_fts(rowid, body) VALUES (new.id, new.body);
+            END;
+        """)
+        # Partial unique index for root node names (NULL parent_id)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_root_node_name
+            ON context_nodes(name) WHERE parent_id IS NULL
+        """)
         conn.executescript(_SESSIONS_DDL)
