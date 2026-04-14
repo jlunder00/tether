@@ -562,15 +562,23 @@ def read_section(node_id: str, section_type: str, name: str = "main") -> dict:
 @mcp.tool()
 def write_section(node_id: str, section_type: str, body: str, name: str = "main") -> dict:
     """Write (create or replace) a section file on a node. Use name='main' (default) for the primary file, or pass a specific name for named files."""
+    import sqlite3
     from db.queries import upsert_section
-    return upsert_section(_db(), node_id, section_type, body, name=name)
+    try:
+        return upsert_section(_db(), node_id, section_type, body, name=name)
+    except sqlite3.IntegrityError as e:
+        return {"error": f"Write failed: {e}. Check that node_id '{node_id}' exists."}
 
 
 @mcp.tool()
 def append_to_section(node_id: str, section_type: str, content: str, name: str = "main") -> dict:
     """Append text to a section file with a double-newline separator. Creates the section if it doesn't exist. Use name='main' (default) for the primary file, or pass a specific name for named files."""
+    import sqlite3
     from db.queries import append_section
-    return append_section(_db(), node_id, section_type, content, name=name)
+    try:
+        return append_section(_db(), node_id, section_type, content, name=name)
+    except sqlite3.IntegrityError as e:
+        return {"error": f"Append failed: {e}. Check that node_id '{node_id}' exists."}
 
 
 @mcp.tool()
@@ -583,8 +591,12 @@ def list_section_files(node_id: str, section_type: str) -> list[dict]:
 @mcp.tool()
 def create_section_file(node_id: str, section_type: str, name: str, body: str = "") -> dict:
     """Create a new named file within a section type. Position is auto-assigned. Use write_section with name param to update an existing file."""
+    import sqlite3
     from db.queries import create_section_file as _create_section_file
-    return _create_section_file(_db(), node_id, section_type, name, body=body)
+    try:
+        return _create_section_file(_db(), node_id, section_type, name, body=body)
+    except sqlite3.IntegrityError:
+        return {"error": f"Section file '{name}' already exists in '{section_type}'. Use write_section to update it."}
 
 
 @mcp.tool()
