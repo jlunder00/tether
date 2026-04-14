@@ -29,9 +29,6 @@ export interface NodeSection {
   updated_at: string
 }
 
-// Backward-compat alias so existing imports still work
-export interface ContextEntry { subject: string; body: string; updated_at: string }
-
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -55,15 +52,6 @@ export const useContextStore = defineStore('context', () => {
     rootNodes.value.filter(n => n.node_type === 'context')
   )
 
-  /** Backward-compat: expose entries shaped like old ContextEntry[] */
-  const entries = computed<ContextEntry[]>(() =>
-    rootContextNodes.value.map(n => ({
-      subject: n.name,
-      body: sectionCache.value[`${n.id}::details`]?.body ?? '',
-      updated_at: n.updated_at,
-    }))
-  )
-
   function childrenOf(parentId: string): ContextNode[] {
     return Object.values(nodes.value)
       .filter(n => n.parent_id === parentId && !n.archived)
@@ -80,7 +68,10 @@ export const useContextStore = defineStore('context', () => {
 
   async function fetchRootNodes(): Promise<ContextNode[]> {
     const resp = await api('/api/nodes')
-    if (!resp.ok) throw new Error(`fetchRootNodes: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchRootNodes: ${resp.status} ${detail}`)
+    }
     const data: ContextNode[] = await resp.json()
     for (const node of data) {
       nodes.value[node.id] = node
@@ -90,7 +81,10 @@ export const useContextStore = defineStore('context', () => {
 
   async function fetchChildren(parentId: string): Promise<ContextNode[]> {
     const resp = await api(`/api/nodes/${parentId}/children`)
-    if (!resp.ok) throw new Error(`fetchChildren: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchChildren: ${resp.status} ${detail}`)
+    }
     const data: ContextNode[] = await resp.json()
     for (const node of data) {
       nodes.value[node.id] = node
@@ -100,7 +94,10 @@ export const useContextStore = defineStore('context', () => {
 
   async function fetchNode(nodeId: string): Promise<ContextNode> {
     const resp = await api(`/api/nodes/${nodeId}`)
-    if (!resp.ok) throw new Error(`fetchNode: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchNode: ${resp.status} ${detail}`)
+    }
     const data: ContextNode = await resp.json()
     nodes.value[data.id] = data
     return data
@@ -117,7 +114,10 @@ export const useContextStore = defineStore('context', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ parent_id: parentId, name, node_type: nodeType, ...opts }),
     })
-    if (!resp.ok) throw new Error(`createNode: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`createNode: ${resp.status} ${detail}`)
+    }
     const data: ContextNode = await resp.json()
     nodes.value[data.id] = data
     return data
@@ -132,7 +132,10 @@ export const useContextStore = defineStore('context', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
-    if (!resp.ok) throw new Error(`patchNode: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`patchNode: ${resp.status} ${detail}`)
+    }
     const data: ContextNode = await resp.json()
     nodes.value[data.id] = data
     return data
@@ -140,9 +143,16 @@ export const useContextStore = defineStore('context', () => {
 
   async function deleteNode(nodeId: string): Promise<void> {
     const resp = await api(`/api/nodes/${nodeId}`, { method: 'DELETE' })
-    if (!resp.ok) throw new Error(`deleteNode: ${resp.status}`)
-    // Remove from cache (and any children)
-    const toRemove = [nodeId, ...Object.keys(nodes.value).filter(id => nodes.value[id].parent_id === nodeId)]
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`deleteNode: ${resp.status} ${detail}`)
+    }
+    // Remove from cache recursively (node and all descendants)
+    function collectDescendants(id: string): string[] {
+      const children = Object.keys(nodes.value).filter(k => nodes.value[k].parent_id === id)
+      return [id, ...children.flatMap(collectDescendants)]
+    }
+    const toRemove = collectDescendants(nodeId)
     for (const id of toRemove) {
       delete nodes.value[id]
     }
@@ -150,7 +160,10 @@ export const useContextStore = defineStore('context', () => {
 
   async function fetchSections(nodeId: string): Promise<NodeSection[]> {
     const resp = await api(`/api/nodes/${nodeId}/sections`)
-    if (!resp.ok) throw new Error(`fetchSections: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchSections: ${resp.status} ${detail}`)
+    }
     const data: NodeSection[] = await resp.json()
     for (const s of data) {
       sectionCache.value[`${nodeId}::${s.section_type}`] = s
@@ -161,7 +174,10 @@ export const useContextStore = defineStore('context', () => {
   async function fetchSection(nodeId: string, sectionType: string): Promise<NodeSection | null> {
     const resp = await api(`/api/nodes/${nodeId}/sections/${encodeURIComponent(sectionType)}`)
     if (resp.status === 404) return null
-    if (!resp.ok) throw new Error(`fetchSection: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`fetchSection: ${resp.status} ${detail}`)
+    }
     const data: NodeSection = await resp.json()
     sectionCache.value[`${nodeId}::${sectionType}`] = data
     return data
@@ -173,36 +189,13 @@ export const useContextStore = defineStore('context', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ body }),
     })
-    if (!resp.ok) throw new Error(`saveSection: ${resp.status}`)
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`saveSection: ${resp.status} ${detail}`)
+    }
     const data: NodeSection = await resp.json()
     sectionCache.value[`${nodeId}::${sectionType}`] = data
     return data
-  }
-
-  // -- Backward-compat shims for old API ------------------------------------
-  // These allow existing code that calls fetchEntries / saveEntry / etc.
-  // to keep working during transition.
-
-  async function fetchEntries(): Promise<void> {
-    await fetchRootNodes()
-  }
-
-  async function saveEntry(subject: string, body: string): Promise<void> {
-    let node = nodeByName(subject, null)
-    if (!node) {
-      node = await createNode(null, subject)
-    }
-    await saveSection(node.id, 'details', body)
-  }
-
-  async function deleteEntry(subject: string): Promise<void> {
-    const node = nodeByName(subject, null)
-    if (node) await deleteNode(node.id)
-  }
-
-  async function renameEntry(oldSubject: string, newSubject: string): Promise<void> {
-    const node = nodeByName(oldSubject, null)
-    if (node) await patchNode(node.id, { name: newSubject })
   }
 
   return {
@@ -213,7 +206,6 @@ export const useContextStore = defineStore('context', () => {
     // Computed
     rootNodes,
     rootContextNodes,
-    entries,
 
     // Helpers
     childrenOf,
@@ -231,11 +223,5 @@ export const useContextStore = defineStore('context', () => {
     fetchSections,
     fetchSection,
     saveSection,
-
-    // Backward-compat
-    fetchEntries,
-    saveEntry,
-    deleteEntry,
-    renameEntry,
   }
 })

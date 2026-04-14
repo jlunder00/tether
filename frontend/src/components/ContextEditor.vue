@@ -12,6 +12,7 @@ const renaming = ref<string | null>(null) // node id being renamed
 const renameValue = ref('')
 const newSubject = ref('')
 const expandedGroups = ref<Set<string>>(new Set()) // node ids
+const error = ref<string | null>(null)
 
 const milestoneStore = useMilestoneStore()
 const expandedMilestones = ref<Set<string>>(new Set())
@@ -26,19 +27,32 @@ function toggleMilestone(id: string) {
 
 async function addMilestone(nodeName: string) {
   if (!newMilestoneName.value.trim()) return
-  await milestoneStore.createMilestone(nodeName, newMilestoneName.value.trim())
-  newMilestoneName.value = ''
-  addingMilestoneFor.value = null
+  try {
+    error.value = null
+    await milestoneStore.createMilestone(nodeName, newMilestoneName.value.trim())
+    newMilestoneName.value = ''
+    addingMilestoneFor.value = null
+  } catch (e) {
+    console.error('addMilestone error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to add milestone'
+  }
 }
 
 async function toggleExpand(node: ContextNode) {
   if (expandedGroups.value.has(node.id)) {
     expandedGroups.value.delete(node.id)
   } else {
-    // Fetch children and their details sections when expanding
-    const children = await store.fetchChildren(node.id)
-    await Promise.allSettled(children.map(c => store.fetchSection(c.id, 'details')))
+    // Optimistic: add to expanded set before fetch
     expandedGroups.value.add(node.id)
+    try {
+      const children = await store.fetchChildren(node.id)
+      await Promise.allSettled(children.map(c => store.fetchSection(c.id, 'details')))
+    } catch (e) {
+      // Rollback on error
+      expandedGroups.value.delete(node.id)
+      console.error('toggleExpand error:', e)
+      error.value = e instanceof Error ? e.message : 'Failed to expand node'
+    }
   }
 }
 
@@ -51,8 +65,14 @@ async function startEdit(nodeId: string) {
 
 async function saveEdit() {
   if (!editing.value) return
-  await store.saveSection(editing.value, 'details', editBody.value)
-  editing.value = null
+  try {
+    error.value = null
+    await store.saveSection(editing.value, 'details', editBody.value)
+    editing.value = null
+  } catch (e) {
+    console.error('saveEdit error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to save'
+  }
 }
 
 function startRename(nodeId: string, currentName: string) {
@@ -70,28 +90,40 @@ async function saveRename() {
     renaming.value = null
     return
   }
-  await store.patchNode(renaming.value, { name: renameValue.value.trim() })
-  renaming.value = null
+  try {
+    error.value = null
+    await store.patchNode(renaming.value, { name: renameValue.value.trim() })
+    renaming.value = null
+  } catch (e) {
+    console.error('saveRename error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to rename'
+  }
 }
 
 async function addEntry() {
   if (!newSubject.value.trim()) return
-  const parts = newSubject.value.trim().split('/')
-  if (parts.length === 1) {
-    // Root node
-    await store.createNode(null, parts[0])
-  } else {
-    // Nested: find or create parent, then create child
-    const parentName = parts[0]
-    let parent = store.nodeByName(parentName, null)
-    if (!parent) {
-      parent = await store.createNode(null, parentName)
+  try {
+    error.value = null
+    const parts = newSubject.value.trim().split('/')
+    if (parts.length === 1) {
+      // Root node
+      await store.createNode(null, parts[0])
+    } else {
+      // Nested: find or create parent, then create child
+      const parentName = parts[0]
+      let parent = store.nodeByName(parentName, null)
+      if (!parent) {
+        parent = await store.createNode(null, parentName)
+      }
+      const childName = parts.slice(1).join('/')
+      await store.createNode(parent.id, childName)
     }
-    const childName = parts.slice(1).join('/')
-    await store.createNode(parent.id, childName)
+    await store.fetchRootNodes()
+    newSubject.value = ''
+  } catch (e) {
+    console.error('addEntry error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to add entry'
   }
-  await store.fetchRootNodes()
-  newSubject.value = ''
 }
 
 function prefillSubEntry(parentName: string) {
@@ -104,7 +136,14 @@ async function deleteWithConfirm(node: ContextNode) {
   const msg = childCount > 0
     ? `Delete "${node.name}" and ${childCount} sub-entr${childCount === 1 ? 'y' : 'ies'}?`
     : `Delete "${node.name}"?`
-  if (confirm(msg)) await store.deleteNode(node.id)
+  if (!confirm(msg)) return
+  try {
+    error.value = null
+    await store.deleteNode(node.id)
+  } catch (e) {
+    console.error('deleteWithConfirm error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to delete'
+  }
 }
 
 /** Get the cached details body for display (without fetching) */
@@ -119,14 +158,20 @@ async function loadRootSections() {
 }
 
 onMounted(async () => {
-  await store.fetchRootNodes()
-  await loadRootSections()
-  milestoneStore.fetchAll()
+  try {
+    await store.fetchRootNodes()
+    await loadRootSections()
+    await milestoneStore.fetchAll()
+  } catch (e) {
+    console.error('ContextEditor mount error:', e)
+    error.value = e instanceof Error ? e.message : 'Failed to load context data'
+  }
 })
 </script>
 
 <template>
   <div class="min-h-screen bg-gray-900 text-white p-6">
+  <p v-if="error" class="text-red-400 text-sm">{{ error }}</p>
   <div class="space-y-3">
     <template v-for="node in store.rootContextNodes" :key="node.id">
       <!-- Top-level entry -->

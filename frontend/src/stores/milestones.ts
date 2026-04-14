@@ -71,6 +71,10 @@ export const useMilestoneStore = defineStore('milestones', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description: description ?? null, target_date: targetDate ?? null }),
     })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`createMilestone: ${resp.status} ${detail}`)
+    }
     const m: Milestone = await resp.json()
     all.value = [...all.value, m]
     return m
@@ -82,27 +86,43 @@ export const useMilestoneStore = defineStore('milestones', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`patchMilestone: ${resp.status} ${detail}`)
+    }
     const updated: Milestone = await resp.json()
     all.value = all.value.map(m => m.id === id ? updated : m)
     return updated
   }
 
   async function deleteMilestone(id: string) {
-    await api(`/api/milestones/${id}`, { method: 'DELETE' })
+    const resp = await api(`/api/milestones/${id}`, { method: 'DELETE' })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`deleteMilestone: ${resp.status} ${detail}`)
+    }
     all.value = all.value.filter(m => m.id !== id)
   }
 
   async function linkTask(milestoneId: string, taskId: string) {
-    await api(`/api/milestones/${milestoneId}/tasks`, {
+    const resp = await api(`/api/milestones/${milestoneId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: taskId }),
     })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`linkTask: ${resp.status} ${detail}`)
+    }
     await fetchAll()
   }
 
   async function unlinkTask(milestoneId: string, taskId: string) {
-    await api(`/api/milestones/${milestoneId}/tasks/${taskId}`, { method: 'DELETE' })
+    const resp = await api(`/api/milestones/${milestoneId}/tasks/${taskId}`, { method: 'DELETE' })
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => '')
+      throw new Error(`unlinkTask: ${resp.status} ${detail}`)
+    }
     await fetchAll()
   }
 
