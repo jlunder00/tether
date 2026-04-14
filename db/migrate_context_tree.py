@@ -8,6 +8,10 @@ from pathlib import Path
 
 
 def migrate_context_tree(db_path: Path) -> None:
+    # Ensure new tables exist before migrating data
+    from db.schema import init_db
+    init_db(db_path)
+
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = OFF")
