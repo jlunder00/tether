@@ -1,11 +1,16 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Anchor } from '../stores/anchors'
 
-const props = defineProps<{ anchor: Anchor }>()
+const props = withDefaults(defineProps<{
+  anchor: Anchor
+  isPending?: boolean
+}>(), { isPending: false })
+
 const emit = defineEmits<{
   save: [anchor: Anchor]
   delete: [anchorId: string]
+  discard: []
   moveUp: [anchorId: string]
   moveDown: [anchorId: string]
 }>()
@@ -15,31 +20,67 @@ const saving = ref(false)
 
 watch(() => props.anchor, (a) => { draft.value = { ...a } }, { deep: true })
 
+// Compute end time from start + duration
+const endTime = computed({
+  get() {
+    if (!draft.value.time) return ''
+    const [h, m] = draft.value.time.split(':').map(Number)
+    const total = h * 60 + m + draft.value.duration_minutes
+    const eh = Math.floor(total / 60) % 24
+    const em = total % 60
+    return `${String(eh).padStart(2, '0')}:${String(em).padStart(2, '0')}`
+  },
+  set(val: string) {
+    if (!draft.value.time || !val) return
+    const [sh, sm] = draft.value.time.split(':').map(Number)
+    const [eh, em] = val.split(':').map(Number)
+    let diff = (eh * 60 + em) - (sh * 60 + sm)
+    if (diff <= 0) diff += 24 * 60 // wrap past midnight
+    draft.value.duration_minutes = diff
+  },
+})
+
 async function save() {
   saving.value = true
-  await emit('save', { ...draft.value })
+  emit('save', { ...draft.value })
   saving.value = false
 }
 </script>
 
 <template>
-  <div class="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col gap-3">
+  <div class="bg-white/5 border rounded-xl p-4 flex flex-col gap-3"
+       :class="isPending ? 'border-blue-400/40' : 'border-white/10'">
     <div class="flex items-center gap-3">
-      <div class="w-3 h-3 rounded-full flex-shrink-0" :style="{ background: draft.color }" />
-      <input v-model="draft.name"
-             class="bg-transparent font-semibold text-white flex-1 outline-none border-b border-white/20 pb-0.5" />
+      <input v-model="draft.color" type="color"
+             class="w-5 h-5 rounded-full cursor-pointer bg-transparent border-0 p-0" />
+      <input v-model="draft.name" placeholder="Anchor name"
+             class="bg-transparent font-semibold text-white flex-1 outline-none border-b border-white/20 pb-0.5"
+             :class="isPending ? 'border-blue-400/40' : ''" />
     </div>
 
-    <div class="grid grid-cols-2 gap-3 text-sm">
+    <div class="grid grid-cols-4 gap-3 text-sm">
       <label class="flex flex-col gap-1 text-white/50">
-        Time
+        Start
         <input v-model="draft.time" type="time"
                class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
       </label>
       <label class="flex flex-col gap-1 text-white/50">
-        Duration (min)
-        <input v-model.number="draft.duration_minutes" type="number" min="5" step="5"
+        End
+        <input :value="endTime" @change="endTime = ($event.target as HTMLInputElement).value" type="time"
                class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
+      </label>
+      <label class="flex flex-col gap-1 text-white/50">
+        Duration
+        <div class="flex items-center gap-1">
+          <input :value="Math.floor(draft.duration_minutes / 60)" type="number" min="0" max="23"
+                 @change="draft.duration_minutes = +($event.target as HTMLInputElement).value * 60 + (draft.duration_minutes % 60)"
+                 class="bg-white/10 text-white rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
+          <span class="text-white/30 text-xs">h</span>
+          <input :value="draft.duration_minutes % 60" type="number" min="0" max="59" step="5"
+                 @change="draft.duration_minutes = Math.floor(draft.duration_minutes / 60) * 60 + +($event.target as HTMLInputElement).value"
+                 class="bg-white/10 text-white rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
+          <span class="text-white/30 text-xs">m</span>
+        </div>
       </label>
       <label class="flex flex-col gap-1 text-white/50">
         Flexibility
@@ -50,15 +91,10 @@ async function save() {
           <option value="skippable">Skippable</option>
         </select>
       </label>
-      <label class="flex flex-col gap-1 text-white/50">
-        Color
-        <input v-model="draft.color" type="color"
-               class="bg-white/10 rounded-lg h-9 w-full cursor-pointer" />
-      </label>
     </div>
 
     <!-- Follow-up config section -->
-    <details class="text-sm">
+    <details v-if="!isPending" class="text-sm">
       <summary class="cursor-pointer text-white/50 hover:text-white/80 select-none py-1">
         Follow-up config
       </summary>
@@ -104,20 +140,25 @@ async function save() {
     </details>
 
     <div class="flex items-center gap-2 justify-between">
-      <div class="flex gap-1">
+      <div v-if="!isPending" class="flex gap-1">
         <button @click="emit('moveUp', anchor.id)" title="Move up"
                 class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▲</button>
         <button @click="emit('moveDown', anchor.id)" title="Move down"
                 class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▼</button>
       </div>
+      <div v-else />
       <div class="flex gap-2">
-        <button @click="emit('delete', anchor.id)"
+        <button v-if="isPending" @click="emit('discard')"
+                class="px-4 py-1.5 bg-white/10 hover:bg-white/20 text-white/50 rounded-lg text-sm">
+          Cancel
+        </button>
+        <button v-if="!isPending" @click="emit('delete', anchor.id)"
                 class="px-4 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-sm">
           Delete
         </button>
-        <button @click="save" :disabled="saving"
-                class="px-4 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm disabled:opacity-50">
-          {{ saving ? 'Saving…' : 'Save' }}
+        <button @click="save" :disabled="saving || !draft.name || !draft.time"
+                class="px-4 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-lg text-sm disabled:opacity-30">
+          {{ isPending ? 'Create' : (saving ? 'Saving…' : 'Save') }}
         </button>
       </div>
     </div>
