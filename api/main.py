@@ -1,6 +1,8 @@
+import sqlite3
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from api.routes import plan as plan_routes
 from api.routes import anchors as anchor_routes
@@ -15,6 +17,7 @@ from api.routes import llm_config as llm_config_routes
 from api.routes import sessions as sessions_routes
 from api.routes import bot as bot_routes
 from api.routes import kanban as kanban_routes
+from api.routes import nodes as nodes_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.auth_schema import init_auth_db
@@ -41,6 +44,19 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.exception_handler(ValueError)
+    async def value_error_handler(request, exc):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def integrity_error_handler(request, exc):
+        msg = str(exc)
+        if "FOREIGN KEY" in msg:
+            return JSONResponse(status_code=404, content={"detail": "Referenced resource not found"})
+        if "UNIQUE" in msg:
+            return JSONResponse(status_code=409, content={"detail": "Resource already exists (duplicate)"})
+        return JSONResponse(status_code=400, content={"detail": "Database constraint violated"})
+
     app.include_router(auth_routes.router)  # No /api prefix — OAuth callbacks need clean /auth URLs
     app.include_router(plan_routes.router, prefix="/api")
     app.include_router(anchor_routes.router, prefix="/api")
@@ -54,6 +70,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     app.include_router(sessions_routes.router, prefix="/api")
     app.include_router(bot_routes.router, prefix="/api")
     app.include_router(kanban_routes.router, prefix="/api")
+    app.include_router(nodes_routes.router, prefix="/api")
 
     @app.post("/api/notify")
     async def notify():

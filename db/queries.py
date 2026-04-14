@@ -22,6 +22,7 @@ def _row_to_task(row, *, include_schedule: bool = False) -> dict:
         "position": r.get("position", 0),
         "description": r.get("description"),
         "context_subject": r.get("context_subject"),
+        "context_node_id": r.get("context_node_id"),
         "followup_config": json.loads(fc) if fc else None,
         "blocks": [],
         "blocked_by": [],
@@ -222,7 +223,7 @@ def upsert_tasks(
 
         # Return ALL tasks for this anchor (including untouched ones)
         all_rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE plan_date=? AND anchor_id=? ORDER BY position",
             (date, anchor_id),
         ).fetchall()
@@ -258,7 +259,7 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
     """Get a single task by UUID."""
     with get_db(db_path) as conn:
         row = conn.execute(
-            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, plan_date, anchor_id, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     if not row:
@@ -865,6 +866,448 @@ def unlink_milestone_task(db_path: Path, milestone_id: str, task_id: str) -> Non
         )
 
 
+# ---------------------------------------------------------------------------
+# Context-tree operations (context_nodes, node_sections, node_tasks)
+# ---------------------------------------------------------------------------
+
+
+def create_node(
+    db_path: Path, parent_id: str | None, name: str,
+    node_type: str = "context",
+    target_date: str | None = None,
+    status: str = "pending",
+    status_override: int = 0,
+    color: str | None = None,
+) -> dict:
+    """Create a context node or milestone.
+
+    Returns the created node dict.
+    """
+    if node_type not in ("context", "milestone"):
+        raise ValueError(f"Invalid node_type: {node_type!r}. Must be 'context' or 'milestone'.")
+    node_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            """INSERT INTO context_nodes
+               (id, parent_id, name, node_type, target_date, status,
+                status_override, color, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (node_id, parent_id, name, node_type, target_date, status,
+             status_override, color, now, now),
+        )
+    return {
+        "id": node_id, "parent_id": parent_id, "name": name,
+        "node_type": node_type, "archived": 0,
+        "target_date": target_date, "status": status,
+        "status_override": status_override, "color": color,
+        "created_at": now, "updated_at": now,
+    }
+
+
+def get_node(db_path: Path, node_id: str) -> dict | None:
+    """Get a single node by ID, including section_types list and children_count."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM context_nodes WHERE id = ?", (node_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        sections = conn.execute(
+            "SELECT section_type FROM node_sections WHERE node_id = ? ORDER BY section_type",
+            (node_id,),
+        ).fetchall()
+        d["section_types"] = [s["section_type"] for s in sections]
+        children = conn.execute(
+            "SELECT COUNT(*) FROM context_nodes WHERE parent_id = ?", (node_id,)
+        ).fetchone()[0]
+        d["children_count"] = children
+    return d
+
+
+def get_node_by_path(db_path: Path, path: str) -> dict | None:
+    """Resolve 'School/ML/Project' to a node. Walk the tree from root."""
+    parts = [p for p in path.split("/") if p]
+    if not parts:
+        return None
+    with get_db(db_path) as conn:
+        # First segment: parent_id IS NULL
+        row = conn.execute(
+            "SELECT id FROM context_nodes WHERE parent_id IS NULL AND name = ?",
+            (parts[0],),
+        ).fetchone()
+        if not row:
+            return None
+        resolved_id = row["id"]
+        for segment in parts[1:]:
+            row = conn.execute(
+                "SELECT id FROM context_nodes WHERE parent_id = ? AND name = ?",
+                (resolved_id, segment),
+            ).fetchone()
+            if not row:
+                return None
+            resolved_id = row["id"]
+    return get_node(db_path, resolved_id)
+
+
+def get_node_path(db_path: Path, node_id: str) -> str | None:
+    """Get human-readable path for a node: 'School/ML/Project'.
+
+    Returns None if the node does not exist.
+    """
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """WITH RECURSIVE ancestors(id, parent_id, name, depth) AS (
+                   SELECT id, parent_id, name, 0 FROM context_nodes WHERE id = ?
+                   UNION ALL
+                   SELECT cn.id, cn.parent_id, cn.name, a.depth + 1
+                   FROM context_nodes cn
+                   JOIN ancestors a ON cn.id = a.parent_id
+               )
+               SELECT name FROM ancestors ORDER BY depth DESC""",
+            (node_id,),
+        ).fetchall()
+    if not rows:
+        return None
+    return "/".join(r["name"] for r in rows)
+
+
+def get_children(
+    db_path: Path, parent_id: str | None = None, include_archived: bool = False,
+) -> list[dict]:
+    """Get immediate children of a node (or root nodes if parent_id=None)."""
+    conditions: list[str] = []
+    params: list = []
+    if parent_id is None:
+        conditions.append("parent_id IS NULL")
+    else:
+        conditions.append("parent_id = ?")
+        params.append(parent_id)
+    if not include_archived:
+        conditions.append("archived = 0")
+    where = " AND ".join(conditions)
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM context_nodes WHERE {where} ORDER BY name",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_subtree(
+    db_path: Path, node_id: str, include_archived: bool = False,
+) -> list[dict]:
+    """Get all descendants of a node using recursive CTE (excludes the node itself)."""
+    seed_filter = "" if include_archived else " AND archived = 0"
+    recurse_filter = "" if include_archived else " WHERE cn.archived = 0"
+    sql = f"""WITH RECURSIVE descendants(id) AS (
+                  SELECT id FROM context_nodes WHERE parent_id = ?{seed_filter}
+                  UNION ALL
+                  SELECT cn.id FROM context_nodes cn
+                  JOIN descendants d ON cn.parent_id = d.id{recurse_filter}
+              )
+              SELECT cn.* FROM context_nodes cn
+              JOIN descendants d ON cn.id = d.id
+              ORDER BY cn.name"""
+    with get_db(db_path) as conn:
+        rows = conn.execute(sql, (node_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def move_node(db_path: Path, node_id: str, new_parent_id: str | None) -> None:
+    """Move a node to a new parent (or to root if new_parent_id is None).
+
+    Raises ValueError if new_parent_id would create a cycle (i.e. it is the
+    node itself or one of its descendants).
+    """
+    if new_parent_id is not None:
+        if new_parent_id == node_id:
+            raise ValueError("Cannot move a node under itself.")
+        # Walk ancestors of new_parent_id; if node_id appears, it's a cycle.
+        with get_db(db_path) as conn:
+            ancestors = conn.execute(
+                """WITH RECURSIVE ancestors(id) AS (
+                       SELECT parent_id FROM context_nodes WHERE id = ?
+                       UNION ALL
+                       SELECT cn.parent_id FROM context_nodes cn
+                       JOIN ancestors a ON cn.id = a.id
+                       WHERE cn.parent_id IS NOT NULL
+                   )
+                   SELECT id FROM ancestors""",
+                (new_parent_id,),
+            ).fetchall()
+            if any(a["id"] == node_id for a in ancestors):
+                raise ValueError("Cannot move a node under one of its own descendants.")
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE context_nodes SET parent_id = ?, updated_at = ? WHERE id = ?",
+            (new_parent_id, now, node_id),
+        )
+
+
+def rename_node(db_path: Path, node_id: str, new_name: str) -> None:
+    """Rename a node."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE context_nodes SET name = ?, updated_at = ? WHERE id = ?",
+            (new_name, now, node_id),
+        )
+
+
+def delete_node(db_path: Path, node_id: str) -> None:
+    """Delete a node. CASCADE handles children, sections, task links."""
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM context_nodes WHERE id = ?", (node_id,))
+
+
+def archive_node(db_path: Path, node_id: str) -> None:
+    """Set archived=1."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE context_nodes SET archived = 1, updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+
+
+def unarchive_node(db_path: Path, node_id: str) -> None:
+    """Set archived=0."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE context_nodes SET archived = 0, updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+
+
+def patch_node_fields(db_path: Path, node_id: str, fields: dict) -> dict | None:
+    """Update allowed fields on a context node. Returns updated node dict or None."""
+    allowed = {"name", "target_date", "status", "color", "archived"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_node(db_path, node_id)
+    # Convert archived bool to int for SQLite
+    if "archived" in updates:
+        updates["archived"] = int(updates["archived"])
+    # Setting status implies a manual override
+    if "status" in updates:
+        updates["status_override"] = 1
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    updates["updated_at"] = now
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    with get_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE context_nodes SET {set_clause} WHERE id=?",
+            (*updates.values(), node_id),
+        )
+    return get_node(db_path, node_id)
+
+
+# ---------------------------------------------------------------------------
+# Section operations (node_sections)
+# ---------------------------------------------------------------------------
+
+
+def get_sections(db_path: Path, node_id: str) -> list[dict]:
+    """Get all sections for a node."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT section_type, body, updated_at FROM node_sections "
+            "WHERE node_id = ? ORDER BY section_type",
+            (node_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_section(db_path: Path, node_id: str, section_type: str) -> dict | None:
+    """Get a single section by type."""
+    with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT section_type, body, updated_at FROM node_sections "
+            "WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_section(db_path: Path, node_id: str, section_type: str, body: str) -> dict:
+    """Insert or update a section. Also update node's updated_at."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with get_db(db_path) as conn:
+        conn.execute(
+            """INSERT INTO node_sections (node_id, section_type, body, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(node_id, section_type) DO UPDATE SET
+                   body = excluded.body, updated_at = excluded.updated_at""",
+            (node_id, section_type, body, now),
+        )
+        conn.execute(
+            "UPDATE context_nodes SET updated_at = ? WHERE id = ?",
+            (now, node_id),
+        )
+    return {"section_type": section_type, "body": body, "updated_at": now}
+
+
+def append_section(db_path: Path, node_id: str, section_type: str, content: str) -> dict:
+    """Append text to a section with '\\n\\n' separator. Create if missing."""
+    existing = get_section(db_path, node_id, section_type)
+    if existing and existing["body"]:
+        new_body = existing["body"] + "\n\n" + content
+    else:
+        new_body = content
+    return upsert_section(db_path, node_id, section_type, new_body)
+
+
+def delete_section(db_path: Path, node_id: str, section_type: str) -> None:
+    """Delete a section."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM node_sections WHERE node_id = ? AND section_type = ?",
+            (node_id, section_type),
+        )
+
+
+def search_sections(
+    db_path: Path, query: str, node_id: str | None = None,
+) -> list[dict]:
+    """FTS5 search across node_sections.
+
+    Returns [{node_id, section_type, snippet}].
+    If node_id is provided, filter to that node's subtree.
+    """
+    # Wrap in double quotes for literal matching; escape embedded quotes.
+    safe_query = '"' + query.replace('"', '""') + '"'
+    with get_db(db_path) as conn:
+        if node_id is not None:
+            # Get subtree node ids (including the node itself)
+            subtree_ids = conn.execute(
+                """WITH RECURSIVE descendants(id) AS (
+                       SELECT ?
+                       UNION ALL
+                       SELECT cn.id FROM context_nodes cn
+                       JOIN descendants d ON cn.parent_id = d.id
+                   )
+                   SELECT id FROM descendants""",
+                (node_id,),
+            ).fetchall()
+            id_set = [r["id"] for r in subtree_ids]
+            if not id_set:
+                return []
+            ph = ",".join("?" for _ in id_set)
+            rows = conn.execute(
+                f"""SELECT ns.node_id, ns.section_type,
+                           snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
+                    FROM node_sections_fts fts
+                    JOIN node_sections ns ON ns.id = fts.rowid
+                    WHERE fts.body MATCH ?
+                      AND ns.node_id IN ({ph})
+                    ORDER BY fts.rank""",
+                (safe_query, *id_set),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT ns.node_id, ns.section_type,
+                          snippet(node_sections_fts, 0, '<b>', '</b>', '...', 32) AS snippet
+                   FROM node_sections_fts fts
+                   JOIN node_sections ns ON ns.id = fts.rowid
+                   WHERE fts.body MATCH ?
+                   ORDER BY fts.rank""",
+                (safe_query,),
+            ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Node-task linking (node_tasks)
+# ---------------------------------------------------------------------------
+
+
+def link_task_to_node(db_path: Path, node_id: str, task_id: str) -> None:
+    """Link a task to a context node."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO node_tasks (node_id, task_id) VALUES (?, ?)",
+            (node_id, task_id),
+        )
+
+
+def unlink_task_from_node(db_path: Path, node_id: str, task_id: str) -> None:
+    """Unlink a task from a context node."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "DELETE FROM node_tasks WHERE node_id = ? AND task_id = ?",
+            (node_id, task_id),
+        )
+
+
+def get_node_tasks(db_path: Path, node_id: str) -> list[dict]:
+    """Get tasks linked to a node (with task details)."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """SELECT t.uuid, t.text, t.status, t.plan_date, t.anchor_id
+               FROM node_tasks nt
+               JOIN tasks t ON t.uuid = nt.task_id
+               WHERE nt.node_id = ?
+               ORDER BY t.plan_date DESC NULLS LAST, t.text""",
+            (node_id,),
+        ).fetchall()
+    return [{"id": r["uuid"], "text": r["text"], "status": r["status"],
+             "plan_date": r["plan_date"], "anchor_id": r["anchor_id"]}
+            for r in rows]
+
+
+def get_task_nodes(db_path: Path, task_id: str) -> list[dict]:
+    """Get all nodes linked to a task."""
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """SELECT cn.* FROM context_nodes cn
+               JOIN node_tasks nt ON nt.node_id = cn.id
+               WHERE nt.task_id = ?
+               ORDER BY cn.name""",
+            (task_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Milestone-specific helpers (context_nodes with node_type='milestone')
+# ---------------------------------------------------------------------------
+
+
+def get_milestone_nodes(
+    db_path: Path, parent_id: str | None = None, include_archived: bool = False,
+) -> list[dict]:
+    """Get milestone nodes, optionally under a specific parent.
+
+    Includes task_count and done_count derived from node_tasks + tasks.
+    """
+    conditions = ["cn.node_type = 'milestone'"]
+    params: list = []
+    if parent_id is not None:
+        conditions.append("cn.parent_id = ?")
+        params.append(parent_id)
+    if not include_archived:
+        conditions.append("cn.archived = 0")
+    where = " AND ".join(conditions)
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            f"""SELECT cn.*,
+                       COUNT(nt.task_id) AS task_count,
+                       SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS done_count
+                FROM context_nodes cn
+                LEFT JOIN node_tasks nt ON nt.node_id = cn.id
+                LEFT JOIN tasks t ON t.uuid = nt.task_id
+                WHERE {where}
+                GROUP BY cn.id
+                ORDER BY cn.name""",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def init_followup_state(
     db_path: Path, date: str, anchor_id: str, task_id: str, now: datetime,
 ) -> None:
@@ -944,7 +1387,7 @@ def create_unscheduled_task(
             (task_uuid, text, status, description, context_subject),
         )
         row = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
     return _row_to_task(row)
@@ -954,7 +1397,7 @@ def get_unscheduled_tasks(db_path: Path) -> list[dict]:
     """Get all tasks with no plan_date (backlog), with context_subject."""
     with get_db(db_path) as conn:
         rows = conn.execute(
-            "SELECT uuid, text, status, position, followup_config, description, context_subject "
+            "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE plan_date IS NULL ORDER BY position, id"
         ).fetchall()
     return [_row_to_task(r) for r in rows]
@@ -965,7 +1408,7 @@ def get_all_tasks(db_path: Path) -> list[dict]:
     with get_db(db_path) as conn:
         rows = conn.execute(
             "SELECT uuid, text, status, position, followup_config, description, "
-            "context_subject, plan_date, anchor_id "
+            "context_subject, context_node_id, plan_date, anchor_id "
             "FROM tasks ORDER BY plan_date DESC NULLS LAST, position"
         ).fetchall()
     return [_row_to_task(r, include_schedule=True) for r in rows]

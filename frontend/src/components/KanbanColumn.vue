@@ -32,23 +32,25 @@ async function onTaskUpdate(task: Task) {
 
 const milestoneStore = useMilestoneStore()
 
-/** Group tasks by context_subject, then by milestone within each context */
+/** Group tasks by context (node_id for uniqueness, subject for label), then by milestone */
 const grouped = computed(() => {
-  const byContext: Record<string, Task[]> = {}
+  const byContext: Record<string, { label: string; tasks: Task[] }> = {}
   for (const task of props.tasks) {
-    const ctx = task.context_subject ?? '__uncategorized__'
-    if (!byContext[ctx]) byContext[ctx] = []
-    byContext[ctx].push(task)
+    const key = task.context_node_id ?? task.context_subject ?? '__uncategorized__'
+    if (!byContext[key]) {
+      const label = task.context_subject ?? (key === '__uncategorized__' ? 'Uncategorized' : key)
+      byContext[key] = { label, tasks: [] }
+    }
+    byContext[key].tasks.push(task)
   }
   // Sort: Uncategorized last
-  const sorted = Object.entries(byContext).sort(([a], [b]) => {
-    if (a === '__uncategorized__') return 1
-    if (b === '__uncategorized__') return -1
-    return a.localeCompare(b)
+  const sorted = Object.entries(byContext).sort(([, a], [, b]) => {
+    if (a.label === 'Uncategorized') return 1
+    if (b.label === 'Uncategorized') return -1
+    return a.label.localeCompare(b.label)
   })
 
-  return sorted.map(([ctx, tasks]) => {
-    const label = ctx === '__uncategorized__' ? 'Uncategorized' : ctx
+  return sorted.map(([, { label, tasks }]) => {
     // Sub-group by milestone
     const byMilestone: Record<string, { id: string; name: string; color: string | null; tasks: Task[] }> = {}
     const ungrouped: Task[] = []
