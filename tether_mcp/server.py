@@ -637,6 +637,18 @@ def move_context_node(node_id: str, new_parent_id: str = "") -> dict:
     return {"ok": True}
 
 
+@mcp.tool()
+def patch_context_node(node_id: str, fields: dict) -> dict:
+    """Update fields on a context node or milestone.
+    Allowed: name, description, node_type, target_date, status, color, archived.
+    Returns updated node or error."""
+    from db.queries import patch_node_fields, get_node
+    result = patch_node_fields(_db(), node_id, fields)
+    if result is None:
+        return {"error": f"Node {node_id} not found or no valid fields"}
+    return get_node(_db(), node_id)
+
+
 # Task linking (new system)
 @mcp.tool()
 def link_task_to_node(task_id: str, node_id: str) -> dict:
