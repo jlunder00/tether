@@ -3,7 +3,12 @@ import { ref, watch } from 'vue'
 import type { Anchor } from '../stores/anchors'
 
 const props = defineProps<{ anchor: Anchor }>()
-const emit = defineEmits<{ save: [anchor: Anchor] }>()
+const emit = defineEmits<{
+  save: [anchor: Anchor]
+  delete: [anchorId: string]
+  moveUp: [anchorId: string]
+  moveDown: [anchorId: string]
+}>()
 
 const draft = ref({ ...props.anchor })
 const saving = ref(false)
@@ -98,9 +103,23 @@ async function save() {
       </div>
     </details>
 
-    <button @click="save" :disabled="saving"
-            class="self-end px-4 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm disabled:opacity-50">
-      {{ saving ? 'Saving…' : 'Save' }}
-    </button>
+    <div class="flex items-center gap-2 justify-between">
+      <div class="flex gap-1">
+        <button @click="emit('moveUp', anchor.id)" title="Move up"
+                class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▲</button>
+        <button @click="emit('moveDown', anchor.id)" title="Move down"
+                class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▼</button>
+      </div>
+      <div class="flex gap-2">
+        <button @click="emit('delete', anchor.id)"
+                class="px-4 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-sm">
+          Delete
+        </button>
+        <button @click="save" :disabled="saving"
+                class="px-4 py-1.5 bg-white/20 hover:bg-white/30 rounded-lg text-sm disabled:opacity-50">
+          {{ saving ? 'Saving…' : 'Save' }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>

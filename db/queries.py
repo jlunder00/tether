@@ -47,6 +47,11 @@ def upsert_anchor(db_path: Path, anchor: dict) -> None:
         """, {**anchor, "followup_config": fc_json})
 
 
+def delete_anchor(db_path: Path, anchor_id: str) -> None:
+    with get_db(db_path) as conn:
+        conn.execute("DELETE FROM anchors WHERE id=?", (anchor_id,))
+
+
 def seed_default_anchors(db_path: Path) -> None:
     """Create a simple default schedule for new users. Skips if anchors already exist."""
     with get_db(db_path) as conn:
