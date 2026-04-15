@@ -965,6 +965,25 @@ def get_node_by_path(db_path: Path, path: str) -> dict | None:
     return get_node(db_path, resolved_id)
 
 
+def find_child_by_name(db_path: Path, parent_id: str | None, name: str) -> dict | None:
+    """Find a direct child node by (parent_id, name). Returns node dict or None.
+    For root nodes, pass parent_id=None."""
+    with get_db(db_path) as conn:
+        if parent_id is None:
+            row = conn.execute(
+                "SELECT * FROM context_nodes WHERE parent_id IS NULL AND name = ?",
+                (name,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM context_nodes WHERE parent_id = ? AND name = ?",
+                (parent_id, name),
+            ).fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
 def get_node_path(db_path: Path, node_id: str) -> str | None:
     """Get human-readable path for a node: 'School/ML/Project'.
 

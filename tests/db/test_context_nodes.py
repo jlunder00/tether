@@ -113,6 +113,40 @@ class TestGetNodeByPath:
 
 
 # ---------------------------------------------------------------------------
+# find_child_by_name
+# ---------------------------------------------------------------------------
+
+class TestFindChildByName:
+    def test_find_child_by_name_root(self, db_path):
+        created = q.create_node(db_path, None, "School")
+        found = q.find_child_by_name(db_path, None, "School")
+        assert found is not None
+        assert found["id"] == created["id"]
+        assert found["name"] == "School"
+        assert found["parent_id"] is None
+        assert found["node_type"] == "context"
+
+    def test_find_child_by_name_child(self, db_path):
+        parent = q.create_node(db_path, None, "School")
+        child = q.create_node(db_path, parent["id"], "ML")
+        found = q.find_child_by_name(db_path, parent["id"], "ML")
+        assert found is not None
+        assert found["id"] == child["id"]
+        assert found["name"] == "ML"
+        assert found["parent_id"] == parent["id"]
+
+    def test_find_child_by_name_not_found(self, db_path):
+        q.create_node(db_path, None, "School")
+        assert q.find_child_by_name(db_path, None, "Nonexistent") is None
+
+    def test_find_child_by_name_wrong_parent(self, db_path):
+        parent_a = q.create_node(db_path, None, "School")
+        parent_b = q.create_node(db_path, None, "Work")
+        q.create_node(db_path, parent_a["id"], "ML")
+        assert q.find_child_by_name(db_path, parent_b["id"], "ML") is None
+
+
+# ---------------------------------------------------------------------------
 # get_node_path
 # ---------------------------------------------------------------------------
 
