@@ -1176,6 +1176,32 @@ def run_polling(token: str, chat_id: str) -> None:
                         if _task.get("id"):
                             init_followup_state(_active_db, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
+                # Premium Beacon hook — review accumulated changes on anchor transition
+                try:
+                    from tether_premium.bot.beacon import should_trigger_beacon, run_beacon
+                    if should_trigger_beacon(str(_active_db), is_anchor_transition=True):
+                        from tether_premium.bot.state_monitor import consume_changes
+                        from tether_premium.bot.router import LLMRouter
+                        import asyncio as _aio
+                        _beacon_changes = consume_changes(str(_active_db))
+                        if _beacon_changes:
+                            _cfg = load_config()
+                            _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
+                            _beacon_router = LLMRouter(mcp_server_url=_mcp_url)
+
+                            async def _beacon_notify(msg):
+                                _send(msg)
+
+                            _aio.run(run_beacon(
+                                router=_beacon_router,
+                                db_path=str(_active_db),
+                                changes=_beacon_changes,
+                                notify=_beacon_notify,
+                            ))
+                except ImportError:
+                    pass  # Premium not installed
+                except Exception as _be:
+                    logger.warning("Beacon anchor transition check failed: %s", _be)
             # Run follow-up pings for the active user's DB
             check_followups(_active_db, _send)
         except Exception as e:
