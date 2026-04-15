@@ -213,3 +213,5 @@ __marimo__/
 
 # Internal dev specs (not user-facing docs)
 docs/superpowers/
+
+CLAUDE.md
