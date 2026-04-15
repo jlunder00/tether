@@ -921,7 +921,8 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
         plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
 
-    mode = "quick" if len(text.strip()) < 15 else "scheduler"
+    stripped = text.strip()
+    mode = "quick" if len(stripped.split()) <= 2 and len(stripped) < 12 else "scheduler"
     system = build_system_prompt(
         anchor_name=current_anchor.get("name", "General"),
         anchor_time=current_anchor.get("time", "00:00"),
@@ -945,7 +946,7 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     model = config.get("llm", {}).get("roles", {}).get(
         "main_agent", {}).get("model", "claude-sonnet-4-6")
 
-    logger.info("v3 basic: model=%s backend=%s", model, type(backend).__name__)
+    logger.info("v3 basic: model=%s backend=%s mode=%s", model, type(backend).__name__, mode)
     result = asyncio.run(backend.complete(messages=conv_history, system=system, model=model))
     return result.content
 
@@ -996,7 +997,7 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         # Premium plugin hook — sessions, LLM router, role dispatch, Beacon
         try:
             from tether_premium.register import get_premium_handler
-            final = get_premium_handler()(text, db_path, anchors, current_anchor)
+            final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
             send_fn(final)
             insert_conversation_turn(db_path, "user", text)
             insert_conversation_turn(db_path, "assistant", final)
