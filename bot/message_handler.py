@@ -110,8 +110,8 @@ def _log_safe(stage: str, prompt: str, response: str, error: str | None = None) 
     try:
         if _log_ctx["db_path"] and _log_ctx["session_id"]:
             log_stage(_log_ctx["db_path"], _log_ctx["session_id"], stage, prompt, response, error)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("_log_safe failed: %s", e)
 
 
 _MODEL_DEFAULTS: dict[str, str] = {
@@ -921,12 +921,14 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
         plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
 
+    mode = "quick" if len(text.strip()) < 15 else "scheduler"
     system = build_system_prompt(
         anchor_name=current_anchor.get("name", "General"),
         anchor_time=current_anchor.get("time", "00:00"),
         plan_summary="\n".join(plan_lines) or "No plan data.",
         context_subjects=subjects,
         session_notes=None,
+        mode=mode,
     )
 
     conv_history = [
