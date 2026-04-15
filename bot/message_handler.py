@@ -110,8 +110,8 @@ def _log_safe(stage: str, prompt: str, response: str, error: str | None = None) 
     try:
         if _log_ctx["db_path"] and _log_ctx["session_id"]:
             log_stage(_log_ctx["db_path"], _log_ctx["session_id"], stage, prompt, response, error)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("_log_safe failed: %s", e)
 
 
 _MODEL_DEFAULTS: dict[str, str] = {
@@ -921,12 +921,15 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
         plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
 
+    _quick_tokens = {"hi", "hello", "hey", "thanks", "ok", "yes", "no", "yep", "nope", "ty"}
+    mode = "quick" if text.strip().lower() in _quick_tokens else "scheduler"
     system = build_system_prompt(
         anchor_name=current_anchor.get("name", "General"),
         anchor_time=current_anchor.get("time", "00:00"),
         plan_summary="\n".join(plan_lines) or "No plan data.",
         context_subjects=subjects,
         session_notes=None,
+        mode=mode,
     )
 
     conv_history = [
@@ -943,7 +946,7 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     model = config.get("llm", {}).get("roles", {}).get(
         "main_agent", {}).get("model", "claude-sonnet-4-6")
 
-    logger.info("v3 basic: model=%s backend=%s", model, type(backend).__name__)
+    logger.info("v3 basic: model=%s backend=%s mode=%s", model, type(backend).__name__, mode)
     result = asyncio.run(backend.complete(messages=conv_history, system=system, model=model))
     return result.content
 
@@ -994,13 +997,16 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         # Premium plugin hook — sessions, LLM router, role dispatch, Beacon
         try:
             from tether_premium.register import get_premium_handler
-            final = get_premium_handler()(text, db_path, anchors, current_anchor)
-            send_fn(final)
-            insert_conversation_turn(db_path, "user", text)
-            insert_conversation_turn(db_path, "assistant", final)
+            # Premium handler uses send_fn for Beacon notifications;
+            # it returns the main response text without sending it.
+            final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
+            if final:
+                send_fn(final)
+                insert_conversation_turn(db_path, "user", text)
+                insert_conversation_turn(db_path, "assistant", final)
             return
-        except (ImportError, NotImplementedError):
-            pass  # Premium not installed or not yet wired
+        except (ImportError, NotImplementedError, TypeError):
+            pass  # Premium not installed, not wired, or signature mismatch
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
@@ -1173,6 +1179,32 @@ def run_polling(token: str, chat_id: str) -> None:
                         if _task.get("id"):
                             init_followup_state(_active_db, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
+                # Premium Beacon hook — review accumulated changes on anchor transition
+                try:
+                    from tether_premium.bot.beacon import should_trigger_beacon, run_beacon
+                    if should_trigger_beacon(str(_active_db), is_anchor_transition=True):
+                        from tether_premium.bot.state_monitor import consume_changes
+                        from tether_premium.bot.router import LLMRouter
+                        import asyncio as _aio
+                        _beacon_changes = consume_changes(str(_active_db))
+                        if _beacon_changes:
+                            _cfg = load_config()
+                            _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
+                            _beacon_router = LLMRouter(mcp_server_url=_mcp_url)
+
+                            async def _beacon_notify(msg):
+                                _send(msg)
+
+                            _aio.run(run_beacon(
+                                router=_beacon_router,
+                                db_path=str(_active_db),
+                                changes=_beacon_changes,
+                                notify=_beacon_notify,
+                            ))
+                except ImportError:
+                    pass  # Premium not installed
+                except Exception as _be:
+                    logger.warning("Beacon anchor transition check failed: %s", _be)
             # Run follow-up pings for the active user's DB
             check_followups(_active_db, _send)
         except Exception as e:
