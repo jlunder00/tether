@@ -921,8 +921,8 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         task_strs = [f"[{t.get('status', '?')[:1]}] {t.get('text', '')}" for t in tasks]
         plan_lines.append(f"{anchor_id}: {' | '.join(task_strs) or 'empty'}")
 
-    stripped = text.strip()
-    mode = "quick" if len(stripped.split()) <= 2 and len(stripped) < 12 else "scheduler"
+    _quick_tokens = {"hi", "hello", "hey", "thanks", "ok", "yes", "no", "yep", "nope", "ty"}
+    mode = "quick" if text.strip().lower() in _quick_tokens else "scheduler"
     system = build_system_prompt(
         anchor_name=current_anchor.get("name", "General"),
         anchor_time=current_anchor.get("time", "00:00"),
