@@ -997,13 +997,16 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         # Premium plugin hook — sessions, LLM router, role dispatch, Beacon
         try:
             from tether_premium.register import get_premium_handler
+            # Premium handler uses send_fn for Beacon notifications;
+            # it returns the main response text without sending it.
             final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
-            send_fn(final)
-            insert_conversation_turn(db_path, "user", text)
-            insert_conversation_turn(db_path, "assistant", final)
+            if final:
+                send_fn(final)
+                insert_conversation_turn(db_path, "user", text)
+                insert_conversation_turn(db_path, "assistant", final)
             return
-        except (ImportError, NotImplementedError):
-            pass  # Premium not installed or not yet wired
+        except (ImportError, NotImplementedError, TypeError):
+            pass  # Premium not installed, not wired, or signature mismatch
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
