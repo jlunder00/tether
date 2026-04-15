@@ -19,6 +19,19 @@ jobs:
           source .venv/bin/activate
           pip install -q -e .
 
+      - name: Pull and install tether-premium (if available)
+        run: |
+          if [ -d /home/toast/tether-premium ]; then
+            cd /home/toast/tether-premium
+            git pull origin main
+            cd /home/toast/tether
+            source .venv/bin/activate
+            pip install -q -e /home/toast/tether-premium
+            python -c "from tether_premium.register import get_premium_handler; print('[ok] premium loaded')"
+          else
+            echo "tether-premium not cloned — running community edition"
+          fi
+
       - name: Write Telegram secrets to config
         run: |
           cd /home/toast/tether
