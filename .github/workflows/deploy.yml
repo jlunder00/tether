@@ -61,13 +61,15 @@ jobs:
           for db in /home/toast/.tether-config/users/*.db; do
             [ -f "$db" ] && \
               TETHER_IMAGE=tether-premium IMAGE_TAG=${{ steps.version.outputs.tag }} \
-              docker compose run --rm --no-deps api python db/migrate_data_model.py "$db" \
+              TETHER_DATA_DIR=/home/toast/.tether-config \
+              docker compose run --rm --no-deps api python db/migrate_data_model.py /data/users/$(basename "$db") \
               && echo "Migrated $db" || true
           done
 
       - name: Restart services
         run: |
           cd /home/toast/tether
+          TETHER_IMAGE=tether-premium docker compose down || true
           TETHER_IMAGE=tether-premium docker compose up -d
 
       - name: Prune old premium images (keep 3)
