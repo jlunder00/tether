@@ -218,7 +218,8 @@ def get_model(role: str) -> str:
     try:
         config = load_config()
         return config.get("models", {}).get(role) or _MODEL_DEFAULTS[role]
-    except Exception:
+    except Exception as e:
+        logger.warning("get_model config read failed, using default: %s", e)
         return _MODEL_DEFAULTS.get(role, "claude-sonnet-4-6")
 
 
@@ -334,6 +335,7 @@ def check_followups(db_path: Path, send_fn) -> None:
 
     rows = get_active_followup_states(db_path, today)
     if not rows:
+        logger.debug("check_followups: no active followup states for %s", today)
         return
 
     pre_ack_due = []
@@ -342,12 +344,18 @@ def check_followups(db_path: Path, send_fn) -> None:
     # Only ping for anchors that are currently in their time window
     all_anchors = get_anchors(db_path)
     active_anchor_ids = {a["id"] for a in all_anchors if is_anchor_active(a, now)}
+    logger.debug("check_followups: %d rows, %d active anchors (%s)",
+                 len(rows), len(active_anchor_ids), ", ".join(active_anchor_ids) or "none")
 
     for row in rows:
         if row["anchor_id"] not in active_anchor_ids:
+            logger.debug("check_followups: skipping task %s — anchor %s not active",
+                         row["task_id"], row["anchor_id"])
             continue
         config = resolve_followup_config(db_path, row["anchor_id"], row["task_id"])
         if config is None:
+            logger.debug("check_followups: skipping task %s — no followup config",
+                         row["task_id"])
             continue
         if row["acknowledged_at"] is None:
             ref_ts = row["last_ping_at"] or row["sequence_started_at"]
@@ -585,8 +593,8 @@ def call_meta_eval(
         raw = call_claude(prompt, timeout=45, model_role="meta_eval",
                           stage=f"meta_eval_{round_num}")
         return _parse_json(raw)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("meta_eval round %d initial call failed: %s", round_num, e)
 
     valid_anchor_ids = [a["id"] for a in anchors]
     repair_prompt = _build_repair_prompt(
@@ -598,7 +606,8 @@ def call_meta_eval(
             repaired = call_claude(repair_prompt, timeout=45, model_role=role,
                                    stage=f"meta_eval_repair_{round_num}_{attempt}")
             return _parse_json(repaired)
-        except Exception:
+        except Exception as e:
+            logger.warning("meta_eval repair attempt %d failed: %s", attempt, e)
             continue
 
     logger.error("call_meta_eval: all repair attempts failed")
@@ -752,7 +761,8 @@ def call_response_builder(
         return data.get("message", raw)
     except RuntimeError as e:
         return str(e)
-    except Exception:
+    except Exception as e:
+        logger.warning("response_builder parse failed, returning raw: %s", e)
         return raw
 
 
@@ -774,8 +784,9 @@ def _classify_message(text: str, current_anchor: dict, today: str) -> str:
         data = _parse_json(raw)
         route = data.get("route", "full")
         return route if route in ("quick", "full") else "full"
-    except Exception:
-        return "full"  # default to full pipeline on any error
+    except Exception as e:
+        logger.warning("quick_classifier failed, defaulting to full: %s", e)
+        return "full"
 
 
 # ---------------------------------------------------------------------------
@@ -902,7 +913,8 @@ def _is_v3_enabled() -> bool:
     try:
         config = load_config()
         return bool(config.get("llm", {}).get("use_v3", False))
-    except Exception:
+    except Exception as e:
+        logger.debug("_is_v3_enabled config read failed: %s", e)
         return False
 
 
@@ -911,7 +923,8 @@ def _is_v2_fallback_enabled() -> bool:
     try:
         config = load_config()
         return bool(config.get("llm", {}).get("v2_fallback", True))
-    except Exception:
+    except Exception as e:
+        logger.debug("_is_v2_fallback_enabled config read failed: %s", e)
         return True
 
 
@@ -1018,13 +1031,15 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
             final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
+            insert_conversation_turn(db_path, "user", text)
             if final:
                 send_fn(final)
-                insert_conversation_turn(db_path, "user", text)
                 insert_conversation_turn(db_path, "assistant", final)
             return
-        except (ImportError, NotImplementedError, TypeError):
-            pass  # Premium not installed, not wired, or signature mismatch
+        except (ImportError, NotImplementedError):
+            pass  # Premium not installed or not yet wired
+        except TypeError as _te:
+            logger.warning("Premium handler TypeError (signature mismatch?): %s", _te)
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
@@ -1100,14 +1115,15 @@ def _send_telegram(token: str, chat_id: str, text: str) -> None:
 def _notify_api() -> None:
     try:
         requests.post("http://localhost:8000/api/notify", timeout=2)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("API notify failed: %s", e)
 
 
 def _load_offset() -> int:
     try:
         return int(_OFFSET_PATH.read_text().strip())
-    except Exception:
+    except Exception as e:
+        logger.debug("_load_offset failed, starting from 0: %s", e)
         return 0
 
 
@@ -1201,10 +1217,10 @@ def run_polling(token: str, chat_id: str) -> None:
                 try:
                     from tether_premium.bot.beacon import should_trigger_beacon, run_beacon
                     if should_trigger_beacon(str(_active_db), is_anchor_transition=True):
-                        from tether_premium.bot.state_monitor import consume_changes
+                        from tether_premium.bot.state_monitor import peek_changes, consume_changes
                         from tether_premium.bot.router import LLMRouter
                         import asyncio as _aio
-                        _beacon_changes = consume_changes(str(_active_db))
+                        _beacon_changes = peek_changes(str(_active_db))
                         if _beacon_changes:
                             _cfg = load_config()
                             _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
@@ -1213,12 +1229,14 @@ def run_polling(token: str, chat_id: str) -> None:
                             async def _beacon_notify(msg):
                                 _send(msg)
 
-                            _aio.run(run_beacon(
+                            _result = _aio.run(run_beacon(
                                 router=_beacon_router,
                                 db_path=str(_active_db),
                                 changes=_beacon_changes,
                                 notify=_beacon_notify,
                             ))
+                            if _result.get("triggered"):
+                                consume_changes(str(_active_db))
                 except ImportError:
                     pass  # Premium not installed
                 except Exception as _be:
