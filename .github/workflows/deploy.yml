@@ -1,34 +1,123 @@
-name: Deploy to Pi
+name: Deploy
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write   # needed by publish-community to push to ghcr.io
 
 jobs:
-  deploy:
-    runs-on: self-hosted   # Pi registered as self-hosted runner
+  # ── Premium deployment ────────────────────────────────────────────────────
+  # Builds with tether-premium installed. Image stays on the Pi — never pushed
+  # to any registry. When a private registry is available, push step goes here.
+  deploy-premium:
+    name: Deploy premium to Pi
+    runs-on: self-hosted
     steps:
       - name: Pull latest code
         run: |
           cd /home/toast/tether
           git pull origin main
 
-      - name: Build Docker image
+      - name: Resolve version tag
+        id: version
+        run: |
+          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SEMVER="${GITHUB_REF#refs/tags/}"
+            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+            echo "extra_tag=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+            echo "extra_tag=" >> $GITHUB_OUTPUT
+          fi
+          echo "sha_tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Build premium image
         run: |
           cd /home/toast/tether
-          docker compose build
+          IMAGE=tether-premium
+          TAG=${{ steps.version.outputs.tag }}
+          IMAGE_TAG=$TAG TETHER_IMAGE=$IMAGE GITHUB_TOKEN=$TETHER_PREMIUM_TOKEN \
+            docker compose build
+          # Also tag as latest
+          docker tag $IMAGE:$TAG $IMAGE:latest
+          # If this is a semver release, tag that too
+          if [ -n "${{ steps.version.outputs.extra_tag }}" ]; then
+            docker tag $IMAGE:$TAG $IMAGE:${{ steps.version.outputs.extra_tag }}
+          fi
+          # Write IMAGE_TAG to .env so compose uses the new image on restart
+          sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$TAG/" /home/toast/tether/.env || \
+            echo "IMAGE_TAG=$TAG" >> /home/toast/tether/.env
         env:
-          GITHUB_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
 
       - name: Run DB migrations
         run: |
           cd /home/toast/tether
           for db in /home/toast/.tether-config/users/*.db; do
-            [ -f "$db" ] && docker compose run --rm --no-deps api python db/migrate_data_model.py "$db" \
+            [ -f "$db" ] && \
+              TETHER_IMAGE=tether-premium IMAGE_TAG=${{ steps.version.outputs.tag }} \
+              docker compose run --rm --no-deps api python db/migrate_data_model.py "$db" \
               && echo "Migrated $db" || true
           done
 
       - name: Restart services
         run: |
           cd /home/toast/tether
-          docker compose up -d
+          TETHER_IMAGE=tether-premium docker compose up -d
+
+      - name: Prune old premium images (keep 3)
+        run: |
+          docker images tether-premium --format "{{.CreatedAt}}\t{{.ID}}\t{{.Tag}}" \
+            | sort -r \
+            | awk 'NR>3 && $3 != "latest" {print $2}' \
+            | xargs -r docker rmi --force 2>/dev/null || true
+          docker image prune -f
+
+  # ── Community edition publish ─────────────────────────────────────────────
+  # Builds without premium. Pushes to ghcr.io — publicly visible, no premium
+  # code included. Community self-hosters pull from here.
+  publish-community:
+    name: Publish community edition to ghcr.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SEMVER="${GITHUB_REF#refs/tags/}"
+            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+            echo "extra_tag=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+            echo "extra_tag=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build community image
+        run: |
+          IMAGE=ghcr.io/jlunder00/tether
+          TAG=${{ steps.version.outputs.tag }}
+          # No GITHUB_TOKEN build arg — community edition, no premium
+          docker build -t $IMAGE:$TAG .
+
+      - name: Push to ghcr.io
+        run: |
+          IMAGE=ghcr.io/jlunder00/tether
+          TAG=${{ steps.version.outputs.tag }}
+          docker push $IMAGE:$TAG
+          docker tag $IMAGE:$TAG $IMAGE:latest
+          docker push $IMAGE:latest
+          if [ -n "${{ steps.version.outputs.extra_tag }}" ]; then
+            docker tag $IMAGE:$TAG $IMAGE:${{ steps.version.outputs.extra_tag }}
+            docker push $IMAGE:${{ steps.version.outputs.extra_tag }}
+          fi
