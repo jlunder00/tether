@@ -2,9 +2,14 @@
 # Run the full Tether stack: API + Bot + MCP server.
 # Data lives at the bind-mounted TETHER_DATA_DIR (default: ~/.tether-config).
 
+x-build: &build
+  context: .
+  args:
+    GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+
 services:
   api:
-    build: .
+    build: *build
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
@@ -20,7 +25,7 @@ services:
       retries: 3
 
   bot:
-    build: .
+    build: *build
     entrypoint: ["/app/scripts/bot-entrypoint.sh"]
     volumes:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
@@ -32,7 +37,7 @@ services:
     restart: unless-stopped
 
   mcp:
-    build: .
+    build: *build
     command: ["python", "-m", "tether_mcp.server", "--sse"]
     ports:
       - "5001:5001"

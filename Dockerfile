@@ -41,6 +41,18 @@ COPY scripts/ scripts/
 # Frontend build artifacts
 COPY --from=frontend-build /build/dist/ frontend/dist/
 
+# ── Optional premium layer ────────────────────────────────
+# Pass --build-arg GITHUB_TOKEN=<token> to install premium from the private
+# repo. If omitted or empty, this produces the community edition image.
+ARG GITHUB_TOKEN=
+RUN if [ -n "$GITHUB_TOKEN" ]; then \
+      pip install --no-cache-dir \
+        "git+https://${GITHUB_TOKEN}@github.com/jlunder00/tether-premium.git" && \
+      python -c "from tether_premium.register import get_premium_handler; print('[ok] premium loaded')" ; \
+    else \
+      echo "[skip] no GITHUB_TOKEN — community edition" ; \
+    fi
+
 # Default port for API
 EXPOSE 8000
 

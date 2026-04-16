@@ -13,20 +13,12 @@ jobs:
           cd /home/toast/tether
           git pull origin main
 
-      - name: Pull tether-premium (if available)
-        run: |
-          if [ -d /home/toast/tether-premium ]; then
-            cd /home/toast/tether-premium
-            git pull origin main
-            echo "tether-premium updated"
-          else
-            echo "tether-premium not cloned — running community edition"
-          fi
-
       - name: Build Docker image
         run: |
           cd /home/toast/tether
           docker compose build
+        env:
+          GITHUB_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
 
       - name: Run DB migrations
         run: |
