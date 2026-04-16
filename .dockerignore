@@ -1,0 +1,23 @@
+# .dockerignore
+.git
+.github
+.worktrees
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+*.egg-info
+.venv
+venv
+node_modules
+frontend/node_modules
+*.db
+*.sqlite
+.tether-config
+systemd
+tests
+docs
+*.md
+!pyproject.toml
+!requirements*.txt

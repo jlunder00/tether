@@ -13,87 +13,22 @@ jobs:
           cd /home/toast/tether
           git pull origin main
 
-      - name: Install Python dependencies
+      - name: Build Docker image
         run: |
           cd /home/toast/tether
-          source .venv/bin/activate
-          pip install -q -e .
-
-      - name: Pull and install tether-premium (if available)
-        run: |
-          if [ -d /home/toast/tether-premium ]; then
-            cd /home/toast/tether-premium
-            git pull origin main
-            cd /home/toast/tether
-            source .venv/bin/activate
-            pip install -q -e /home/toast/tether-premium
-            python -c "from tether_premium.register import get_premium_handler; print('[ok] premium loaded')"
-          else
-            echo "tether-premium not cloned — running community edition"
-          fi
-
-      - name: Write Telegram secrets to config
-        run: |
-          cd /home/toast/tether
-          source .venv/bin/activate
-          python3 - <<'EOF'
-          import yaml, os
-          from pathlib import Path
-
-          config_path = Path.home() / ".tether-config" / "config.yaml"
-          if config_path.exists():
-              with open(config_path) as f:
-                  config = yaml.safe_load(f) or {}
-          else:
-              config = {}
-
-          bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-          if not bot_token or not chat_id:
-              print("TELEGRAM secrets not set — skipping config update, existing values preserved.")
-          else:
-              config.setdefault("telegram", {})
-              config["telegram"]["bot_token"] = bot_token
-              config["telegram"]["chat_id"] = chat_id
-              with open(config_path, "w") as f:
-                  yaml.dump(config, f)
-              print("Config updated.")
-          EOF
+          docker compose build
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
 
-      - name: Verify bot can run
+      - name: Run DB migrations
         run: |
           cd /home/toast/tether
-          source .venv/bin/activate
-          python -c "from bot.anchor_trigger import load_anchors; print('[ok] imports work')"
-
-      - name: Run DB migrations on user databases
-        run: |
-          cd /home/toast/tether
-          source .venv/bin/activate
           for db in /home/toast/.tether-config/users/*.db; do
-            [ -f "$db" ] && python db/migrate_data_model.py "$db" && echo "Migrated $db" || true
+            [ -f "$db" ] && docker compose run --rm --no-deps api python db/migrate_data_model.py "$db" \
+              && echo "Migrated $db" || true
           done
 
-      - name: Build Vue frontend
+      - name: Restart services
         run: |
-          cd /home/toast/tether/frontend
-          npm ci
-          npm run build
-
-      - name: Install systemd service files
-        run: |
-          sudo cp /home/toast/tether/systemd/tether-*.service /etc/systemd/system/
-          sudo systemctl daemon-reload
-
-      - name: Restart API service
-        run: sudo systemctl restart tether-api
-
-      - name: Restart bot service
-        run: sudo systemctl restart tether-bot
-
-      - name: Restart MCP service
-        run: sudo systemctl restart tether-mcp
+          cd /home/toast/tether
+          docker compose up -d

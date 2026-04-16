@@ -31,9 +31,11 @@ from db.queries import (
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
 
+_CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
+
 
 def _load_secrets() -> dict:
-    p = Path.home() / ".tether-config" / "secrets.json"
+    p = _CONFIG_DIR / "secrets.json"
     if p.exists():
         import json
         return json.loads(p.read_text())
@@ -47,8 +49,8 @@ def _db() -> Path:
         return Path(env)
     user_id = os.environ.get("TETHER_USER_ID") or _secrets.get("TETHER_USER_ID")
     if user_id:
-        return Path.home() / ".tether-config" / "users" / f"{user_id}.db"
-    return Path.home() / ".tether-config" / "tether.db"
+        return _CONFIG_DIR / "users" / f"{user_id}.db"
+    return _CONFIG_DIR / "tether.db"
 
 
 def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict:
