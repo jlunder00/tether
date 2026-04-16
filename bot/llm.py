@@ -89,8 +89,14 @@ class PipelineBackend(LLMBackend):
         result = await asyncio.to_thread(
             subprocess.run, cmd, capture_output=True, text=True, check=True, timeout=180
         )
+        output = result.stdout.strip()
+        if "Not logged in" in output or "Please run /login" in output:
+            logger.error("Claude CLI session expired: %s", output[:200])
+            raise RuntimeError(
+                "Claude session expired. Please re-run /login on the Pi."
+            )
         return LLMResponse(
-            content=result.stdout.strip(),
+            content=output,
             tool_calls=[],
             stop_reason="end_turn",
             input_tokens=0,
@@ -197,7 +203,15 @@ class AnthropicBackend(LLMBackend):
                     len(kwargs.get("tools", []) or []), bool(kwargs.get("thinking")),
                     kwargs.get("max_tokens", 0))
 
-        response = await self._call_with_retry(client, kwargs)
+        try:
+            response = await self._call_with_retry(client, kwargs)
+        except anthropic.AuthenticationError as e:
+            source = "OAuth" if oauth_token else "API key"
+            logger.error("Anthropic auth failed (%s): %s", source, e)
+            raise RuntimeError(
+                f"Authentication failed ({source}). "
+                "Please re-run /login or check your API key."
+            ) from e
 
         content_text = ""
         tool_calls = []
