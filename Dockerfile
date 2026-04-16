@@ -19,8 +19,12 @@ FROM python:3.11-slim
 # System deps for bcrypt, PyJWT, and potential native extensions.
 # cron is needed for anchor trigger scheduling in the bot container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev cron git \
+    gcc libffi-dev cron git gosu \
     && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for running services. UID 1000 matches the default Pi user
+# so bind-mounted /data files are accessible without permission issues.
+RUN useradd -m -u 1000 -s /bin/bash tether
 
 WORKDIR /app
 
