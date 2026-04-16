@@ -7,6 +7,7 @@ from db.queries import (
     upsert_tasks,
     upsert_context_entry, get_context_entries, delete_context_entry,
     rename_context_subject,
+    ensure_node_path, get_all_node_paths, get_node_by_path, create_node,
     insert_conversation_turn, get_recent_history,
     clear_session_state,
     insert_orchestrator_turn, get_orchestrator_conversation,
@@ -909,3 +910,67 @@ def test_get_full_task_dependencies_cross_day(db_path):
     assert len(deps_day2["blocked_by"]) == 1
     assert deps_day2["blocked_by"][0]["type"] == "task"
     assert deps_day2["blocked_by"][0]["id"] == uid_day1
+
+
+# ---------------------------------------------------------------------------
+# ensure_node_path + get_all_node_paths
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_node_path_creates_intermediates(db_path):
+    node = ensure_node_path(db_path, "School/ML/Project")
+    assert node["name"] == "Project"
+    # Intermediates should exist
+    school = get_node_by_path(db_path, "School")
+    assert school is not None
+    ml = get_node_by_path(db_path, "School/ML")
+    assert ml is not None
+    assert ml["parent_id"] == school["id"]
+    assert node["parent_id"] == ml["id"]
+
+
+def test_ensure_node_path_idempotent(db_path):
+    node1 = ensure_node_path(db_path, "School/ML/Project")
+    node2 = ensure_node_path(db_path, "School/ML/Project")
+    assert node1["id"] == node2["id"]
+
+
+def test_ensure_node_path_single_segment(db_path):
+    node = ensure_node_path(db_path, "Thesis")
+    assert node["name"] == "Thesis"
+    assert node["parent_id"] is None
+
+
+def test_ensure_node_path_empty_raises(db_path):
+    with pytest.raises(ValueError):
+        ensure_node_path(db_path, "")
+
+
+def test_ensure_node_path_reuses_existing_parents(db_path):
+    create_node(db_path, None, "Existing")
+    node = ensure_node_path(db_path, "Existing/Child")
+    existing = get_node_by_path(db_path, "Existing")
+    assert node["parent_id"] == existing["id"]
+
+
+def test_get_all_node_paths_empty(db_path):
+    assert get_all_node_paths(db_path) == []
+
+
+def test_get_all_node_paths_tree(db_path):
+    ensure_node_path(db_path, "School/ML")
+    ensure_node_path(db_path, "School/Thesis")
+    ensure_node_path(db_path, "Work")
+    paths = get_all_node_paths(db_path)
+    assert "School" in paths
+    assert "School/ML" in paths
+    assert "School/Thesis" in paths
+    assert "Work" in paths
+
+
+def test_get_all_node_paths_excludes_archived(db_path):
+    from db.queries import archive_node
+    node = ensure_node_path(db_path, "Old")
+    archive_node(db_path, node["id"])
+    paths = get_all_node_paths(db_path)
+    assert "Old" not in paths

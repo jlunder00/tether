@@ -24,7 +24,6 @@ from bot.handler_utils import (
 )
 from db.queries import (
     get_anchors,
-    get_context_entries,
     get_plan,
     get_recent_history,
     insert_check_in,
@@ -32,7 +31,6 @@ from db.queries import (
     list_plan_dates,
     log_stage,
     patch_anchor,
-    upsert_context_entry,
     upsert_plan,
     upsert_tasks,
     clear_session_state,
@@ -41,7 +39,6 @@ from db.queries import (
     upsert_staging_mutation,
     get_staging_mutations,
     link_milestone_task,
-    create_milestone,
     patch_milestone,
     init_followup_state,
     get_active_followup_states,
@@ -49,6 +46,15 @@ from db.queries import (
     record_ping,
     mark_followup_completed,
     resolve_followup_config,
+    # context_nodes model
+    ensure_node_path,
+    get_node_by_path,
+    get_section,
+    upsert_section,
+    append_section,
+    get_children,
+    get_all_node_paths,
+    create_node,
 )
 from db.schema import init_db
 
@@ -153,10 +159,11 @@ def _fetch_requested_context(requests: list[dict], db_path: Path, round_num: int
         kind = req.get("kind")
         if kind == "context_entry":
             subject = req.get("subject", "")
-            entries = get_context_entries(db_path, prefix=subject)
-            if entries:
-                for e in entries:
-                    sections.append(f"### Context: {e['subject']}\n{e['body']}")
+            node = get_node_by_path(db_path, subject)
+            if node:
+                sec = get_section(db_path, node["id"], "details")
+                body = sec["body"] if sec else "(no details section)"
+                sections.append(f"### Context: {subject}\n{body}")
             else:
                 sections.append(f"### Context: {subject}\n(not found)")
         elif kind == "plan":
@@ -270,19 +277,18 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
                 upsert_plan(db_path, date)
                 upsert_tasks(db_path, date, m["anchor_id"], m["tasks"], notes="")
             elif op == "update_context":
-                upsert_context_entry(db_path, m["subject"], m["body"])
+                node = ensure_node_path(db_path, m["subject"])
+                upsert_section(db_path, node["id"], "details", m["body"])
             elif op == "append_context":
-                entries = get_context_entries(db_path)
-                entry = next((e for e in entries if e["subject"] == m["subject"]), None)
-                current = entry["body"] if entry else ""
-                upsert_context_entry(db_path, m["subject"],
-                                     current.rstrip() + "\n\n" + m["content"])
+                node = ensure_node_path(db_path, m["subject"])
+                append_section(db_path, node["id"], "details", m["content"])
             elif op == "patch_context":
-                entries = get_context_entries(db_path)
-                entry = next((e for e in entries if e["subject"] == m["subject"]), None)
-                if entry:
-                    new_body = entry["body"].replace(m["old"], m["new"], 1)
-                    upsert_context_entry(db_path, m["subject"], new_body)
+                node = get_node_by_path(db_path, m["subject"])
+                if node:
+                    sec = get_section(db_path, node["id"], "details")
+                    if sec and m["old"] in sec["body"]:
+                        new_body = sec["body"].replace(m["old"], m["new"], 1)
+                        upsert_section(db_path, node["id"], "details", new_body)
                 else:
                     logger.warning("patch_context: subject %r not found", m["subject"])
             elif op == "insert_check_in":
@@ -293,11 +299,11 @@ def apply_mutations(mutations: list[dict], db_path: Path, today: str) -> None:
                 for task_id in m.get("task_ids", []):
                     link_milestone_task(db_path, milestone_id, task_id)
             elif op == "create_milestone":
-                create_milestone(
-                    db_path,
-                    m["context_subject"],
-                    m["name"],
-                    description=m.get("description"),
+                parent = get_node_by_path(db_path, m.get("context_subject", ""))
+                parent_id = parent["id"] if parent else None
+                create_node(
+                    db_path, parent_id, m["name"],
+                    node_type="milestone",
                     target_date=m.get("target_date"),
                 )
             elif op == "patch_milestone":
@@ -629,8 +635,12 @@ def _dispatch_single_subagent(
         )
     elif op_type in ("patch_context", "append_context"):
         subject = mutation.get("subject", "")
-        entries = get_context_entries(db_path, prefix=subject)
-        current_body = next((e["body"] for e in entries if e["subject"] == subject), "(not found)")
+        node = get_node_by_path(db_path, subject)
+        if node:
+            sec = get_section(db_path, node["id"], "details")
+            current_body = sec["body"] if sec else "(not found)"
+        else:
+            current_body = "(not found)"
         template = _jinja.get_template("subagent_patch.md")
         prompt = template.render(
             op=op_type,
@@ -777,8 +787,13 @@ def _build_slash_prompt(user_message: str, db_path: Path) -> str:
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
     plan = get_plan(db_path, today)
-    context_entries = get_context_entries(db_path, top_level_only=True)
-    context_text = "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in context_entries)
+    root_nodes = get_children(db_path, parent_id=None)
+    context_parts = []
+    for node in root_nodes:
+        sec = get_section(db_path, node["id"], "details")
+        body = sec["body"] if sec else ""
+        context_parts.append(f"## {node['name']}\n{body}")
+    context_text = "\n\n".join(context_parts)
     template = _jinja.get_template("message_handler.md")
     return template.render(
         date=today,
@@ -809,7 +824,7 @@ def _run_v2_planning_loop(
     Returns (mutation_plan, reports, chat_messages, orchestrator_conv).
     Raises RuntimeError if parse errors exceed threshold.
     """
-    all_subjects = [e["subject"] for e in get_context_entries(db_path)]
+    all_subjects = get_all_node_paths(db_path)
     available_dates = list(dict.fromkeys([today] + list_plan_dates(db_path)))
     session_id = str(uuid.uuid4())
     clear_session_state(db_path, session_id)
@@ -914,7 +929,7 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
 
     today = str(date_type.today())
     plan = get_plan(db_path, today)
-    subjects = [e["subject"] for e in get_context_entries(db_path)]
+    subjects = get_all_node_paths(db_path)
     history = get_recent_history(db_path, HISTORY_EXCHANGES)
 
     plan_lines = []
@@ -975,7 +990,8 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
     elif text.startswith("/tether-update-context"):
         try:
             subject, body = parse_update_context(text)
-            upsert_context_entry(db_path, subject, body)
+            node = ensure_node_path(db_path, subject)
+            upsert_section(db_path, node["id"], "details", body)
         except ValueError:
             pass
 

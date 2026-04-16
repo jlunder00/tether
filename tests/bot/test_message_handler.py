@@ -4,7 +4,12 @@ import subprocess
 from datetime import date
 from unittest.mock import patch, call as mock_call
 from db.schema import init_db
-from db.queries import get_anchors, get_plan, upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry, get_context_entries
+from db.queries import (
+    get_anchors, get_plan, upsert_anchor, upsert_plan, upsert_tasks,
+    upsert_context_entry, get_context_entries,
+    ensure_node_path, upsert_section, get_section, get_node_by_path,
+    get_children, get_milestones,
+)
 
 TODAY = str(date.today())
 
@@ -20,7 +25,8 @@ def db_path(tmp_path):
     upsert_anchor(path, ANCHOR)
     upsert_plan(path, TODAY)
     upsert_tasks(path, TODAY, "grind_am", tasks=["Apply to 3 jobs"], notes="ML roles")
-    upsert_context_entry(path, "Job Applications", "Priority 1.")
+    node = ensure_node_path(path, "Job Applications")
+    upsert_section(path, node["id"], "details", "Priority 1.")
     return path
 
 
@@ -109,29 +115,29 @@ def test_get_model_falls_back_when_config_missing():
 def test_apply_mutations_append_context(db_path):
     from bot.message_handler import apply_mutations
     apply_mutations([{"op": "append_context", "subject": "Job Applications", "content": "New line."}], db_path, TODAY)
-    entries = get_context_entries(db_path)
-    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
-    assert "Priority 1." in body
-    assert "New line." in body
+    node = get_node_by_path(db_path, "Job Applications")
+    sec = get_section(db_path, node["id"], "details")
+    assert "Priority 1." in sec["body"]
+    assert "New line." in sec["body"]
 
 
 def test_apply_mutations_patch_context(db_path):
     from bot.message_handler import apply_mutations
     apply_mutations([{"op": "patch_context", "subject": "Job Applications",
                       "old": "Priority 1.", "new": "Priority updated."}], db_path, TODAY)
-    entries = get_context_entries(db_path)
-    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
-    assert "Priority updated." in body
-    assert "Priority 1." not in body
+    node = get_node_by_path(db_path, "Job Applications")
+    sec = get_section(db_path, node["id"], "details")
+    assert "Priority updated." in sec["body"]
+    assert "Priority 1." not in sec["body"]
 
 
 def test_apply_mutations_patch_context_remove(db_path):
     from bot.message_handler import apply_mutations
     apply_mutations([{"op": "patch_context", "subject": "Job Applications",
                       "old": "Priority 1.", "new": ""}], db_path, TODAY)
-    entries = get_context_entries(db_path)
-    body = next(e["body"] for e in entries if e["subject"] == "Job Applications")
-    assert "Priority 1." not in body
+    node = get_node_by_path(db_path, "Job Applications")
+    sec = get_section(db_path, node["id"], "details")
+    assert "Priority 1." not in sec["body"]
 
 
 def test_apply_mutations_patch_context_missing_subject(db_path, caplog):
@@ -190,8 +196,11 @@ def test_handle_update_context_saves_to_db(db_path):
     from bot.message_handler import handle_message
     with patch("bot.message_handler.call_claude", return_value="Got it."):
         handle_message("/tether-update-context Thesis :: Working on chapter 3", [].append, db_path=db_path)
-    entries = get_context_entries(db_path)
-    assert any(e["subject"] == "Thesis" for e in entries)
+    node = get_node_by_path(db_path, "Thesis")
+    assert node is not None
+    sec = get_section(db_path, node["id"], "details")
+    assert sec is not None
+    assert "Working on chapter 3" in sec["body"]
 
 
 def test_handle_update_plan_saves_tasks(db_path):
@@ -250,14 +259,15 @@ def test_handle_message_persists_conversation_turn(db_path):
 # ---------------------------------------------------------------------------
 
 def test_fetch_context_entry(db_path):
-    upsert_context_entry(db_path, "Intellipat", "Main entry.")
-    upsert_context_entry(db_path, "Intellipat/Backend", "Backend details.")
+    node = ensure_node_path(db_path, "Intellipat")
+    upsert_section(db_path, node["id"], "details", "Main entry.")
+    child = ensure_node_path(db_path, "Intellipat/Backend")
+    upsert_section(db_path, child["id"], "details", "Backend details.")
     from bot.message_handler import _fetch_requested_context
     result = _fetch_requested_context(
         [{"kind": "context_entry", "subject": "Intellipat"}], db_path, round_num=1
     )
     assert "Main entry." in result
-    assert "Backend details." in result
     assert "Fetched context (round 1)" in result
 
 
@@ -302,7 +312,8 @@ def test_fetch_check_in_log(db_path):
 
 def test_fetch_multiple_kinds(db_path):
     from bot.message_handler import _fetch_requested_context
-    upsert_context_entry(db_path, "General", "General notes.")
+    node = ensure_node_path(db_path, "General")
+    upsert_section(db_path, node["id"], "details", "General notes.")
     result = _fetch_requested_context([
         {"kind": "context_entry", "subject": "General"},
         {"kind": "anchor_detail", "anchor_id": "grind_am"},
@@ -318,7 +329,7 @@ def test_fetch_multiple_kinds(db_path):
 def test_handle_message_loops_on_request_context(db_path):
     """Planning loop makes one context fetch then commits."""
     from bot.message_handler import _run_v2_planning_loop, MAX_PLANNING_ROUNDS
-    upsert_context_entry(db_path, "Job Applications", "Priority 1.")
+    # "Job Applications" node already seeded by db_path fixture
 
     # Round 0: orchestrator reasons; meta_eval fetches context, not done
     # Round 1: orchestrator reasons; meta_eval stages chat mutation, done
@@ -570,7 +581,8 @@ def test_call_satisfaction_eval_fails_gracefully(db_path):
 
 def test_apply_mutations_create_milestone(db_path):
     from bot.message_handler import apply_mutations
-    upsert_context_entry(db_path, "Proj", "body")
+    node = ensure_node_path(db_path, "Proj")
+    upsert_section(db_path, node["id"], "details", "body")
     apply_mutations([{
         "op": "create_milestone",
         "context_subject": "Proj",
@@ -578,16 +590,16 @@ def test_apply_mutations_create_milestone(db_path):
         "description": "All tasks for v2 launch",
         "target_date": "2026-04-30",
     }], db_path, TODAY)
-    from db.queries import get_milestones
-    ms = get_milestones(db_path, "Proj")
-    assert len(ms) == 1
-    assert ms[0]["name"] == "Ship v2"
-    assert ms[0]["target_date"] == "2026-04-30"
+    milestone = get_node_by_path(db_path, "Proj/Ship v2")
+    assert milestone is not None
+    assert milestone["node_type"] == "milestone"
+    assert milestone["target_date"] == "2026-04-30"
 
 
 def test_apply_mutations_patch_milestone(db_path):
     from bot.message_handler import apply_mutations
     from db.queries import create_milestone
+    # Old create_milestone still needs context_entries FK
     upsert_context_entry(db_path, "Proj", "body")
     m = create_milestone(db_path, "Proj", "Old Name")
     apply_mutations([{

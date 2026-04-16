@@ -1,27 +1,28 @@
-"""Tool: search_context — list context entry subjects matching a prefix."""
+"""Tool: search_context — list context node paths."""
 from bot.tools.base import Tool, ToolResult
-from db.queries import get_context_entries
+from db.queries import get_all_node_paths
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
-    prefix = inp.get("prefix", "")
     try:
-        entries = get_context_entries(ctx.db_path, prefix=prefix if prefix else None)
-        subjects = [e["subject"] for e in entries]
-        if not subjects:
-            return ToolResult.ok("No context entries found.")
-        return ToolResult.ok("\n".join(subjects))
+        paths = get_all_node_paths(ctx.db_path)
+        prefix = inp.get("prefix", "")
+        if prefix:
+            paths = [p for p in paths if p.startswith(prefix)]
+        if not paths:
+            return ToolResult.ok("No context nodes found.")
+        return ToolResult.ok("\n".join(paths))
     except Exception as e:
-        return ToolResult.error(f"Could not search context: {e}")
+        return ToolResult.error(f"Could not list context nodes: {e}")
 
 
 TOOL = Tool(
     name="search_context",
-    description="List context entry subject paths, optionally filtered by prefix.",
+    description="List context node paths, optionally filtered by path prefix.",
     input_schema={
         "type": "object",
         "properties": {
-            "prefix": {"type": "string", "description": "Subject prefix to filter by, e.g. 'Work'"},
+            "prefix": {"type": "string", "description": "Path prefix to filter by, e.g. 'Work'"},
         },
     },
     execute=_execute,

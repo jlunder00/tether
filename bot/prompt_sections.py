@@ -53,10 +53,13 @@ TOOL_GUIDANCE = (
     "making changes — don't assume the plan hasn't changed since the last message.\n\n"
     "Key tools:\n"
     "  - get_today_plan / update_plan_tasks — read and modify daily schedules\n"
-    "  - get_milestones / get_context_entry — understand project state\n"
-    "  - patch_task — update individual task status, descriptions, scheduling\n"
-    "  - search — find tasks across dates and projects\n"
-    "  - list_context_entries — see all tracked projects and areas\n\n"
+    "  - list_context_nodes / get_context_node — navigate the project context tree\n"
+    "  - read_section / write_section / append_to_section — read/write node content\n"
+    "  - get_node_by_path — resolve a path like 'Intellipat/GPU Offload' to a node\n"
+    "  - search_sections — full-text search across all context content\n"
+    "  - upsert_task — create or update tasks with node linking\n"
+    "  - patch_task — update individual task status, descriptions\n"
+    "  - search — find tasks and milestones by text\n\n"
     "Always fetch before modifying. Batch related reads in parallel when possible. "
     "Keep tool calls focused — don't fetch everything if you only need one anchor's tasks."
 )
@@ -136,12 +139,21 @@ def plan_summary(ctx: dict) -> str | None:
 
 
 def context_index(ctx: dict) -> str | None:
-    """List of available context entries (subjects only)."""
+    """List of available context nodes as a tree or flat subject list."""
+    nodes = ctx.get("context_nodes")
+    if nodes:
+        lines = []
+        for node in nodes:
+            indent = "  " * node.get("depth", 0)
+            suffix = f" ({node['children_count']} children)" if node.get("children_count", 0) > 0 else ""
+            lines.append(f"  {indent}- {node['name']}{suffix}")
+        return f"Available context (use read_section to fetch details):\n" + "\n".join(lines)
+    # Fallback: flat subject list
     subjects = ctx.get("context_subjects", [])
     if not subjects:
         return None
     subjects_list = "\n".join(f"  - {s}" for s in subjects)
-    return f"Available context entries (fetch bodies with get_context_entry tool):\n{subjects_list}"
+    return f"Available context (use read_section to fetch details):\n{subjects_list}"
 
 
 def session_notes(ctx: dict) -> str | None:

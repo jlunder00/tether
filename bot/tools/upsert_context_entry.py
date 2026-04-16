@@ -1,6 +1,6 @@
-"""Tool: upsert_context_entry — full rewrite of a context entry."""
+"""Tool: upsert_context_entry — create/overwrite a context node's details section."""
 from bot.tools.base import Tool, ToolResult
-from db.queries import upsert_context_entry
+from db.queries import ensure_node_path, upsert_section
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
@@ -9,19 +9,20 @@ async def _execute(inp: dict, ctx) -> ToolResult:
     if not subject:
         return ToolResult.error("subject is required")
     try:
-        upsert_context_entry(ctx.db_path, subject, body)
-        return ToolResult.ok(f"Context entry {subject!r} updated.")
+        node = ensure_node_path(ctx.db_path, subject)
+        upsert_section(ctx.db_path, node["id"], "details", body)
+        return ToolResult.ok(f"Context node {subject!r} updated.")
     except Exception as e:
-        return ToolResult.error(f"Failed to upsert context entry: {e}")
+        return ToolResult.error(f"Failed to upsert context: {e}")
 
 
 TOOL = Tool(
     name="upsert_context_entry",
-    description="Create or fully overwrite a context entry. Use append_context_entry to add without overwriting.",
+    description="Create or fully overwrite a context node's details. Use append_context_entry to add without overwriting.",
     input_schema={
         "type": "object",
         "properties": {
-            "subject": {"type": "string", "description": "Subject path, e.g. 'Work/Alpha'"},
+            "subject": {"type": "string", "description": "Node path, e.g. 'Work/Alpha'"},
             "body": {"type": "string", "description": "Full markdown body"},
         },
         "required": ["subject", "body"],

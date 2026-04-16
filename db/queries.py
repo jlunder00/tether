@@ -1006,6 +1006,50 @@ def get_node_path(db_path: Path, node_id: str) -> str | None:
     return "/".join(r["name"] for r in rows)
 
 
+def ensure_node_path(db_path: Path, path: str) -> dict:
+    """Resolve a slash-separated path to a node, creating intermediate nodes as needed.
+
+    Example: ensure_node_path(db, "School/ML/Project") creates School, then ML
+    under School, then Project under ML (if they don't already exist).
+    Returns the leaf node dict (via get_node).
+    """
+    parts = [p.strip() for p in path.split("/") if p.strip()]
+    if not parts:
+        raise ValueError("ensure_node_path: empty path")
+    parent_id = None
+    node_id = None
+    for part in parts:
+        existing = find_child_by_name(db_path, parent_id, part)
+        if existing:
+            node_id = existing["id"]
+        else:
+            created = create_node(db_path, parent_id, part)
+            node_id = created["id"]
+        parent_id = node_id
+    return get_node(db_path, node_id)
+
+
+def get_all_node_paths(db_path: Path) -> list[str]:
+    """Return all non-archived node paths as slash-separated strings.
+
+    Uses a single recursive CTE for efficiency.
+    """
+    with get_db(db_path) as conn:
+        rows = conn.execute(
+            """WITH RECURSIVE tree(id, path) AS (
+                   SELECT id, name FROM context_nodes
+                   WHERE parent_id IS NULL AND archived = 0
+                   UNION ALL
+                   SELECT cn.id, tree.path || '/' || cn.name
+                   FROM context_nodes cn
+                   JOIN tree ON cn.parent_id = tree.id
+                   WHERE cn.archived = 0
+               )
+               SELECT path FROM tree ORDER BY path"""
+        ).fetchall()
+    return [r["path"] for r in rows]
+
+
 def get_children(
     db_path: Path, parent_id: str | None = None, include_archived: bool = False,
 ) -> list[dict]:

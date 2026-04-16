@@ -69,7 +69,7 @@ def test_load_context_returns_empty_string_if_missing(tmp_path):
 
 from datetime import date as date_type
 from db.schema import init_db
-from db.queries import upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
+from db.queries import upsert_anchor, upsert_plan, upsert_tasks, ensure_node_path, upsert_section
 
 
 @pytest.fixture
@@ -83,7 +83,8 @@ def db_config_dir(tmp_path):
     upsert_plan(db_path, today)
     upsert_tasks(db_path, today, "grind_am",
                  tasks=["Apply to 3 jobs", "Follow up"], notes="ML roles")
-    upsert_context_entry(db_path, "Job Applications", "Priority 1.")
+    node = ensure_node_path(db_path, "Job Applications")
+    upsert_section(db_path, node["id"], "details", "Priority 1.")
     return tmp_path
 
 
