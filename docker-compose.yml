@@ -6,10 +6,16 @@ x-build: &build
   context: .
   args:
     GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  # TETHER_IMAGE selects the image name:
+  #   Premium (Pi):      tether-premium   — local only, never pushed to any registry
+  #   Community (ghcr):  ghcr.io/jlunder00/tether   — public, no premium code
+  # IMAGE_TAG is set by the deploy workflow (sha-<7> or semver). Defaults to latest.
+  # Rollback: IMAGE_TAG=sha-abc1234 docker compose up -d
 
 services:
   api:
     build: *build
+    image: ${TETHER_IMAGE:-ghcr.io/jlunder00/tether}:${IMAGE_TAG:-latest}
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
@@ -26,6 +32,7 @@ services:
 
   bot:
     build: *build
+    image: ${TETHER_IMAGE:-ghcr.io/jlunder00/tether}:${IMAGE_TAG:-latest}
     entrypoint: ["/app/scripts/bot-entrypoint.sh"]
     volumes:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
@@ -38,6 +45,7 @@ services:
 
   mcp:
     build: *build
+    image: ${TETHER_IMAGE:-ghcr.io/jlunder00/tether}:${IMAGE_TAG:-latest}
     command: ["python", "-m", "tether_mcp.server", "--sse"]
     ports:
       - "5001:5001"
