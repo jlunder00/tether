@@ -41,7 +41,7 @@ jobs:
           cd /home/toast/tether
           IMAGE=tether-premium
           TAG=${{ steps.version.outputs.tag }}
-          IMAGE_TAG=$TAG TETHER_IMAGE=$IMAGE GITHUB_TOKEN=$TETHER_PREMIUM_TOKEN \
+          IMAGE_TAG=$TAG TETHER_IMAGE=$IMAGE PREMIUM_GIT_TOKEN=$TETHER_PREMIUM_TOKEN \
             docker compose build
           # Also tag as latest
           docker tag $IMAGE:$TAG $IMAGE:latest
