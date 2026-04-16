@@ -24,9 +24,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Python dependencies (cached layer — changes less often than code)
+# External dependencies (cached layer — only reruns when pyproject.toml changes)
+# tomllib is stdlib in Python 3.11 — no extra tools needed.
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e . 2>/dev/null || pip install --no-cache-dir .
+RUN python3 -c "
+import tomllib, subprocess, sys
+with open('pyproject.toml', 'rb') as f:
+    deps = tomllib.load(f)['project']['dependencies']
+subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir'] + deps)
+"
 
 # Application code
 COPY api/ api/
@@ -37,6 +43,9 @@ COPY config/ config/
 COPY prompts/ prompts/
 COPY cron/ cron/
 COPY scripts/ scripts/
+
+# Install local package (no external downloads — deps already satisfied above)
+RUN pip install --no-cache-dir --no-deps .
 
 # Frontend build artifacts
 COPY --from=frontend-build /build/dist/ frontend/dist/
