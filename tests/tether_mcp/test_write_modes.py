@@ -96,6 +96,17 @@ class TestPatchFindBased:
         assert result == "AAA BBB ccc"
         assert all(r["status"] == "applied" for r in reports)
 
+    def test_empty_find_string_does_not_corrupt(self):
+        ops = [{"find": "", "replace": "X"}]
+        result, reports = apply_text_mode("hello", "patch", ops)
+        assert result == "hello"
+        assert reports[0]["status"] == "no_match"
+
+    def test_empty_operations_list(self):
+        result, reports = apply_text_mode("text", "patch", [])
+        assert result == "text"
+        assert reports == []
+
 
 # ── apply_text_mode: patch (line-based) ─────────────────────────
 
@@ -163,6 +174,11 @@ class TestPatchLineBased:
         result, reports = apply_text_mode(text, "patch", ops)
         assert result == "A\nb\nc\nd"
         assert all(r["status"] == "applied" for r in reports)
+
+    def test_malformed_line_op(self):
+        ops = [{"insert": "orphan"}]  # missing after_line/before_line
+        result, reports = apply_text_mode("text", "patch", ops)
+        assert reports[0]["status"] == "error"
 
 
 # ── mixed ops error ──────────────────────────────────────────────

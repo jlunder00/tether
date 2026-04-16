@@ -8,12 +8,14 @@ Provides three write modes for text fields:
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class MixedPatchOpsError(ValueError):
     """Raised when patch operations mix find-based and line-based ops."""
 
 
-def resolve_field(raw) -> tuple[str, any] | None:
+def resolve_field(raw) -> tuple[str, Any] | None:
     """Normalise a raw field value into (mode, payload) or None to skip.
 
     Bare string  -> ("replace", str)
@@ -93,6 +95,9 @@ def _apply_find_patch(
     for i, op in enumerate(operations):
         find = op["find"]
         replace = op["replace"]
+        if not find:
+            reports.append({"op": i, "status": "no_match", "detail": "find string is empty"})
+            continue
         count = text.count(find)
         if count == 0:
             reports.append({"op": i, "status": "no_match", "detail": f"{find!r} not found"})
@@ -118,7 +123,6 @@ def _apply_line_patch(
     text: str, operations: list[dict]
 ) -> tuple[str, list[dict]]:
     lines = text.split("\n")
-    total = len(lines)
 
     # Pair each op with its original index, sort by descending line number
     indexed = list(enumerate(operations))
@@ -184,6 +188,9 @@ def _apply_line_patch(
             for j, new_line in enumerate(insert_lines):
                 lines.insert(idx + j, new_line)
             reports[orig_idx] = {"op": orig_idx, "status": "applied", "matches": 1}
+
+        else:
+            reports[orig_idx] = {"op": orig_idx, "status": "error", "detail": "unrecognized line op"}
 
     return "\n".join(lines), reports
 
