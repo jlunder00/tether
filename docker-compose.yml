@@ -12,9 +12,6 @@ services:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
     environment:
       - TETHER_CONFIG_DIR=/data
-      - TETHER_JWT_SECRET=${TETHER_JWT_SECRET:-dev-secret-change-in-production}
-    env_file:
-      - .env
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -29,8 +26,6 @@ services:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
     environment:
       - TETHER_CONFIG_DIR=/data
-    env_file:
-      - .env
     depends_on:
       api:
         condition: service_healthy
@@ -46,6 +41,4 @@ services:
     environment:
       - TETHER_CONFIG_DIR=/data
       - TETHER_USER_ID=${TETHER_USER_ID:-}
-    env_file:
-      - .env
     restart: unless-stopped
