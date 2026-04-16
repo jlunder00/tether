@@ -37,6 +37,7 @@ services:
     entrypoint: ["/app/scripts/bot-entrypoint.sh"]
     volumes:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
+      - ${CLAUDE_CONFIG_DIR:-~/.claude}:/home/tether/.claude
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
