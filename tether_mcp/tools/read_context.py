@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
-
-def _get_db() -> Path:
-    from tether_mcp.server import _db as get_db_path
-    return get_db_path()
+from tether_mcp.common import get_db_path
 
 
 def _build_node_response(
@@ -89,7 +85,7 @@ def execute_read_context(
     """
     from db.queries import get_node, get_node_by_path, get_children
 
-    db_path = _get_db()
+    db_path = get_db_path()
 
     # No args → return root nodes
     if not paths and not node_ids:

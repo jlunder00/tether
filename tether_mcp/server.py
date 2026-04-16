@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from datetime import date as date_type, datetime, timedelta
+from datetime import date as date_type, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -146,20 +146,6 @@ def search(query: str, type: str = "all") -> list[dict]:
     if not query.strip():
         return []
     return search_entities(_db(), query.strip(), type)
-
-
-@mcp.tool()
-async def session_done(summary: str = "") -> str:
-    """Signal that the current session is complete.
-
-    Call this when you have finished all planned work for this conversation.
-    Include a brief summary of what was accomplished — this is saved for
-    the user's records and used by the memory management system.
-
-    Args:
-        summary: Brief description of what was accomplished in this session.
-    """
-    return f"Session done acknowledged. Summary: {summary or '(none provided)'}"
 
 
 # ─── Premium Plugin Hook ────────────────────────────────────────────────────

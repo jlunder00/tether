@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
-
-
-def _get_db() -> Path:
-    from tether_mcp.server import _db as get_db_path
-    return get_db_path()
+from tether_mcp.common import get_db_path
 
 
 def execute_upsert_tasks(tasks: list[dict]) -> list[dict]:
@@ -42,11 +36,11 @@ def execute_upsert_tasks(tasks: list[dict]) -> list[dict]:
         get_subtasks,
     )
     from tether_mcp.batch import validate_no_duplicates
-    from tether_mcp.write_modes import resolve_field, apply_text_mode
+    from tether_mcp.write_modes import apply_resolved_field
 
     validate_no_duplicates(tasks, key="task_uuid")
 
-    db_path = _get_db()
+    db_path = get_db_path()
     results: list[dict] = []
 
     for spec in tasks:
@@ -70,35 +64,24 @@ def execute_upsert_tasks(tasks: list[dict]) -> list[dict]:
             # --- UPDATE path ---
             patch_fields: dict = {}
 
+            # Fetch existing task once for write-mode resolution
+            existing_task = get_task_by_uuid(db_path, task_uuid)
+
             # Resolve text field
-            text_resolved = resolve_field(text_raw)
-            if text_resolved is not None:
-                mode, value = text_resolved
-                if mode == "replace":
-                    patch_fields["text"] = value
-                elif mode in ("append", "patch"):
-                    existing_task = get_task_by_uuid(db_path, task_uuid)
-                    existing_text = existing_task.get("text") if existing_task else None
-                    result = apply_text_mode(existing_text, mode, value)
-                    if isinstance(result, tuple):
-                        patch_fields["text"] = result[0]
-                    else:
-                        patch_fields["text"] = result
+            new_text, _ = apply_resolved_field(
+                text_raw,
+                existing_task.get("text") if existing_task else None,
+            )
+            if new_text is not None:
+                patch_fields["text"] = new_text
 
             # Resolve description field
-            desc_resolved = resolve_field(description_raw)
-            if desc_resolved is not None:
-                mode, value = desc_resolved
-                if mode == "replace":
-                    patch_fields["description"] = value
-                elif mode in ("append", "patch"):
-                    existing_task = get_task_by_uuid(db_path, task_uuid)
-                    existing_desc = existing_task.get("description") if existing_task else None
-                    result = apply_text_mode(existing_desc, mode, value)
-                    if isinstance(result, tuple):
-                        patch_fields["description"] = result[0]
-                    else:
-                        patch_fields["description"] = result
+            new_desc, _ = apply_resolved_field(
+                description_raw,
+                existing_task.get("description") if existing_task else None,
+            )
+            if new_desc is not None:
+                patch_fields["description"] = new_desc
 
             # Scalar fields
             if status:
@@ -206,5 +189,7 @@ def execute_upsert_tasks(tasks: list[dict]) -> list[dict]:
                 "plan_date": final.get("plan_date"),
                 "anchor_id": final.get("anchor_id"),
             })
+        else:
+            results.append({"error": "task not found after mutation", "task_uuid": final_task_id})
 
     return results

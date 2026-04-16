@@ -7,8 +7,7 @@ Provides:
 
 from __future__ import annotations
 
-from collections import deque
-from typing import List
+import heapq
 
 
 class CircularDependencyError(ValueError):
@@ -77,19 +76,18 @@ def topological_sort(
                 adjacency[dep_idx].append(i)
                 in_degree[i] += 1
 
-    # Kahn's algorithm — seed queue with zero-in-degree nodes in original order
-    queue: deque[int] = deque(
-        i for i in range(n) if in_degree[i] == 0
-    )
+    # Kahn's algorithm — use a min-heap keyed on original index to preserve order
+    heap: list[int] = [i for i in range(n) if in_degree[i] == 0]
+    heapq.heapify(heap)
 
     result: list[dict] = []
-    while queue:
-        idx = queue.popleft()
+    while heap:
+        idx = heapq.heappop(heap)
         result.append(specs[idx])
         for neighbor in adjacency[idx]:
             in_degree[neighbor] -= 1
             if in_degree[neighbor] == 0:
-                queue.append(neighbor)
+                heapq.heappush(heap, neighbor)
 
     if len(result) != n:
         # Cycle detected — collect remaining nodes for the error message

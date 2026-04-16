@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-
-def _get_db() -> Path:
-    from tether_mcp.server import _db as get_db_path
-    return get_db_path()
+from tether_mcp.common import get_db_path
 
 
 def execute_delete_tasks(operations: list[dict]) -> list[dict]:
@@ -34,7 +29,7 @@ def execute_delete_tasks(operations: list[dict]) -> list[dict]:
     )
     from db.schema import get_db
 
-    db_path = _get_db()
+    db_path = get_db_path()
     results: list[dict] = []
 
     for op in operations:

@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
-
-def _get_db() -> Path:
-    from tether_mcp.server import _db as get_db_path
-    return get_db_path()
+from tether_mcp.common import get_db_path
 
 
 def execute_read_tasks(
@@ -43,15 +39,14 @@ def execute_read_tasks(
     from db.queries import get_all_tasks, get_task_by_uuid, get_dependencies_for, get_subtasks
     from db.schema import get_db
 
-    db_path = _get_db()
+    db_path = get_db_path()
 
     # Fetch tasks
     if task_ids:
         raw_tasks = []
         for tid in task_ids:
             t = get_task_by_uuid(db_path, tid)
-            if t is not None:
-                raw_tasks.append(t)
+            raw_tasks.append(t)  # None preserved for missing IDs (matching read_context behaviour)
     else:
         raw_tasks = get_all_tasks(db_path)
 
@@ -78,6 +73,10 @@ def execute_read_tasks(
     # Build response dicts
     result = []
     for t in raw_tasks:
+        if t is None:
+            result.append(None)
+            continue
+
         task_dict = {
             "id": t.get("id"),
             "text": t.get("text"),

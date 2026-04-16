@@ -144,3 +144,18 @@ class TestTopologicalSort:
         result = topological_sort(specs, id_key="id")
         ids = [s["id"] for s in result]
         assert ids.index("a") < ids.index("b")
+
+    def test_freed_at_different_stages_preserve_original_order(self):
+        specs = [
+            {"id": "a"},
+            {"id": "c", "deps": ["b"]},
+            {"id": "b", "deps": ["a"]},
+            {"id": "d", "deps": ["a"]},
+        ]
+        result = topological_sort(specs, id_key="id", deps_key="deps")
+        ids = [s["id"] for s in result]
+        # a must come first (only seed). Then b and d (freed by a).
+        # c and d have no relationship but c (idx 1) should come before d (idx 3) in original order.
+        assert ids.index("a") == 0
+        assert ids.index("b") < ids.index("c")  # b blocks c
+        assert ids.index("c") < ids.index("d")  # c (idx 1) before d (idx 3) by original order

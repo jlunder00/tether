@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
-
-def _get_db() -> Path:
-    from tether_mcp.server import _db as get_db_path
-    return get_db_path()
+from tether_mcp.common import get_db_path
 
 
 def _resolve_parent(db_path: Path, parent_spec: str) -> str | None:
@@ -39,7 +35,6 @@ def _process_node(
     spec: dict,
     parent_id: str | None,
     results: list[dict],
-    path_prefix: str,
 ) -> None:
     """Recursively process a node spec: create/update node, sections, and children."""
     from db.queries import (
@@ -53,7 +48,7 @@ def _process_node(
         upsert_section,
         move_node,
     )
-    from tether_mcp.write_modes import resolve_field, apply_text_mode
+    from tether_mcp.write_modes import resolve_field, apply_text_mode, apply_resolved_field
 
     node_id_spec = spec.get("node_id") or ""
     name_raw = spec.get("name") or ""
@@ -131,6 +126,8 @@ def _process_node(
 
     # Patch node_type if different (not allowed by patch_node_fields, skip)
     # Update target_date, status, color for existing nodes
+    # Update target_date, status, color for existing/moved nodes only
+    # (for created nodes, fields were already set during create_node)
     if action != "created":
         if target_date is not None:
             patch_fields["target_date"] = target_date
@@ -138,24 +135,12 @@ def _process_node(
             patch_fields["status"] = status
         if color is not None:
             patch_fields["color"] = color
-    else:
-        # For created nodes, fields were already set during create_node
-        pass
 
     # ── Description with write modes ───────────────────────────────────────
 
-    desc_resolved = resolve_field(description_raw)
-    if desc_resolved is not None:
-        mode, value = desc_resolved
-        if mode == "replace":
-            patch_fields["description"] = value
-        elif mode in ("append", "patch"):
-            existing_desc = node.get("description") or ""
-            result = apply_text_mode(existing_desc, mode, value)
-            if isinstance(result, tuple):
-                patch_fields["description"] = result[0]
-            else:
-                patch_fields["description"] = result
+    new_desc, _ = apply_resolved_field(description_raw, node.get("description") or "")
+    if new_desc is not None:
+        patch_fields["description"] = new_desc
 
     if patch_fields:
         patch_node_fields(db_path, node_id, patch_fields)
@@ -197,7 +182,7 @@ def _process_node(
     # ── Recurse into children ───────────────────────────────────────────────
 
     for child_spec in children:
-        _process_node(db_path, child_spec, node_id, results, node_path)
+        _process_node(db_path, child_spec, node_id, results)
 
 
 def execute_upsert_context(nodes: list[dict]) -> list[dict]:
@@ -218,9 +203,9 @@ def execute_upsert_context(nodes: list[dict]) -> list[dict]:
     Returns flat list of {id, name, path, node_type, action} dicts.
     """
     results: list[dict] = []
-    db_path = _get_db()
+    db_path = get_db_path()
 
     for spec in nodes:
-        _process_node(db_path, spec, parent_id=None, results=results, path_prefix="")
+        _process_node(db_path, spec, parent_id=None, results=results)
 
     return results

@@ -40,6 +40,24 @@ def resolve_field(raw) -> tuple[str, Any] | None:
     return None
 
 
+def apply_resolved_field(raw, existing: str | None) -> tuple[str | None, list[dict] | None]:
+    """Resolve a field value and apply write mode to existing content.
+
+    Returns (new_value, patch_reports). patch_reports is None unless mode was "patch".
+    Returns (None, None) if field should be skipped.
+    """
+    resolved = resolve_field(raw)
+    if resolved is None:
+        return None, None
+    mode, value = resolved
+    if mode in ("replace", "additive"):
+        return value, None
+    result = apply_text_mode(existing, mode, value)
+    if isinstance(result, tuple):
+        return result[0], result[1]
+    return result, None
+
+
 def apply_text_mode(
     existing: str | None, mode: str, value
 ) -> str | tuple[str, list[dict]]:
