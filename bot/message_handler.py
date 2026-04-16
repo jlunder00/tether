@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import logging
+import os
 import random
 import re
 import subprocess
@@ -62,7 +63,7 @@ def _resolve_db_path(chat_id: str) -> Path | None:
         from db.auth_queries import get_user_by_telegram_chat_id
         user = get_user_by_telegram_chat_id(AUTH_DB_PATH, chat_id)
         if user:
-            return Path.home() / ".tether-config" / "users" / f"{user['id']}.db"
+            return _CONFIG_DIR / "users" / f"{user['id']}.db"
     except Exception as e:
         logger.warning("_resolve_db_path error: %s", e)
     return None
@@ -77,10 +78,11 @@ def verify_link_code(code: str) -> str | None:
         logger.warning("verify_link_code error: %s", e)
         return None
 
-DB_PATH = Path.home() / ".tether-config" / "tether.db"
-AUTH_DB_PATH = Path.home() / ".tether-config" / "auth.db"
-_CONFIG_PATH = Path.home() / ".tether-config" / "config.yaml"
-_OFFSET_PATH = Path.home() / ".tether-config" / "telegram_offset"
+_CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
+DB_PATH = _CONFIG_DIR / "tether.db"
+AUTH_DB_PATH = _CONFIG_DIR / "auth.db"
+_CONFIG_PATH = _CONFIG_DIR / "config.yaml"
+_OFFSET_PATH = _CONFIG_DIR / "telegram_offset"
 
 # pending link codes: code -> (chat_id, timestamp) — in-memory cache; authoritative copy is auth.db
 _pending_links: dict[str, tuple[str, float]] = {}
