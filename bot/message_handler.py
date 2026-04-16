@@ -335,6 +335,7 @@ def check_followups(db_path: Path, send_fn) -> None:
 
     rows = get_active_followup_states(db_path, today)
     if not rows:
+        logger.debug("check_followups: no active followup states for %s", today)
         return
 
     pre_ack_due = []
@@ -343,12 +344,18 @@ def check_followups(db_path: Path, send_fn) -> None:
     # Only ping for anchors that are currently in their time window
     all_anchors = get_anchors(db_path)
     active_anchor_ids = {a["id"] for a in all_anchors if is_anchor_active(a, now)}
+    logger.debug("check_followups: %d rows, %d active anchors (%s)",
+                 len(rows), len(active_anchor_ids), ", ".join(active_anchor_ids) or "none")
 
     for row in rows:
         if row["anchor_id"] not in active_anchor_ids:
+            logger.debug("check_followups: skipping task %s — anchor %s not active",
+                         row["task_id"], row["anchor_id"])
             continue
         config = resolve_followup_config(db_path, row["anchor_id"], row["task_id"])
         if config is None:
+            logger.debug("check_followups: skipping task %s — no followup config",
+                         row["task_id"])
             continue
         if row["acknowledged_at"] is None:
             ref_ts = row["last_ping_at"] or row["sequence_started_at"]
