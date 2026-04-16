@@ -19,7 +19,7 @@ FROM python:3.11-slim
 # System deps for bcrypt, PyJWT, and potential native extensions.
 # cron is needed for anchor trigger scheduling in the bot container.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev cron \
+    gcc libffi-dev cron git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
