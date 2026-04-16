@@ -5,7 +5,7 @@
 x-build: &build
   context: .
   args:
-    GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    PREMIUM_GIT_TOKEN: ${PREMIUM_GIT_TOKEN:-}
   # TETHER_IMAGE selects the image name:
   #   Premium (Pi):      tether-premium   — local only, never pushed to any registry
   #   Community (ghcr):  ghcr.io/jlunder00/tether   — public, no premium code
