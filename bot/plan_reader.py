@@ -69,8 +69,14 @@ def _load_plan_from_yaml(config_dir: Path) -> DayPlan:
 
 
 def _load_context_from_db(db_path: Path) -> str:
-    from db.queries import get_context_entries
-    entries = get_context_entries(db_path)
-    if not entries:
+    from db.queries import get_children, get_section, get_node_path
+    root_nodes = get_children(db_path, parent_id=None)
+    if not root_nodes:
         return ""
-    return "\n\n".join(f"## {e['subject']}\n{e['body']}" for e in entries)
+    parts = []
+    for node in root_nodes:
+        path = get_node_path(db_path, node["id"]) or node["name"]
+        sec = get_section(db_path, node["id"], "details")
+        body = sec["body"] if sec else ""
+        parts.append(f"## {path}\n{body}")
+    return "\n\n".join(parts)

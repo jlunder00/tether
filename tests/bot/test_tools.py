@@ -15,8 +15,8 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def seeded_db(db_path):
-    """DB with one anchor, a plan for today, and a context entry."""
-    from db.queries import upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
+    """DB with one anchor, a plan for today, and a context node."""
+    from db.queries import upsert_anchor, upsert_plan, upsert_tasks, ensure_node_path, upsert_section
     from datetime import date
     today = date.today().isoformat()
     upsert_anchor(db_path, {
@@ -28,7 +28,8 @@ def seeded_db(db_path):
     upsert_tasks(db_path, today, "morning", [
         {"text": "Do the thing", "status": "pending", "position": 0},
     ])
-    upsert_context_entry(db_path, "Work/Alpha", "Working on project alpha.")
+    node = ensure_node_path(db_path, "Work/Alpha")
+    upsert_section(db_path, node["id"], "details", "Working on project alpha.")
     return db_path
 
 
@@ -239,67 +240,71 @@ class TestUpdateTaskStatusTool:
 class TestUpsertContextEntryTool:
     def test_creates_new_entry(self, seeded_db):
         from bot.tools.upsert_context_entry import TOOL
-        from db.queries import get_context_entries
+        from db.queries import get_node_by_path, get_section
         result = asyncio.run(TOOL.execute({
             "subject": "Health/Sleep",
             "body": "Sleep at 10pm.",
         }, ctx_db(seeded_db)))
         assert result.ok is True
 
-        entries = get_context_entries(seeded_db)
-        subjects = [e["subject"] for e in entries]
-        assert "Health/Sleep" in subjects
+        node = get_node_by_path(seeded_db, "Health/Sleep")
+        assert node is not None
+        sec = get_section(seeded_db, node["id"], "details")
+        assert sec["body"] == "Sleep at 10pm."
 
     def test_overwrites_existing_entry(self, seeded_db):
         from bot.tools.upsert_context_entry import TOOL
-        from db.queries import get_context_entries
+        from db.queries import get_node_by_path, get_section
         asyncio.run(TOOL.execute({
             "subject": "Work/Alpha",
             "body": "Updated content.",
         }, ctx_db(seeded_db)))
 
-        entries = {e["subject"]: e for e in get_context_entries(seeded_db)}
-        assert entries["Work/Alpha"]["body"] == "Updated content."
+        node = get_node_by_path(seeded_db, "Work/Alpha")
+        sec = get_section(seeded_db, node["id"], "details")
+        assert sec["body"] == "Updated content."
 
 
 class TestAppendContextEntryTool:
     def test_appends_to_existing_entry(self, seeded_db):
         from bot.tools.append_context_entry import TOOL
-        from db.queries import get_context_entries
+        from db.queries import get_node_by_path, get_section
         result = asyncio.run(TOOL.execute({
             "subject": "Work/Alpha",
             "content": "\nNew note added.",
         }, ctx_db(seeded_db)))
         assert result.ok is True
 
-        entries = {e["subject"]: e for e in get_context_entries(seeded_db)}
-        assert "New note added." in entries["Work/Alpha"]["body"]
-        assert "project alpha" in entries["Work/Alpha"]["body"].lower()
+        node = get_node_by_path(seeded_db, "Work/Alpha")
+        sec = get_section(seeded_db, node["id"], "details")
+        assert "New note added." in sec["body"]
+        assert "project alpha" in sec["body"].lower()
 
     def test_creates_entry_if_missing(self, seeded_db):
         from bot.tools.append_context_entry import TOOL
-        from db.queries import get_context_entries
+        from db.queries import get_node_by_path
         result = asyncio.run(TOOL.execute({
             "subject": "New/Topic",
             "content": "First note.",
         }, ctx_db(seeded_db)))
         assert result.ok is True
-        entries = {e["subject"]: e for e in get_context_entries(seeded_db)}
-        assert "New/Topic" in entries
+        node = get_node_by_path(seeded_db, "New/Topic")
+        assert node is not None
 
 
 class TestPatchContextEntryTool:
     def test_replaces_exact_string(self, seeded_db):
         from bot.tools.patch_context_entry import TOOL
-        from db.queries import get_context_entries
+        from db.queries import get_node_by_path, get_section
         result = asyncio.run(TOOL.execute({
             "subject": "Work/Alpha",
             "old_string": "project alpha",
             "new_string": "project beta",
         }, ctx_db(seeded_db)))
         assert result.ok is True
-        entries = {e["subject"]: e for e in get_context_entries(seeded_db)}
-        assert "project beta" in entries["Work/Alpha"]["body"]
+        node = get_node_by_path(seeded_db, "Work/Alpha")
+        sec = get_section(seeded_db, node["id"], "details")
+        assert "project beta" in sec["body"]
 
     def test_returns_error_when_old_string_not_found(self, seeded_db):
         from bot.tools.patch_context_entry import TOOL
