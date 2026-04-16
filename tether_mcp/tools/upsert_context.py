@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from tether_mcp.common import get_db_path
+from db.schema import transaction
 
 
 def _resolve_parent(db_path: Path, parent_spec: str) -> str | None:
@@ -205,7 +206,8 @@ def execute_upsert_context(nodes: list[dict]) -> list[dict]:
     results: list[dict] = []
     db_path = get_db_path()
 
-    for spec in nodes:
-        _process_node(db_path, spec, parent_id=None, results=results)
+    with transaction(db_path):
+        for spec in nodes:
+            _process_node(db_path, spec, parent_id=None, results=results)
 
     return results

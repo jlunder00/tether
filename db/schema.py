@@ -1,6 +1,65 @@
 from __future__ import annotations
 import sqlite3
+import threading
+from contextlib import contextmanager
 from pathlib import Path
+
+
+# Thread-local storage for managed transactions.
+# When a transaction() context is active, get_db() returns the managed connection
+# instead of opening a new one. This lets batch operations be atomic without
+# changing any query function signatures.
+_local = threading.local()
+
+
+class _ManagedConnection:
+    """Wraps a sqlite3.Connection to suppress auto-commit when used as a context manager.
+
+    Inside a transaction() block, query functions do `with get_db(path) as conn:` —
+    the __exit__ of the real Connection would auto-commit. This wrapper delegates
+    everything to the real connection but makes __enter__/__exit__ no-ops, so the
+    transaction() block controls commit/rollback.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+
+    def __enter__(self):
+        return self._conn
+
+    def __exit__(self, *args):
+        pass  # transaction() handles commit/rollback
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+@contextmanager
+def transaction(db_path: Path):
+    """Run a block of DB operations in a single atomic transaction.
+
+    All get_db() calls within this block reuse the same connection.
+    On success: COMMIT. On exception: ROLLBACK + re-raise.
+
+    Usage:
+        with transaction(db_path):
+            create_task(db_path, ...)   # uses the managed connection
+            link_to_node(db_path, ...)  # same connection, same transaction
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("BEGIN")
+    _local.managed_conn = _ManagedConnection(conn)
+    try:
+        yield conn
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        _local.managed_conn = None
+        conn.close()
 
 
 DDL = """
@@ -263,6 +322,10 @@ WHERE state IN ('active', 'waiting_user');
 
 
 def get_db(db_path: Path) -> sqlite3.Connection:
+    # If inside a transaction() block, reuse the managed connection
+    managed = getattr(_local, 'managed_conn', None)
+    if managed is not None:
+        return managed
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
