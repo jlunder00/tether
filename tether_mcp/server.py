@@ -157,3 +157,11 @@ try:
     register_mcp_tools(mcp)
 except ImportError:
     pass
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sse", action="store_true", help="Run as SSE server (for network access)")
+    args = parser.parse_args()
+    mcp.run(transport="sse" if args.sse else "stdio")
