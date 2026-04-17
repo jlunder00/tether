@@ -66,6 +66,22 @@ jobs:
               && echo "Migrated $db" || true
           done
 
+      - name: Pre-pull external images
+        run: |
+          cd /home/toast/tether
+          # Pull any non-tether images declared in compose (e.g. postgres).
+          # Retries handle transient TLS/network timeouts on the Pi.
+          # Falls back to cached image if all retries fail.
+          EXTERNAL_IMAGES=$(TETHER_IMAGE=tether-premium docker compose config --images 2>/dev/null \
+            | grep -v '^tether' | grep -v '^ghcr.io/jlunder00' | sort -u)
+          for IMAGE in $EXTERNAL_IMAGES; do
+            for i in 1 2 3; do
+              docker pull "$IMAGE" && break
+              echo "Attempt $i for $IMAGE failed — retrying in 15s..."
+              sleep 15
+            done || echo "Warning: could not refresh $IMAGE, using cached version"
+          done
+
       - name: Restart services
         run: |
           cd /home/toast/tether
