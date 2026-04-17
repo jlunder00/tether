@@ -2,7 +2,7 @@
 import pytest
 import uuid
 
-from tests.db.pg_conftest import conn, pg_pool, TEST_USER_ID  # noqa: F401
+from tests.db.pg_conftest import conn, TEST_USER_ID  # noqa: F401
 from db.pg_queries.anchors import seed_default_anchors
 from db.pg_queries.plans import upsert_plan
 from db.pg_queries.tasks import (

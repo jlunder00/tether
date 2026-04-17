@@ -1,7 +1,7 @@
 """Tests for db/pg_queries/nodes.py — tree traversal, move, cycle detection."""
 import pytest
 
-from tests.db.pg_conftest import conn, pg_pool, TEST_USER_ID  # noqa: F401
+from tests.db.pg_conftest import conn, TEST_USER_ID  # noqa: F401
 from db.pg_queries.nodes import (
     create_node, get_node, get_node_by_path, get_children,
     ensure_node_path, get_all_node_paths, get_subtree,

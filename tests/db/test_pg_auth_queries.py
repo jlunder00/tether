@@ -1,21 +1,9 @@
 """Tests for db/pg_auth_queries.py — user CRUD, OAuth, Telegram."""
-import os
 import pytest
-import asyncpg
 import uuid
 
-from tests.db.pg_conftest import pg_pool, TEST_USER_ID  # noqa: F401
+from tests.db.pg_conftest import auth_conn, TEST_USER_ID  # noqa: F401
 from db import pg_auth_queries as auth
-
-
-@pytest.fixture
-async def auth_conn(pg_pool):
-    """Unscoped connection for auth queries (no RLS user_id)."""
-    c = await pg_pool.acquire()
-    await c.execute("SAVEPOINT auth_test_start")
-    yield c
-    await c.execute("ROLLBACK TO SAVEPOINT auth_test_start")
-    await pg_pool.release(c)
 
 
 @pytest.mark.asyncio
@@ -64,6 +52,6 @@ async def test_link_code_flow(auth_conn):
     await auth.store_link_code(auth_conn, "ABC123", "chat-link-test")
     chat_id = await auth.verify_and_consume_link_code(auth_conn, "ABC123")
     assert chat_id == "chat-link-test"
-    # Code should be consumed — second call returns None
+    # Code consumed — second call returns None
     chat_id2 = await auth.verify_and_consume_link_code(auth_conn, "ABC123")
     assert chat_id2 is None

@@ -1,4 +1,9 @@
-"""Shared fixtures for Postgres query tests."""
+"""Shared fixtures for Postgres query tests.
+
+Each test gets its own asyncpg.connect() — no shared pool — to avoid event loop
+mismatch with pytest-asyncio's function-scoped loop. The connection wraps the
+test in a transaction that rolls back on teardown for isolation.
+"""
 import os
 import pytest
 import asyncpg
@@ -6,14 +11,17 @@ import asyncpg
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
-@pytest.fixture
-async def pg_pool():
+def _db_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
         pytest.skip("DATABASE_URL not set — Postgres tests skipped")
-    pool = await asyncpg.create_pool(dsn=url, min_size=1, max_size=5)
-    # Seed test user — ON CONFLICT DO NOTHING, safe to repeat
-    async with pool.acquire() as c:
+    return url
+
+
+async def _ensure_test_user(url: str) -> None:
+    """Seed deterministic test user outside the rolled-back transaction."""
+    c = await asyncpg.connect(dsn=url)
+    try:
         await c.execute(
             """
             INSERT INTO users (id, username, email, password_hash, is_admin)
@@ -22,18 +30,34 @@ async def pg_pool():
             """,
             TEST_USER_ID,
         )
-    yield pool
-    await pool.close()
+    finally:
+        await c.close()
 
 
 @pytest.fixture
-async def conn(pg_pool):
-    """Per-test connection with SAVEPOINT isolation — rolls back after each test."""
-    c = await pg_pool.acquire()
-    await c.execute("SAVEPOINT test_start")
+async def conn():
+    """User-scoped connection. Rolls back after each test."""
+    url = _db_url()
+    await _ensure_test_user(url)
+    c = await asyncpg.connect(dsn=url)
+    tr = c.transaction()
+    await tr.start()
     await c.execute(
         "SELECT set_config('app.current_user_id', $1, true)", TEST_USER_ID
     )
     yield c
-    await c.execute("ROLLBACK TO SAVEPOINT test_start")
-    await pg_pool.release(c)
+    await tr.rollback()
+    await c.close()
+
+
+@pytest.fixture
+async def auth_conn():
+    """Unscoped connection for auth queries (no RLS). Rolls back after each test."""
+    url = _db_url()
+    await _ensure_test_user(url)
+    c = await asyncpg.connect(dsn=url)
+    tr = c.transaction()
+    await tr.start()
+    yield c
+    await tr.rollback()
+    await c.close()
