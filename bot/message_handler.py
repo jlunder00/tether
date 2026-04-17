@@ -985,6 +985,12 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _log_preview(text: str, n: int = 120) -> str:
+    """Single-line truncated preview for log lines."""
+    t = (text or "").replace("\n", " ⏎ ").strip()
+    return (t[:n] + "…") if len(t) > n else t
+
+
 def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB_PATH) -> None:
     today = str(date_type.today())
     init_db(db_path)
@@ -992,6 +998,9 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
 
     anchors = get_anchors(db_path)
     current_anchor = get_current_anchor(anchors)
+
+    logger.info("msg received: len=%d preview=%r", len(text or ""), _log_preview(text))
+    logger.debug("msg received full: %r", text)
 
     # Slash commands: deterministic DB writes then single Claude reply
     if text.startswith("/check-in"):
@@ -1028,13 +1037,18 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         # Premium plugin hook — sessions, LLM router, role dispatch, Beacon
         try:
             from tether_premium.register import get_premium_handler
+            logger.info("dispatch: premium handler")
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
             final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
             insert_conversation_turn(db_path, "user", text)
             if final:
+                logger.info("reply sent: len=%d preview=%r", len(final), _log_preview(final))
+                logger.debug("reply full: %r", final)
                 send_fn(final)
                 insert_conversation_turn(db_path, "assistant", final)
+            else:
+                logger.info("reply sent: <empty> (premium handler returned None)")
             return
         except (ImportError, NotImplementedError):
             pass  # Premium not installed or not yet wired
@@ -1249,7 +1263,14 @@ def run_polling(token: str, chat_id: str) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    level_name = os.environ.get("TETHER_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger.info("log level: %s", level_name)
     config = load_config()
     token = config["telegram"]["bot_token"]
     chat_id = str(config["telegram"]["chat_id"])
