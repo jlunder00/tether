@@ -93,8 +93,8 @@ async def test_link_task_to_node(conn):
     anchors = await get_anchors(conn)
     anchor_id = anchors[0]["id"]
     await upsert_plan(conn, "2026-04-17")
-    tid = str(uuid.uuid4())
-    await upsert_tasks(conn, "2026-04-17", anchor_id, [{"id": tid, "text": "linked task", "status": "pending", "position": 0}])
+    inserted = await upsert_tasks(conn, "2026-04-17", anchor_id, [{"text": "linked task", "status": "pending"}])
+    tid = inserted[0]["id"]
 
     node = await create_node(conn, name="TaskNode", node_type="context")
     await link_task_to_node(conn, node["id"], tid)

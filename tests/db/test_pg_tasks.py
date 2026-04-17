@@ -29,9 +29,8 @@ async def anchor_id(conn):
 @pytest.fixture
 async def task_uuid(conn, anchor_id):
     await upsert_plan(conn, DATE)
-    tid = str(uuid.uuid4())
-    await upsert_tasks(conn, DATE, anchor_id, [{"id": tid, "text": "Test task", "status": "pending", "position": 0}])
-    return tid
+    tasks = await upsert_tasks(conn, DATE, anchor_id, [{"text": "Test task", "status": "pending"}])
+    return tasks[0]["id"]
 
 
 @pytest.mark.asyncio
@@ -81,8 +80,8 @@ async def test_delete_task(conn, task_uuid):
 @pytest.mark.asyncio
 async def test_search_tasks(conn, anchor_id):
     await upsert_plan(conn, DATE)
-    tid = str(uuid.uuid4())
-    await upsert_tasks(conn, DATE, anchor_id, [{"id": tid, "text": "searchable unique xyz", "status": "pending", "position": 0}])
+    tasks = await upsert_tasks(conn, DATE, anchor_id, [{"text": "searchable unique xyz", "status": "pending"}])
+    tid = tasks[0]["id"]
     results = await search_tasks(conn, "searchable unique xyz")
     assert any(r["id"] == tid for r in results)
 
@@ -90,11 +89,11 @@ async def test_search_tasks(conn, anchor_id):
 @pytest.mark.asyncio
 async def test_task_dependencies(conn, anchor_id):
     await upsert_plan(conn, DATE)
-    tid1, tid2 = str(uuid.uuid4()), str(uuid.uuid4())
-    await upsert_tasks(conn, DATE, anchor_id, [
-        {"id": tid1, "text": "Blocker", "status": "pending", "position": 0},
-        {"id": tid2, "text": "Blocked", "status": "pending", "position": 1},
+    tasks = await upsert_tasks(conn, DATE, anchor_id, [
+        {"text": "Blocker", "status": "pending"},
+        {"text": "Blocked", "status": "pending"},
     ])
+    tid1, tid2 = tasks[0]["id"], tasks[1]["id"]
     await add_task_dependency(conn, tid2, tid1)
     deps = await get_full_task_dependencies(conn, tid2)
     assert any(d["blocked_by_id"] == tid1 for d in deps)
