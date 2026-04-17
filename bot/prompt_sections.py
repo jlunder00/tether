@@ -49,19 +49,22 @@ SEPARATION_OF_DUTIES = (
 )
 
 TOOL_GUIDANCE = (
-    "You have access to tether MCP tools. Use them to read current state before "
-    "making changes — don't assume the plan hasn't changed since the last message.\n\n"
-    "Key tools:\n"
-    "  - get_today_plan / update_plan_tasks — read and modify daily schedules\n"
-    "  - list_context_nodes / get_context_node — navigate the project context tree\n"
-    "  - read_section / write_section / append_to_section — read/write node content\n"
-    "  - get_node_by_path — resolve a path like 'Intellipat/GPU Offload' to a node\n"
-    "  - search_sections — full-text search across all context content\n"
-    "  - upsert_task — create or update tasks with node linking\n"
-    "  - patch_task — update individual task status, descriptions\n"
-    "  - search — find tasks and milestones by text\n\n"
-    "Always fetch before modifying. Batch related reads in parallel when possible. "
-    "Keep tool calls focused — don't fetch everything if you only need one anchor's tasks."
+    "You have access to nine tether MCP tools. All mutation tools are batch-oriented — "
+    "pass a list of specs in one call rather than many calls. Read current state before "
+    "modifying; don't assume the plan hasn't changed since the last message.\n\n"
+    "Reads:\n"
+    "  - read_tasks(task_ids, status, context, milestone_id, date, anchor_id, ...) — filtered task query\n"
+    "  - read_context(paths, node_ids, depth, include_sections, include_tasks) — context tree/node read\n"
+    "  - get_plan(date) — structured daily plan with anchor-grouped tasks\n"
+    "  - get_anchors() — all anchors + currently active one\n"
+    "  - search(query, type) — full-text across tasks, milestones, context\n\n"
+    "Writes (all take a list):\n"
+    "  - upsert_tasks(tasks) — batch create/update tasks; supports write modes on text/description\n"
+    "  - upsert_context(nodes) — batch create/update nodes or milestones; sections keyed by type/filename\n"
+    "  - delete_tasks(operations) — remove tasks or clear fields (deps, subtasks, node links)\n"
+    "  - delete_context(operations) — remove nodes or clear sections/description\n\n"
+    "Batching rule: if you'd call the same tool twice with different args, call it once with both in the list. "
+    "Always fetch before modifying. Keep reads narrow — don't pull the full context tree when one path will do."
 )
 
 SESSION_AWARENESS = (
@@ -147,13 +150,13 @@ def context_index(ctx: dict) -> str | None:
             indent = "  " * node.get("depth", 0)
             suffix = f" ({node['children_count']} children)" if node.get("children_count", 0) > 0 else ""
             lines.append(f"  {indent}- {node['name']}{suffix}")
-        return f"Available context (use read_section to fetch details):\n" + "\n".join(lines)
+        return "Available context:\n" + "\n".join(lines)
     # Fallback: flat subject list
     subjects = ctx.get("context_subjects", [])
     if not subjects:
         return None
     subjects_list = "\n".join(f"  - {s}" for s in subjects)
-    return f"Available context (use read_section to fetch details):\n{subjects_list}"
+    return f"Available context:\n{subjects_list}"
 
 
 def session_notes(ctx: dict) -> str | None:
