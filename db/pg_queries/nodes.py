@@ -17,8 +17,8 @@ def _node(row) -> dict:
 
 async def create_node(
     conn: asyncpg.Connection,
-    parent_id: str | None,
     name: str,
+    parent_id: str | None = None,
     node_type: str = "context",
     target_date: str | None = None,
     status: str = "pending",
@@ -130,7 +130,7 @@ async def ensure_node_path(conn: asyncpg.Connection, path: str) -> dict:
         if existing:
             node = existing
         else:
-            node = await create_node(conn, parent_id, part)
+            node = await create_node(conn, part, parent_id=parent_id)
         parent_id = node["id"]
     return await get_node(conn, node["id"])
 
