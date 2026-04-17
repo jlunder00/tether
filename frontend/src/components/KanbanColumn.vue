@@ -16,7 +16,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'add-task'): void
+  (e: 'add-task', opts: { context_subject?: string; milestone_id?: string }): void
   (e: 'task-drop', taskId: string, columnId: string): void
 }>()
 
@@ -34,12 +34,13 @@ const milestoneStore = useMilestoneStore()
 
 /** Group tasks by context (node_id for uniqueness, subject for label), then by milestone */
 const grouped = computed(() => {
-  const byContext: Record<string, { label: string; tasks: Task[] }> = {}
+  const byContext: Record<string, { label: string; contextSubject: string | null; tasks: Task[] }> = {}
   for (const task of props.tasks) {
     const key = task.context_node_id ?? task.context_subject ?? '__uncategorized__'
     if (!byContext[key]) {
-      const label = task.context_subject ?? (key === '__uncategorized__' ? 'Uncategorized' : key)
-      byContext[key] = { label, tasks: [] }
+      const isUncat = key === '__uncategorized__'
+      const label = task.context_subject ?? (isUncat ? 'Uncategorized' : key)
+      byContext[key] = { label, contextSubject: isUncat ? null : (task.context_subject ?? null), tasks: [] }
     }
     byContext[key].tasks.push(task)
   }
@@ -50,7 +51,7 @@ const grouped = computed(() => {
     return a.label.localeCompare(b.label)
   })
 
-  return sorted.map(([, { label, tasks }]) => {
+  return sorted.map(([, { label, contextSubject, tasks }]) => {
     // Sub-group by milestone
     const byMilestone: Record<string, { id: string; name: string; color: string | null; tasks: Task[] }> = {}
     const ungrouped: Task[] = []
@@ -68,12 +69,20 @@ const grouped = computed(() => {
 
     return {
       label,
+      contextSubject,
       tasks,
       milestoneGroups: Object.values(byMilestone),
       ungrouped,
     }
   })
 })
+
+function addOpts(contextSubject: string | null, milestoneId?: string) {
+  const opts: { context_subject?: string; milestone_id?: string } = {}
+  if (contextSubject) opts.context_subject = contextSubject
+  if (milestoneId) opts.milestone_id = milestoneId
+  return opts
+}
 
 // ── Drop target (dragenter counter avoids highlight flicker on child elements) ──
 
@@ -168,6 +177,10 @@ function onColumnDrop(evt: DragEvent) {
                 :compact="true" :hideTags="true"
                 @update="onTaskUpdate" />
             </div>
+            <button @click.stop="emit('add-task', addOpts(group.contextSubject, mg.id))"
+                    class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+              + Add task
+            </button>
           </GroupContainer>
 
           <!-- Ungrouped tasks -->
@@ -181,10 +194,15 @@ function onColumnDrop(evt: DragEvent) {
               :compact="true" :hideTags="true"
               @update="onTaskUpdate" />
           </div>
+
+          <button @click.stop="emit('add-task', addOpts(group.contextSubject))"
+                  class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+            + Add task
+          </button>
         </GroupContainer>
       </template>
 
-      <button @click="emit('add-task')" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+      <button @click="emit('add-task', {})" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
         + Add task
       </button>
     </div>
