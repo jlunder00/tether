@@ -37,7 +37,9 @@ services:
     entrypoint: ["/app/scripts/bot-entrypoint.sh"]
     volumes:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
-      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}:/claude-config
+      # Mount your Claude Code credentials so the bot can authenticate.
+      # Self-hosters: change the left side if your credentials aren't at ~/.claude.
+      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}:/home/tether/.claude
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
