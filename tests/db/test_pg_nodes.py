@@ -42,7 +42,8 @@ async def test_tree_traversal(conn):
 
     subtree = await get_subtree(conn, root["id"])
     names = {n["name"] for n in subtree}
-    assert {"Root", "Child1", "Child2", "Grandchild"}.issubset(names)
+    # get_subtree returns descendants only, not the root itself
+    assert {"Child1", "Child2", "Grandchild"}.issubset(names)
 
 
 @pytest.mark.asyncio
@@ -93,21 +94,20 @@ async def test_link_task_to_node(conn):
     anchor_id = anchors[0]["id"]
     await upsert_plan(conn, "2026-04-17")
     tid = str(uuid.uuid4())
-    await upsert_tasks(conn, "2026-04-17", anchor_id, [{"uuid": tid, "text": "linked task", "status": "pending", "position": 0}])
+    await upsert_tasks(conn, "2026-04-17", anchor_id, [{"id": tid, "text": "linked task", "status": "pending", "position": 0}])
 
     node = await create_node(conn, name="TaskNode", node_type="context")
     await link_task_to_node(conn, node["id"], tid)
     tasks = await get_node_tasks(conn, node["id"])
-    assert tid in tasks
+    assert any(t["id"] == tid for t in tasks)
 
     await unlink_task_from_node(conn, node["id"], tid)
     tasks = await get_node_tasks(conn, node["id"])
-    assert tid not in tasks
+    assert not any(t["id"] == tid for t in tasks)
 
 
 @pytest.mark.asyncio
 async def test_get_all_node_paths(conn):
     await ensure_node_path(conn, "AllPaths/Sub/Leaf")
     paths = await get_all_node_paths(conn)
-    path_strings = [p["path"] for p in paths]
-    assert any("AllPaths" in p for p in path_strings)
+    assert any("AllPaths" in p for p in paths)

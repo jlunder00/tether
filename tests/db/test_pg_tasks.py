@@ -30,7 +30,7 @@ async def anchor_id(conn):
 async def task_uuid(conn, anchor_id):
     await upsert_plan(conn, DATE)
     tid = str(uuid.uuid4())
-    await upsert_tasks(conn, DATE, anchor_id, [{"uuid": tid, "text": "Test task", "status": "pending", "position": 0}])
+    await upsert_tasks(conn, DATE, anchor_id, [{"id": tid, "text": "Test task", "status": "pending", "position": 0}])
     return tid
 
 
@@ -82,9 +82,9 @@ async def test_delete_task(conn, task_uuid):
 async def test_search_tasks(conn, anchor_id):
     await upsert_plan(conn, DATE)
     tid = str(uuid.uuid4())
-    await upsert_tasks(conn, DATE, anchor_id, [{"uuid": tid, "text": "searchable unique xyz", "status": "pending", "position": 0}])
+    await upsert_tasks(conn, DATE, anchor_id, [{"id": tid, "text": "searchable unique xyz", "status": "pending", "position": 0}])
     results = await search_tasks(conn, "searchable unique xyz")
-    assert any(r["uuid"] == tid for r in results)
+    assert any(r["id"] == tid for r in results)
 
 
 @pytest.mark.asyncio
@@ -92,8 +92,8 @@ async def test_task_dependencies(conn, anchor_id):
     await upsert_plan(conn, DATE)
     tid1, tid2 = str(uuid.uuid4()), str(uuid.uuid4())
     await upsert_tasks(conn, DATE, anchor_id, [
-        {"uuid": tid1, "text": "Blocker", "status": "pending", "position": 0},
-        {"uuid": tid2, "text": "Blocked", "status": "pending", "position": 1},
+        {"id": tid1, "text": "Blocker", "status": "pending", "position": 0},
+        {"id": tid2, "text": "Blocked", "status": "pending", "position": 1},
     ])
     await add_task_dependency(conn, tid2, tid1)
     deps = await get_full_task_dependencies(conn, tid2)
@@ -105,7 +105,8 @@ async def test_task_dependencies(conn, anchor_id):
 
 @pytest.mark.asyncio
 async def test_subtasks(conn, task_uuid):
-    sid = await create_subtask(conn, task_uuid, "Do the thing", 0)
+    subtask = await create_subtask(conn, task_uuid, "Do the thing", 0)
+    sid = subtask["id"]
     subtasks = await get_subtasks(conn, task_uuid)
     assert any(s["id"] == sid for s in subtasks)
     await update_subtask(conn, sid, done=True)
