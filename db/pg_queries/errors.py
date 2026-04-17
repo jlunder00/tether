@@ -8,7 +8,4 @@ class StaleReadError(Exception):
     def __init__(self, current_version: int, last_writer: str | None = None):
         self.current_version = current_version
         self.last_writer = last_writer
-        super().__init__(
-            f"Stale read: current version is {current_version}"
-            + (f" (last writer: {last_writer})" if last_writer else "")
-        )
+        super().__init__(current_version)

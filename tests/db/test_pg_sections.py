@@ -1,7 +1,7 @@
 """Tests for db/pg_queries/sections.py — upsert, FTS search."""
 import pytest
 
-from tests.db.pg_conftest import conn, pg_pool  # noqa: F401
+from tests.db.pg_conftest import conn  # noqa: F401
 from db.pg_queries.nodes import create_node
 from db.pg_queries.sections import (
     upsert_section, get_section, get_sections, append_section,

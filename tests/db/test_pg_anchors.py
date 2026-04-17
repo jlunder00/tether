@@ -2,7 +2,7 @@
 import pytest
 import uuid
 
-from tests.db.pg_conftest import conn, pg_pool, TEST_USER_ID  # noqa: F401
+from tests.db.pg_conftest import conn, TEST_USER_ID  # noqa: F401
 from db.pg_queries.anchors import (
     get_anchors, upsert_anchor, patch_anchor, delete_anchor, seed_default_anchors,
 )
@@ -10,7 +10,7 @@ from db.pg_queries.anchors import (
 
 @pytest.mark.asyncio
 async def test_seed_and_get_anchors(conn):
-    await seed_default_anchors(conn, TEST_USER_ID)
+    await seed_default_anchors(conn)
     anchors = await get_anchors(conn)
     assert len(anchors) > 0
     assert all("id" in a for a in anchors)

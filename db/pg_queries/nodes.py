@@ -17,8 +17,8 @@ def _node(row) -> dict:
 
 async def create_node(
     conn: asyncpg.Connection,
-    parent_id: str | None,
     name: str,
+    parent_id: str | None = None,
     node_type: str = "context",
     target_date: str | None = None,
     status: str = "pending",
@@ -32,15 +32,16 @@ async def create_node(
         "SELECT current_setting('app.current_user_id', true)::uuid"
     )
     pid = _uuid.UUID(parent_id) if parent_id else None
+    node_id = _uuid.uuid4()
     row = await conn.fetchrow(
         """
         INSERT INTO context_nodes
-            (user_id, parent_id, name, node_type, description, target_date,
+            (id, user_id, parent_id, name, node_type, description, target_date,
              status, status_override, color)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         """,
-        user_uuid, pid, name, node_type, description, target_date,
+        node_id, user_uuid, pid, name, node_type, description, target_date,
         status, status_override, color,
     )
     return _node(row)
@@ -130,7 +131,7 @@ async def ensure_node_path(conn: asyncpg.Connection, path: str) -> dict:
         if existing:
             node = existing
         else:
-            node = await create_node(conn, parent_id, part)
+            node = await create_node(conn, part, parent_id=parent_id)
         parent_id = node["id"]
     return await get_node(conn, node["id"])
 

@@ -26,15 +26,26 @@ async def create_user(
     email: str,
     password_hash: str | None = None,
     is_admin: bool = False,
+    id: str | None = None,
 ) -> dict:
-    row = await conn.fetchrow(
-        """
-        INSERT INTO users (username, email, password_hash, is_admin)
-        VALUES ($1, $2, $3, $4)
-        RETURNING *
-        """,
-        username, email, password_hash, is_admin,
-    )
+    if id is not None:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO users (id, username, email, password_hash, is_admin)
+            VALUES ($1::uuid, $2, $3, $4, $5)
+            RETURNING *
+            """,
+            id, username, email, password_hash, is_admin,
+        )
+    else:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO users (username, email, password_hash, is_admin)
+            VALUES ($1, $2, $3, $4)
+            RETURNING *
+            """,
+            username, email, password_hash, is_admin,
+        )
     return _row(row)
 
 

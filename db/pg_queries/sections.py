@@ -8,7 +8,7 @@ import asyncpg
 async def get_sections(conn: asyncpg.Connection, node_id: str) -> list[dict]:
     rows = await conn.fetch(
         """
-        SELECT section_type, name, body, position, updated_at
+        SELECT section_type, name, body, position, version, updated_at
         FROM node_sections WHERE node_id = $1
         ORDER BY section_type, position
         """,
@@ -22,7 +22,7 @@ async def get_section(
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        SELECT section_type, name, body, position, updated_at
+        SELECT section_type, name, body, position, version, updated_at
         FROM node_sections
         WHERE node_id = $1 AND section_type = $2 AND name = $3
         """,
@@ -52,7 +52,7 @@ async def upsert_section(
         VALUES ($1, $2, $3, $4, $5, $6, now())
         ON CONFLICT (node_id, section_type, name) DO UPDATE
             SET body = EXCLUDED.body, updated_at = now(), version = node_sections.version + 1
-        RETURNING section_type, name, body, updated_at
+        RETURNING section_type, name, body, version, updated_at
         """,
         user_uuid, nid, section_type, name, body, next_pos,
     )

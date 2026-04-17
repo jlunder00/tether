@@ -329,19 +329,12 @@ async def get_dependencies_for(
     return {"blocks": blocks, "blocked_by": blocked_by}
 
 
-async def get_full_task_dependencies(conn: asyncpg.Connection, task_uuid: str) -> dict:
-    blocks = await conn.fetch(
-        "SELECT blocked_type, blocked_id FROM dependencies WHERE blocker_type='task' AND blocker_id=$1",
-        task_uuid,
+async def get_full_task_dependencies(conn: asyncpg.Connection, task_uuid: str) -> list[dict]:
+    rows = await conn.fetch(
+        "SELECT task_id, blocked_by_id FROM task_dependencies WHERE task_id = $1",
+        _uuid.UUID(task_uuid),
     )
-    blocked_by = await conn.fetch(
-        "SELECT blocker_type, blocker_id FROM dependencies WHERE blocked_type='task' AND blocked_id=$1",
-        task_uuid,
-    )
-    return {
-        "blocks": [{"type": r["blocked_type"], "id": r["blocked_id"]} for r in blocks],
-        "blocked_by": [{"type": r["blocker_type"], "id": r["blocker_id"]} for r in blocked_by],
-    }
+    return [{"task_id": str(r["task_id"]), "blocked_by_id": str(r["blocked_by_id"])} for r in rows]
 
 
 async def add_task_dependency(conn: asyncpg.Connection, task_id: str, blocked_by_id: str) -> None:
