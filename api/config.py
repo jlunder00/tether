@@ -21,11 +21,6 @@ def _get(key: str, default: str = "") -> str:
 
 JWT_SECRET = _get("TETHER_JWT_SECRET", "dev-secret-change-in-production")
 
-# Claude Code credentials directory. Set "claude_config_dir" in secrets.json
-# to the container-internal mount path (e.g. "/claude-config").
-# Leave unset to use Claude Code's default (~/.claude).
-CLAUDE_CONFIG_DIR = _get("claude_config_dir") or None
-
 # OAuth — GitHub
 GITHUB_CLIENT_ID = _get("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = _get("GITHUB_CLIENT_SECRET")
