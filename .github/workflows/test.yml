@@ -44,7 +44,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -q -e ".[dev]"
+        run: pip install -q -e ".[dev]" psycopg2-binary
 
       - name: Run Alembic migrations
         env:
