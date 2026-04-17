@@ -2,7 +2,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from db.queries import (
     get_kanban_columns, create_kanban_column, update_kanban_column,
-    delete_kanban_column, seed_kanban_columns,
+    delete_kanban_column, seed_kanban_columns, migrate_backlog_column,
 )
 from api.auth import auth_dependency
 
@@ -13,6 +13,7 @@ router = APIRouter()
 async def list_columns(request: Request, _auth=Depends(auth_dependency)):
     try:
         seed_kanban_columns(request.state.db_path)
+        migrate_backlog_column(request.state.db_path)
     except sqlite3.OperationalError as e:
         if "no such table" not in str(e).lower():
             raise
