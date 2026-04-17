@@ -20,6 +20,49 @@ jobs:
       - name: Run tests
         run: pytest -v
 
+  postgres-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: tether
+          POSTGRES_USER: tether
+          POSTGRES_PASSWORD: tether_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tether -d tether"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -q -e ".[dev]"
+
+      - name: Run Alembic migrations
+        env:
+          DATABASE_URL: postgresql://tether:tether_dev@localhost:5432/tether
+        run: alembic upgrade head
+
+      - name: Run Postgres query tests
+        env:
+          DATABASE_URL: postgresql://tether:tether_dev@localhost:5432/tether
+        run: |
+          pytest tests/db/test_pg_anchors.py \
+                 tests/db/test_pg_tasks.py \
+                 tests/db/test_pg_nodes.py \
+                 tests/db/test_pg_sections.py \
+                 tests/db/test_pg_auth_queries.py \
+                 tests/db/test_postgres_pool.py \
+                 -v
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
