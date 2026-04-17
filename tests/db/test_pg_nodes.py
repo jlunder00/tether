@@ -87,7 +87,7 @@ async def test_archive_and_patch(conn):
 
 @pytest.mark.asyncio
 async def test_link_task_to_node(conn):
-    await seed_default_anchors(conn, TEST_USER_ID)
+    await seed_default_anchors(conn)
     from db.pg_queries.anchors import get_anchors
     anchors = await get_anchors(conn)
     anchor_id = anchors[0]["id"]

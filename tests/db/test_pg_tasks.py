@@ -20,7 +20,7 @@ DATE = "2026-04-17"
 
 @pytest.fixture
 async def anchor_id(conn):
-    await seed_default_anchors(conn, TEST_USER_ID)
+    await seed_default_anchors(conn)
     from db.pg_queries.anchors import get_anchors
     anchors = await get_anchors(conn)
     return anchors[0]["id"]

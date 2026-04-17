@@ -32,15 +32,16 @@ async def create_node(
         "SELECT current_setting('app.current_user_id', true)::uuid"
     )
     pid = _uuid.UUID(parent_id) if parent_id else None
+    node_id = _uuid.uuid4()
     row = await conn.fetchrow(
         """
         INSERT INTO context_nodes
-            (user_id, parent_id, name, node_type, description, target_date,
+            (id, user_id, parent_id, name, node_type, description, target_date,
              status, status_override, color)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         """,
-        user_uuid, pid, name, node_type, description, target_date,
+        node_id, user_uuid, pid, name, node_type, description, target_date,
         status, status_override, color,
     )
     return _node(row)

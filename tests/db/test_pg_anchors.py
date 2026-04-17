@@ -10,7 +10,7 @@ from db.pg_queries.anchors import (
 
 @pytest.mark.asyncio
 async def test_seed_and_get_anchors(conn):
-    await seed_default_anchors(conn, TEST_USER_ID)
+    await seed_default_anchors(conn)
     anchors = await get_anchors(conn)
     assert len(anchors) > 0
     assert all("id" in a for a in anchors)

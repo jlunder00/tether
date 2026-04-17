@@ -23,7 +23,7 @@ async def test_get_user_by_email(auth_conn):
 @pytest.mark.asyncio
 async def test_create_and_get_user(auth_conn):
     new_id = str(uuid.uuid4())
-    await auth.create_user(auth_conn, new_id, "newuser", "new@example.com", password_hash="hash")
+    await auth.create_user(auth_conn, "newuser", "new@example.com", password_hash="hash", id=new_id)
     user = await auth.get_user_by_id(auth_conn, new_id)
     assert user["username"] == "newuser"
 
