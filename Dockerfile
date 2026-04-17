@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY api/ api/
 COPY bot/ bot/
 COPY db/ db/
+COPY shared/ shared/
 COPY tether_mcp/ tether_mcp/
 COPY config/ config/
 COPY prompts/ prompts/
