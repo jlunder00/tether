@@ -13,6 +13,23 @@ x-build: &build
   # Rollback: IMAGE_TAG=sha-abc1234 docker compose up -d
 
 services:
+  postgres:
+    image: postgres:16
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: tether
+      POSTGRES_USER: tether
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tether_dev}
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tether -d tether"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   api:
     build: *build
     image: ${TETHER_IMAGE:-ghcr.io/jlunder00/tether}:${IMAGE_TAG:-latest}
@@ -24,6 +41,10 @@ services:
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -43,6 +64,7 @@ services:
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
     depends_on:
       api:
         condition: service_healthy
@@ -60,4 +82,8 @@ services:
       - TETHER_CONFIG_DIR=/data
       - TETHER_USER_ID=${TETHER_USER_ID:-}
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
     restart: unless-stopped
+
+volumes:
+  pgdata:
