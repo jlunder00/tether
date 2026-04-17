@@ -45,6 +45,22 @@ const currentTasks = computed(() => {
   return planStore.plan.anchors[currentAnchor.value.id]?.tasks ?? []
 })
 
+async function onAddTaskToNow() {
+  if (!currentAnchor.value) return
+  const today = new Date().toISOString().slice(0, 10)
+  try {
+    const resp = await api('/api/tasks/unscheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'New task', date: today, anchor_id: currentAnchor.value.id }),
+    })
+    if (!resp.ok) throw new Error(`${resp.status}`)
+    await planStore.fetchPlan(today)
+  } catch (e) {
+    console.error('Failed to create task:', e)
+  }
+}
+
 const dayStats = computed(() => {
   if (!planStore.plan) return []
   return anchorStore.anchors.map(a => {
@@ -79,6 +95,10 @@ const dayStats = computed(() => {
             :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
           <li v-if="!currentTasks.length" class="text-white/30 text-sm">No tasks</li>
         </ul>
+        <button v-if="currentAnchor" type="button" @click="onAddTaskToNow"
+                class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+          + Add task
+        </button>
       </div>
 
       <!-- Today Box -->

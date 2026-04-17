@@ -3,7 +3,9 @@ from db.queries import patch_task_fields, move_task_atomic, \
     add_task_dependency, remove_task_dependency, \
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks, \
     search_entities, \
-    get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid, get_all_tasks
+    get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid, get_all_tasks, \
+    link_milestone_task, upsert_plan
+from db.schema import transaction
 from api.auth import auth_dependency
 import api.config as cfg
 
@@ -33,12 +35,23 @@ async def list_unscheduled(request: Request, _auth=Depends(auth_dependency)):
 async def create_unscheduled(body: dict, request: Request, _auth=Depends(auth_dependency)):
     if "text" not in body:
         raise HTTPException(status_code=422, detail="'text' is required")
-    return create_unscheduled_task(
-        request.state.db_path, body["text"],
-        description=body.get("description"),
-        status=body.get("status", "pending"),
-        context_subject=body.get("context_subject"),
-    )
+    db_path = request.state.db_path
+    milestone_id = body.get("milestone_id")
+    date = body.get("date")
+    anchor_id = body.get("anchor_id")
+    with transaction(db_path):
+        task = create_unscheduled_task(
+            db_path, body["text"],
+            description=body.get("description"),
+            status=body.get("status", "pending"),
+            context_subject=body.get("context_subject"),
+        )
+        if milestone_id:
+            link_milestone_task(db_path, milestone_id, task["id"])
+        if date and anchor_id:
+            upsert_plan(db_path, date)
+            move_task_atomic(db_path, task["id"], date, anchor_id)
+    return get_task_by_uuid(db_path, task["id"])
 
 
 # --- Parameterized routes below ---

@@ -38,16 +38,24 @@ onMounted(() => {
   fetchAllTasks()
 })
 
-async function onAddTask() {
+async function onAddTask(columnId: string, opts: { context_subject?: string; milestone_id?: string }) {
+  const col = kanbanStore.columns.find(c => c.id === columnId)
+  if (!col) return
+  const body: Record<string, unknown> = { text: 'New task', ...opts }
+  const rules = col.entry_rules ?? {}
+  if (typeof rules['set_status'] === 'string') body.status = rules['set_status']
+  if (rules['prompt_schedule']) {
+    body.date = new Date().toISOString().slice(0, 10)
+  }
   try {
     const resp = await api('/api/tasks/unscheduled', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'New task' }),
+      body: JSON.stringify(body),
     })
     if (!resp.ok) throw new Error(`${resp.status}`)
     const task = await resp.json()
-    await fetchAllTasks() // refresh
+    await fetchAllTasks()
     router.push({ name: 'kanban-task', params: { taskId: task.id } })
   } catch (e) {
     console.error('Failed to create task:', e)
@@ -162,7 +170,7 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         :key="col.id"
         :column="col"
         :tasks="columnTasks[col.id] ?? []"
-        @add-task="onAddTask"
+        @add-task="(opts) => onAddTask(col.id, opts)"
         @task-drop="onTaskDrop" />
     </div>
 

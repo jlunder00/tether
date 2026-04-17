@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
@@ -7,6 +7,7 @@ import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { Milestone } from '../stores/milestones'
+import { api } from '../lib/api'
 
 const router = useRouter()
 
@@ -31,6 +32,7 @@ type TaskWithIndex = { task: Task; index: number }
 const groupedByContext = computed(() => {
   const byContext: Record<string, {
     label: string
+    contextSubject: string | null
     milestoneGroups: { milestone: Milestone; tasks: TaskWithIndex[] }[]
     ungrouped: TaskWithIndex[]
   }> = {}
@@ -38,8 +40,9 @@ const groupedByContext = computed(() => {
   anchorPlan.value.tasks.forEach((task, index) => {
     const key = task.context_node_id ?? task.context_subject ?? '__uncategorized__'
     if (!byContext[key]) {
-      const label = task.context_subject ?? (key === '__uncategorized__' ? 'Uncategorized' : key)
-      byContext[key] = { label, milestoneGroups: [], ungrouped: [] }
+      const isUncat = key === '__uncategorized__'
+      const label = task.context_subject ?? (isUncat ? 'Uncategorized' : key)
+      byContext[key] = { label, contextSubject: isUncat ? null : (task.context_subject ?? null), milestoneGroups: [], ungrouped: [] }
     }
     const ctx = key
 
@@ -83,23 +86,24 @@ async function onRemove(index: number) {
   store.updateAnchorTasks(props.anchorId, updated, anchorPlan.value.notes ?? '')
 }
 
-function onAddNewTask() {
-  const effectivePlan = props.date ? store.plans[props.date] : store.plan
-  if (!effectivePlan) return
-  if (!effectivePlan.anchors[props.anchorId]) {
-    effectivePlan.anchors[props.anchorId] = { tasks: [], notes: '' }
+async function onAddNewTask(opts: { context_subject?: string; milestone_id?: string } = {}) {
+  const body: Record<string, unknown> = {
+    text: 'New task',
+    date: effectiveDate.value,
+    anchor_id: props.anchorId,
+    ...opts,
   }
-  const tasks = effectivePlan.anchors[props.anchorId].tasks
-  tasks.push({
-    id: '', text: '', description: null, status: 'pending' as const,
-    position: tasks.length, followup_config: null, blocks: [], blocked_by: [],
-    context_subject: null,
-    context_node_id: null,
-  })
-  nextTick(() => {
-    const inputs = tasksRef.value?.querySelectorAll('input')
-    if (inputs?.length) (inputs[inputs.length - 1] as HTMLInputElement).focus()
-  })
+  try {
+    const resp = await api('/api/tasks/unscheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!resp.ok) throw new Error(`${resp.status}`)
+    await store.fetchPlan(effectiveDate.value)
+  } catch (e) {
+    console.error('Failed to create task:', e)
+  }
 }
 
 // ── Drag and drop (native HTML5 DnD) ─────────────────────────────────────────
@@ -190,6 +194,11 @@ function onDrop(evt: DragEvent, toIndex: number) {
                 <TaskCard class="min-w-0" :task="task" :hideTags="true"
                           @update="onUpdate($event, i)" @remove="onRemove(i)" />
               </div>
+              <button type="button"
+                      @click.stop="onAddNewTask({ ...(ctx.contextSubject ? { context_subject: ctx.contextSubject } : {}), milestone_id: mg.milestone.id })"
+                      class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                + Add task
+              </button>
             </GroupContainer>
           </template>
 
@@ -202,11 +211,17 @@ function onDrop(evt: DragEvent, toIndex: number) {
             <TaskCard class="min-w-0" :task="task" :hideTags="true"
                       @update="onUpdate($event, i)" @remove="onRemove(i)" />
           </div>
+
+          <button type="button"
+                  @click.stop="onAddNewTask(ctx.contextSubject ? { context_subject: ctx.contextSubject } : {})"
+                  class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+            + Add task
+          </button>
         </GroupContainer>
       </template>
     </div>
 
-    <button type="button" @click="onAddNewTask"
+    <button type="button" @click="onAddNewTask()"
             class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
   </GroupContainer>
 </template>
