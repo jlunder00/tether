@@ -1030,12 +1030,14 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         try:
             from tether_premium.register import get_premium_handler
             logger.info("dispatch: premium handler")
+            # Record user turn before calling the handler so it's never lost
+            # even if the handler raises an exception partway through.
+            insert_conversation_turn(db_path, "user", text)
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
             final = get_premium_handler()(text, db_path, anchors, current_anchor,
                                            send_fn=send_fn,
                                            skill_commands=_skill_commands)
-            insert_conversation_turn(db_path, "user", text)
             if final:
                 logger.info("reply sent: len=%d preview=%r", len(final), _log_preview(final))
                 logger.debug("reply full: %r", final)
@@ -1047,7 +1049,10 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         except (ImportError, NotImplementedError):
             pass  # Premium not installed or not yet wired
         except TypeError as _te:
-            logger.warning("Premium handler TypeError (signature mismatch?): %s", _te)
+            import traceback
+            logger.error("Premium handler raised TypeError — possible bug in handler "
+                         "(not a signature mismatch): %s\n%s", _te, traceback.format_exc())
+            # Fall through to v3-basic as graceful degradation
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
