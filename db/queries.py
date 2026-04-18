@@ -396,16 +396,16 @@ def resolve_blocked_status(
         return
     _visited.add(task_uuid)
 
-    with transaction(db_path):
-        db = get_db(db_path)
-        row = db.execute("SELECT status FROM tasks WHERE uuid=?", (task_uuid,)).fetchone()
+    dependents_to_cascade: list[str] = []
+    with get_db(db_path) as conn:
+        row = conn.execute("SELECT status FROM tasks WHERE uuid=?", (task_uuid,)).fetchone()
         if row is None:
             return
         current = row[0]
         if current in ("done", "skipped"):
             return
 
-        blocker_rows = db.execute(
+        blocker_rows = conn.execute(
             """
             SELECT t.status FROM dependencies d
             JOIN tasks t ON t.uuid = d.blocker_id
@@ -425,10 +425,10 @@ def resolve_blocked_status(
         if new_status is None:
             return
 
-        db.execute("UPDATE tasks SET status=? WHERE uuid=?", (new_status, task_uuid))
+        conn.execute("UPDATE tasks SET status=? WHERE uuid=?", (new_status, task_uuid))
 
         dependents_to_cascade = [
-            row[0] for row in db.execute(
+            r[0] for r in conn.execute(
                 """
                 SELECT d.blocked_id FROM dependencies d
                 WHERE d.blocker_type = 'task' AND d.blocker_id = ?
