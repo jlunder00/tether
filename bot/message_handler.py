@@ -1227,30 +1227,41 @@ def run_polling(token: str, chat_id: str) -> None:
                         if _task.get("id"):
                             init_followup_state(_active_db, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
-                # Premium Beacon hook — review accumulated changes on anchor transition
+                # Premium Beacon hook — review accumulated changes on anchor transition.
+                # Runs in a background thread so the polling loop isn't blocked
+                # while Beacon makes its LLM calls (can take 5-30s).
                 try:
                     from tether_premium.bot.beacon import should_trigger_beacon, run_beacon
                     if should_trigger_beacon(str(_active_db), is_anchor_transition=True):
                         from tether_premium.bot.state_monitor import peek_changes, consume_changes
                         from tether_premium.bot.router import LLMRouter
                         import asyncio as _aio
+                        import threading as _threading
                         _beacon_changes = peek_changes(str(_active_db))
                         if _beacon_changes:
                             _cfg = load_config()
                             _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
                             _beacon_router = LLMRouter(mcp_server_url=_mcp_url)
+                            _beacon_db = str(_active_db)
 
-                            async def _beacon_notify(msg):
-                                _send(msg)
+                            def _run_beacon_bg():
+                                async def _beacon_notify(msg):
+                                    _send(msg)
+                                try:
+                                    _result = _aio.run(run_beacon(
+                                        router=_beacon_router,
+                                        db_path=_beacon_db,
+                                        changes=_beacon_changes,
+                                        notify=_beacon_notify,
+                                    ))
+                                    if _result.get("triggered"):
+                                        consume_changes(_beacon_db)
+                                except Exception as _be:
+                                    logger.warning("Beacon background run failed: %s", _be)
 
-                            _result = _aio.run(run_beacon(
-                                router=_beacon_router,
-                                db_path=str(_active_db),
-                                changes=_beacon_changes,
-                                notify=_beacon_notify,
-                            ))
-                            if _result.get("triggered"):
-                                consume_changes(str(_active_db))
+                            _threading.Thread(
+                                target=_run_beacon_bg, daemon=True, name="beacon"
+                            ).start()
                 except ImportError:
                     pass  # Premium not installed
                 except Exception as _be:
