@@ -427,16 +427,19 @@ def resolve_blocked_status(
 
         db.execute("UPDATE tasks SET status=? WHERE uuid=?", (new_status, task_uuid))
 
-        dependents = db.execute(
-            """
-            SELECT d.blocked_id FROM dependencies d
-            WHERE d.blocker_type = 'task' AND d.blocker_id = ?
-              AND d.blocked_type = 'task'
-            """,
-            (task_uuid,),
-        ).fetchall()
-        for (dep_uuid,) in dependents:
-            resolve_blocked_status(db_path, dep_uuid, _visited)
+        dependents_to_cascade = [
+            row[0] for row in db.execute(
+                """
+                SELECT d.blocked_id FROM dependencies d
+                WHERE d.blocker_type = 'task' AND d.blocker_id = ?
+                  AND d.blocked_type = 'task'
+                """,
+                (task_uuid,),
+            ).fetchall()
+        ]
+
+    for dep_uuid in dependents_to_cascade:
+        resolve_blocked_status(db_path, dep_uuid, _visited)
 
 
 def get_full_task_dependencies(db_path: Path, task_uuid: str) -> dict:
