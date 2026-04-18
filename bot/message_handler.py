@@ -790,32 +790,8 @@ def _classify_message(text: str, current_anchor: dict, today: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Slash-command path (deterministic, single Claude call)
+# Slash-command path (deterministic DB writes; pipeline continues below)
 # ---------------------------------------------------------------------------
-
-def _build_slash_prompt(user_message: str, db_path: Path) -> str:
-    today = str(date_type.today())
-    anchors = get_anchors(db_path)
-    current_anchor = get_current_anchor(anchors)
-    plan = get_plan(db_path, today)
-    root_nodes = get_children(db_path, parent_id=None)
-    context_parts = []
-    for node in root_nodes:
-        sec = get_section(db_path, node["id"], "details")
-        body = sec["body"] if sec else ""
-        context_parts.append(f"## {node['name']}\n{body}")
-    context_text = "\n\n".join(context_parts)
-    template = _jinja.get_template("message_handler.md")
-    return template.render(
-        date=today,
-        current_anchor=current_anchor,
-        plan=plan,
-        context=context_text,
-        check_in_log=plan.get("check_in_log", []),
-        user_message=user_message,
-        ack=None,
-        dispatch_focus=None,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +905,8 @@ def _is_v2_fallback_enabled() -> bool:
 
 
 def _handle_v3(text: str, db_path: Path, anchors: list[dict],
-               current_anchor: dict) -> str:
+               current_anchor: dict,
+               skill_commands: list[str] | None = None) -> str:
     """Run a basic v3 single-shot LLM call. Returns the response text.
 
     Uses AnthropicBackend directly (no LLMRouter, no conversation loop,
@@ -961,6 +938,17 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
         session_notes=None,
         mode=mode,
     )
+
+    # Skill injection (v3-basic fallback): append skill content to system prompt
+    if skill_commands:
+        try:
+            from tether_premium.bot.skill_loader import load_skill_content
+            skill_blocks = [load_skill_content(cmd) for cmd in skill_commands]
+            skill_text = "\n\n".join(b for b in skill_blocks if b)
+            if skill_text:
+                system = system + "\n\n" + skill_text
+        except ImportError:
+            pass
 
     conv_history = [
         {"role": "user" if h["role"] == "user" else "assistant", "content": h["body"]}
@@ -1002,14 +990,25 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
     logger.info("msg received: len=%d preview=%r", len(text or ""), _log_preview(text))
     logger.debug("msg received full: %r", text)
 
-    # Slash commands: deterministic DB writes then single Claude reply
-    if text.startswith("/check-in"):
+    # Unified slash pre-processor: DB writes + skill command extraction
+    from bot.slash_preprocessor import scan_slash_commands
+
+    _skill_registry = None
+    try:
+        from tether_premium.bot.skill_registry import REGISTRY as _skill_registry
+    except ImportError:
+        pass
+
+    _parsed = scan_slash_commands(text, skill_registry=_skill_registry)
+    _skill_commands = _parsed.skill_commands or None
+
+    if "check-in" in _parsed.db_commands_applied:
         accomplished, status = parse_check_in(text)
         insert_check_in(db_path, today, current_anchor["id"], accomplished, status)
         from datetime import datetime as _dt
         acknowledge_followup(db_path, today, current_anchor["id"], _dt.now())
 
-    elif text.startswith("/tether-update-context"):
+    if "tether-update-context" in _parsed.db_commands_applied:
         try:
             subject, body = parse_update_context(text)
             node = ensure_node_path(db_path, subject)
@@ -1017,20 +1016,13 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         except ValueError:
             pass
 
-    elif text.startswith("/update-plan"):
+    if "update-plan" in _parsed.db_commands_applied:
         anchor_id, tasks = parse_update_plan(text)
         upsert_plan(db_path, today)
         upsert_tasks(db_path, today, anchor_id, tasks, notes="")
 
-    if text.startswith("/"):
-        try:
-            raw = call_claude(_build_slash_prompt(text, db_path))
-            message, mutations = parse_claude_response(raw)
-            apply_mutations(mutations, db_path, today)
-            send_fn(message)
-        except RuntimeError as e:
-            send_fn(str(e))
-        return
+    # All messages (including slash commands) now continue into the pipeline below.
+    # The old `if text.startswith("/")` early-return path is retired.
 
     # --- v3 SDK path (if enabled) ---
     if _is_v3_enabled():
@@ -1040,7 +1032,9 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
             logger.info("dispatch: premium handler")
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
-            final = get_premium_handler()(text, db_path, anchors, current_anchor, send_fn=send_fn)
+            final = get_premium_handler()(text, db_path, anchors, current_anchor,
+                                           send_fn=send_fn,
+                                           skill_commands=_skill_commands)
             insert_conversation_turn(db_path, "user", text)
             if final:
                 logger.info("reply sent: len=%d preview=%r", len(final), _log_preview(final))
@@ -1057,7 +1051,8 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
-            final = _handle_v3(text, db_path, anchors, current_anchor)
+            final = _handle_v3(text, db_path, anchors, current_anchor,
+                               skill_commands=_skill_commands)
             send_fn(final)
             insert_conversation_turn(db_path, "user", text)
             insert_conversation_turn(db_path, "assistant", final)

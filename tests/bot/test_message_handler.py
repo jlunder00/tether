@@ -185,7 +185,9 @@ def test_apply_mutations_update_plan_tasks_string_list_backward_compat(db_path):
 def test_handle_check_in_inserts_db_row(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_plan
-    with patch("bot.message_handler.call_claude", return_value="Great progress!"):
+    orch_conv = [{"role": "orchestrator", "body": "Check-in noted.", "round": 0}]
+    with patch("bot.message_handler._classify_message", return_value="quick"), \
+         patch("bot.message_handler.call_response_builder", return_value="Got it."):
         handle_message("/check-in applied to 2 jobs :: about to start third", [].append, db_path=db_path)
     plan = get_plan(db_path, TODAY)
     assert len(plan["check_in_log"]) == 1
@@ -194,7 +196,8 @@ def test_handle_check_in_inserts_db_row(db_path):
 
 def test_handle_update_context_saves_to_db(db_path):
     from bot.message_handler import handle_message
-    with patch("bot.message_handler.call_claude", return_value="Got it."):
+    with patch("bot.message_handler._classify_message", return_value="quick"), \
+         patch("bot.message_handler.call_response_builder", return_value="Got it."):
         handle_message("/tether-update-context Thesis :: Working on chapter 3", [].append, db_path=db_path)
     node = get_node_by_path(db_path, "Thesis")
     assert node is not None
@@ -206,7 +209,8 @@ def test_handle_update_context_saves_to_db(db_path):
 def test_handle_update_plan_saves_tasks(db_path):
     from bot.message_handler import handle_message
     from db.queries import get_plan
-    with patch("bot.message_handler.call_claude", return_value="Updated!"):
+    with patch("bot.message_handler._classify_message", return_value="quick"), \
+         patch("bot.message_handler.call_response_builder", return_value="Updated!"):
         handle_message("/update-plan grind_am :: New task 1; New task 2", [].append, db_path=db_path)
     plan = get_plan(db_path, TODAY)
     texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
@@ -693,3 +697,63 @@ def test_handle_message_accepts_db_path(db_path):
         handle_message("hello", sent.append, db_path=db_path)
     # As long as no exception is raised and send_fn was called, routing worked.
     assert len(sent) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Unified slash pre-processor integration tests
+# ---------------------------------------------------------------------------
+
+class TestUnifiedSlashPreprocessor:
+    def test_check_in_message_applies_db_write_and_continues_to_pipeline(self, db_path):
+        """A /check-in message should write to DB AND continue into the pipeline (no early return)."""
+        from bot.message_handler import handle_message
+        from db.queries import get_plan
+
+        sent = []
+        with patch("bot.message_handler._classify_message", return_value="quick"), \
+             patch("bot.message_handler.call_response_builder", return_value="Check-in noted!") as mock_builder:
+            handle_message(
+                "/check-in applied to 2 jobs :: about to start third",
+                sent.append,
+                db_path=db_path,
+            )
+
+        # DB side-effect happened
+        plan = get_plan(db_path, TODAY)
+        assert len(plan["check_in_log"]) == 1
+        assert plan["check_in_log"][0]["accomplished"] == "applied to 2 jobs"
+
+        # Pipeline continued (response builder was called — no early return)
+        mock_builder.assert_called_once()
+        assert "Check-in noted!" in sent
+
+    def test_skill_command_forwarded_to_premium_handler(self, db_path):
+        """A skill command should be extracted and forwarded to the premium handler."""
+        import sys
+        import types
+        from bot.message_handler import handle_message
+
+        sent = []
+
+        def fake_premium(text, db_path, anchors, current_anchor, send_fn=None, skill_commands=None):
+            # Record what skill_commands were passed
+            fake_premium.received_skill_commands = skill_commands
+            return "Premium response."
+
+        fake_premium.received_skill_commands = None
+
+        # Inject a fake tether_premium.register module so the local import succeeds
+        fake_register = types.ModuleType("tether_premium.register")
+        fake_register.get_premium_handler = lambda: fake_premium
+        fake_tether_premium = types.ModuleType("tether_premium")
+
+        with patch("bot.message_handler._is_v3_enabled", return_value=True), \
+             patch.dict(sys.modules, {
+                 "tether_premium": fake_tether_premium,
+                 "tether_premium.register": fake_register,
+                 "tether_premium.bot": types.ModuleType("tether_premium.bot"),
+                 "tether_premium.bot.skill_registry": types.ModuleType("tether_premium.bot.skill_registry"),
+             }):
+            handle_message("/explain-beacon what does it do?", sent.append, db_path=db_path)
+
+        assert fake_premium.received_skill_commands == ["explain-beacon"]
