@@ -56,6 +56,14 @@ const STATUS_CARD_STYLE: Record<TaskStatus, Record<string, string>> = {
   blocked:     { backgroundColor: 'rgb(30,22,37)' },           // red tint
 }
 
+const isOverdue = computed(() => {
+  const pd = (props.task as any).plan_date as string | null | undefined
+  if (!pd) return false
+  if (props.task.status === 'done' || props.task.status === 'skipped') return false
+  const today = new Date().toISOString().slice(0, 10)
+  return pd < today
+})
+
 const showFollowup = ref(false)
 const showStatusDropdown = ref(false)
 const popoverStyle = ref({ top: '0px', right: '0px' })
@@ -169,6 +177,10 @@ function toggleFollowup(enabled: boolean) {
         @click.stop
         class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
         {{ (task as any).plan_date }}{{ (task as any).anchor_id ? ' · ' + (task as any).anchor_id : '' }}
+      </span>
+      <span v-if="isOverdue" @click.stop
+            class="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-medium">
+        overdue
       </span>
       <template v-if="!hideTags">
         <span
