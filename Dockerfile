@@ -50,10 +50,15 @@ RUN pip install --no-cache-dir --no-deps .
 COPY --from=frontend-build /build/dist/ frontend/dist/
 
 # ── Optional premium layer ────────────────────────────────
-# Pass --build-arg GITHUB_TOKEN=<token> to install premium from the private
-# repo. If omitted or empty, this produces the community edition image.
+# Pass PREMIUM_GIT_TOKEN to install premium from the private repo.
+# PREMIUM_REF is a cache-buster: change it to force a fresh install.
+#   Now:    set to the premium repo HEAD SHA (7 chars)
+#   Future: set to the pip version tag when a private PyPI server is ready;
+#           swap the install command to: pip install tether-premium==${PREMIUM_REF}
 ARG PREMIUM_GIT_TOKEN=
+ARG PREMIUM_REF=unknown
 RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
+      echo "Installing tether-premium @ ${PREMIUM_REF}" && \
       pip install --no-cache-dir \
         "git+https://${PREMIUM_GIT_TOKEN}@github.com/jlunder00/tether-premium.git" && \
       python -c "from tether_premium.register import get_premium_handler; print('[ok] premium loaded')" ; \
