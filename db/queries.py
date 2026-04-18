@@ -6,7 +6,7 @@ import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from db.schema import get_db
+from db.schema import get_db, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,17 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
         ).fetchone()
     if not row:
         return None
-    return _row_to_task(row)
+    result = _row_to_task(row)
+    if "status" in fields:
+        with get_db(db_path) as conn:
+            dependents = conn.execute(
+                "SELECT blocked_id FROM dependencies WHERE blocker_type='task' AND blocker_id=? AND blocked_type='task'",
+                (task_uuid,),
+            ).fetchall()
+        for (dep_uuid,) in dependents:
+            resolve_blocked_status(db_path, dep_uuid)
+        resolve_blocked_status(db_path, task_uuid)
+    return result
 
 
 def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
@@ -319,18 +329,27 @@ def add_dependency(db_path: Path, blocker_type: str, blocker_id: str,
             (blocker_type, blocker_id, blocked_type, blocked_id),
         )
         if cur.lastrowid:
-            return cur.lastrowid
-        row = conn.execute(
-            "SELECT id FROM dependencies WHERE blocker_type=? AND blocker_id=? AND blocked_type=? AND blocked_id=?",
-            (blocker_type, blocker_id, blocked_type, blocked_id),
-        ).fetchone()
-        return row["id"]
+            dep_id = cur.lastrowid
+        else:
+            row = conn.execute(
+                "SELECT id FROM dependencies WHERE blocker_type=? AND blocker_id=? AND blocked_type=? AND blocked_id=?",
+                (blocker_type, blocker_id, blocked_type, blocked_id),
+            ).fetchone()
+            dep_id = row["id"]
+    if blocked_type == "task":
+        resolve_blocked_status(db_path, blocked_id)
+    return dep_id
 
 
 def remove_dependency(db_path: Path, dep_id: int) -> None:
     """Remove a dependency by id."""
     with get_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT blocked_type, blocked_id FROM dependencies WHERE id=?", (dep_id,)
+        ).fetchone()
         conn.execute("DELETE FROM dependencies WHERE id=?", (dep_id,))
+    if row and row[0] == "task":
+        resolve_blocked_status(db_path, row[1])
 
 
 def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dict:
@@ -364,6 +383,60 @@ def get_dependencies_for(db_path: Path, entity_type: str, entity_id: str) -> dic
                        "name": _resolve_name(conn, r["blocker_type"], r["blocker_id"])}
                       for r in blocked_rows]
     return {"blocks": blocks, "blocked_by": blocked_by}
+
+
+def resolve_blocked_status(
+    db_path: Path,
+    task_uuid: str,
+    _visited: set[str] | None = None,
+) -> None:
+    if _visited is None:
+        _visited = set()
+    if task_uuid in _visited:
+        return
+    _visited.add(task_uuid)
+
+    with transaction(db_path):
+        db = get_db(db_path)
+        row = db.execute("SELECT status FROM tasks WHERE uuid=?", (task_uuid,)).fetchone()
+        if row is None:
+            return
+        current = row[0]
+        if current in ("done", "skipped"):
+            return
+
+        blocker_rows = db.execute(
+            """
+            SELECT t.status FROM dependencies d
+            JOIN tasks t ON t.uuid = d.blocker_id
+            WHERE d.blocked_type = 'task' AND d.blocked_id = ?
+              AND d.blocker_type = 'task'
+            """,
+            (task_uuid,),
+        ).fetchall()
+        has_open = any(r[0] not in ("done", "skipped") for r in blocker_rows)
+
+        new_status: str | None = None
+        if has_open and current != "blocked":
+            new_status = "blocked"
+        elif not has_open and current == "blocked":
+            new_status = "pending"
+
+        if new_status is None:
+            return
+
+        db.execute("UPDATE tasks SET status=? WHERE uuid=?", (new_status, task_uuid))
+
+        dependents = db.execute(
+            """
+            SELECT d.blocked_id FROM dependencies d
+            WHERE d.blocker_type = 'task' AND d.blocker_id = ?
+              AND d.blocked_type = 'task'
+            """,
+            (task_uuid,),
+        ).fetchall()
+        for (dep_uuid,) in dependents:
+            resolve_blocked_status(db_path, dep_uuid, _visited)
 
 
 def get_full_task_dependencies(db_path: Path, task_uuid: str) -> dict:
@@ -1564,7 +1637,9 @@ def create_unscheduled_task(
             "SELECT uuid, text, status, position, followup_config, description, context_subject, context_node_id "
             "FROM tasks WHERE uuid=?", (task_uuid,)
         ).fetchone()
-    return _row_to_task(row)
+    new_task = _row_to_task(row)
+    resolve_blocked_status(db_path, new_task["id"])
+    return new_task
 
 
 def get_unscheduled_tasks(db_path: Path) -> list[dict]:
