@@ -17,6 +17,7 @@ from db.queries import (
     link_milestone_task, unlink_milestone_task,
     add_dependency, remove_dependency, get_dependencies_for,
     get_full_task_dependencies,
+    get_task_by_uuid,
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
     get_links, create_link, delete_link,
     patch_task_fields,
@@ -974,3 +975,78 @@ def test_get_all_node_paths_excludes_archived(db_path):
     archive_node(db_path, node["id"])
     paths = get_all_node_paths(db_path)
     assert "Old" not in paths
+
+
+# ---------------------------------------------------------------------------
+# resolve_blocked_status (triggered implicitly via add_dependency / patch_task_fields / remove_dependency)
+# ---------------------------------------------------------------------------
+
+def test_resolver_flips_pending_to_blocked(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    add_dependency(db_path, "task", uid_a, "task", uid_b)
+    task_b = get_task_by_uuid(db_path, uid_b)
+    assert task_b["status"] == "blocked"
+
+
+def test_resolver_restores_to_pending_when_blocker_done(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    add_dependency(db_path, "task", uid_a, "task", uid_b)
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "blocked"
+
+    patch_task_fields(db_path, uid_a, {"status": "done"})
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "pending"
+
+
+def test_resolver_preserves_user_set_done(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    add_dependency(db_path, "task", uid_a, "task", uid_b)
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "blocked"
+
+    # User manually marks B as done
+    patch_task_fields(db_path, uid_b, {"status": "done"})
+    # Now A finishes — resolver should not downgrade B
+    patch_task_fields(db_path, uid_a, {"status": "done"})
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "done"
+
+
+def test_resolver_cascades_through_chain(db_path):
+    tasks = _make_tasks(db_path, 3)
+    uid_a, uid_b, uid_c = tasks[0]["id"], tasks[1]["id"], tasks[2]["id"]
+    add_dependency(db_path, "task", uid_a, "task", uid_b)  # A blocks B
+    add_dependency(db_path, "task", uid_b, "task", uid_c)  # B blocks C
+
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "blocked"
+    assert get_task_by_uuid(db_path, uid_c)["status"] == "blocked"
+
+    # A done → B unblocked, but B still blocks C
+    patch_task_fields(db_path, uid_a, {"status": "done"})
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "pending"
+    assert get_task_by_uuid(db_path, uid_c)["status"] == "blocked"
+
+    # B done → C unblocked
+    patch_task_fields(db_path, uid_b, {"status": "done"})
+    assert get_task_by_uuid(db_path, uid_c)["status"] == "pending"
+
+
+def test_resolver_cycle_safe(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    # Create a cycle: A blocks B and B blocks A
+    add_dependency(db_path, "task", uid_a, "task", uid_b)
+    add_dependency(db_path, "task", uid_b, "task", uid_a)  # must not infinite-loop
+    # Both should end up blocked
+    assert get_task_by_uuid(db_path, uid_a)["status"] == "blocked"
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "blocked"
+
+
+def test_remove_dependency_unblocks(db_path):
+    tasks = _make_tasks(db_path, 2)
+    uid_a, uid_b = tasks[0]["id"], tasks[1]["id"]
+    dep_id = add_dependency(db_path, "task", uid_a, "task", uid_b)
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "blocked"
+
+    remove_dependency(db_path, dep_id)
+    assert get_task_by_uuid(db_path, uid_b)["status"] == "pending"
