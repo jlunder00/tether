@@ -60,7 +60,8 @@ const isOverdue = computed(() => {
   const pd = (props.task as any).plan_date as string | null | undefined
   if (!pd) return false
   if (props.task.status === 'done' || props.task.status === 'skipped') return false
-  const today = new Date().toISOString().slice(0, 10)
+  const d = new Date()
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   return pd < today
 })
 

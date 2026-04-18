@@ -262,6 +262,14 @@ def patch_task_fields(db_path: Path, task_uuid: str, fields: dict) -> dict | Non
         for (dep_uuid,) in dependents:
             resolve_blocked_status(db_path, dep_uuid)
         resolve_blocked_status(db_path, task_uuid)
+        # Re-read to reflect any resolver changes
+        with get_db(db_path) as conn:
+            row = conn.execute(
+                "SELECT uuid, text, status, position, followup_config, description, context_subject FROM tasks WHERE uuid=?",
+                (task_uuid,),
+            ).fetchone()
+        if row:
+            result = _row_to_task(row)
     return result
 
 
@@ -279,6 +287,14 @@ def get_task_by_uuid(db_path: Path, task_uuid: str) -> dict | None:
 
 def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
     """Delete a task and its related data."""
+    # Collect downstream tasks that were blocked by this task before deleting
+    with get_db(db_path) as conn:
+        downstream = [
+            r[0] for r in conn.execute(
+                "SELECT blocked_id FROM dependencies WHERE blocker_type='task' AND blocker_id=? AND blocked_type='task'",
+                (task_uuid,),
+            ).fetchall()
+        ]
     with get_db(db_path) as conn:
         conn.execute("DELETE FROM subtasks WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM links WHERE parent_type='tasks' AND parent_id=?", (task_uuid,))
@@ -286,6 +302,9 @@ def delete_task_by_uuid(db_path: Path, task_uuid: str) -> None:
         conn.execute("DELETE FROM milestone_tasks WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM followup_state WHERE task_id=?", (task_uuid,))
         conn.execute("DELETE FROM tasks WHERE uuid=?", (task_uuid,))
+    # Resolve blocked status on any tasks that were waiting on the deleted task
+    for dep_uuid in downstream:
+        resolve_blocked_status(db_path, dep_uuid)
 
 
 def move_task_atomic(
