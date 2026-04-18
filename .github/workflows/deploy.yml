@@ -4,6 +4,19 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  # Triggered by tether-premium when it merges to main.
+  # Payload: { premium_ref: "<7-char SHA>" }
+  repository_dispatch:
+    types: [premium-updated]
+  # Manual trigger — optionally force a no-cache build.
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Force --no-cache build (clears all Docker layer cache)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 permissions:
   contents: read
@@ -11,8 +24,6 @@ permissions:
 
 jobs:
   # ── Premium deployment ────────────────────────────────────────────────────
-  # Builds with tether-premium installed. Image stays on the Pi — never pushed
-  # to any registry. When a private registry is available, push step goes here.
   deploy-premium:
     name: Deploy premium to Pi
     runs-on: self-hosted
@@ -34,26 +45,44 @@ jobs:
             echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
             echo "extra_tag=" >> $GITHUB_OUTPUT
           fi
-          echo "sha_tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      # Resolve PREMIUM_REF for cache-busting.
+      # - repository_dispatch: use the SHA sent in the payload (premium just changed)
+      # - push / workflow_dispatch: fetch current premium HEAD SHA
+      #
+      # Future (private PyPI): replace the git ls-remote call with:
+      #   pip index versions tether-premium 2>/dev/null | awk '{print $NF}'
+      # and update the Dockerfile install command accordingly.
+      - name: Resolve premium ref
+        id: premium
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            REF="${{ github.event.client_payload.premium_ref }}"
+          else
+            REF=$(git ls-remote \
+              "https://${{ secrets.TETHER_PREMIUM_TOKEN }}@github.com/jlunder00/tether-premium.git" \
+              HEAD 2>/dev/null | cut -f1 | cut -c1-7 || echo unknown)
+          fi
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+          echo "Premium ref: ${REF}"
 
       - name: Build premium image
         run: |
           cd /home/toast/tether
-          IMAGE=tether-premium
           TAG=${{ steps.version.outputs.tag }}
-          IMAGE_TAG=$TAG TETHER_IMAGE=$IMAGE PREMIUM_GIT_TOKEN=$TETHER_PREMIUM_TOKEN \
-            docker compose build
-          # Also tag as latest
-          docker tag $IMAGE:$TAG $IMAGE:latest
-          # If this is a semver release, tag that too
+          BUILD_TARGET=$( [ "${{ github.event.inputs.no_cache }}" = "true" ] && \
+            echo build-premium-no-cache || echo build-premium )
+          make ${BUILD_TARGET} \
+            IMAGE=tether-premium \
+            TAG=${TAG} \
+            PREMIUM_GIT_TOKEN=${{ secrets.TETHER_PREMIUM_TOKEN }} \
+            PREMIUM_REF=${{ steps.premium.outputs.ref }}
+          docker tag tether-premium:${TAG} tether-premium:latest
           if [ -n "${{ steps.version.outputs.extra_tag }}" ]; then
-            docker tag $IMAGE:$TAG $IMAGE:${{ steps.version.outputs.extra_tag }}
+            docker tag tether-premium:${TAG} tether-premium:${{ steps.version.outputs.extra_tag }}
           fi
-          # Write IMAGE_TAG to .env so compose uses the new image on restart
-          sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$TAG/" /home/toast/tether/.env || \
-            echo "IMAGE_TAG=$TAG" >> /home/toast/tether/.env
-        env:
-          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env || \
+            echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
 
       - name: Run DB migrations
         run: |
@@ -69,9 +98,6 @@ jobs:
       - name: Pre-pull external images
         run: |
           cd /home/toast/tether
-          # Pull any non-tether images declared in compose (e.g. postgres).
-          # Retries handle transient TLS/network timeouts on the Pi.
-          # Falls back to cached image if all retries fail.
           EXTERNAL_IMAGES=$(TETHER_IMAGE=tether-premium docker compose config --images 2>/dev/null \
             | grep -v '^tether' | grep -v '^ghcr.io/jlunder00' | sort -u)
           for IMAGE in $EXTERNAL_IMAGES; do
@@ -85,8 +111,7 @@ jobs:
       - name: Restart services
         run: |
           cd /home/toast/tether
-          TETHER_IMAGE=tether-premium docker compose down || true
-          TETHER_IMAGE=tether-premium docker compose up -d
+          make restart IMAGE=tether-premium TAG=${{ steps.version.outputs.tag }}
 
       - name: Prune old premium images (keep 3)
         run: |
@@ -97,11 +122,11 @@ jobs:
           docker image prune -f
 
   # ── Community edition publish ─────────────────────────────────────────────
-  # Builds without premium. Pushes to ghcr.io — publicly visible, no premium
-  # code included. Community self-hosters pull from here.
   publish-community:
     name: Publish community edition to ghcr.io
     runs-on: ubuntu-latest
+    # Only publish on direct push/tag — not on premium-triggered deploys.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
 
@@ -123,10 +148,7 @@ jobs:
 
       - name: Build community image
         run: |
-          IMAGE=ghcr.io/jlunder00/tether
-          TAG=${{ steps.version.outputs.tag }}
-          # No GITHUB_TOKEN build arg — community edition, no premium
-          docker build -t $IMAGE:$TAG .
+          make build-community TAG=${{ steps.version.outputs.tag }}
 
       - name: Push to ghcr.io
         run: |
