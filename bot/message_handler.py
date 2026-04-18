@@ -942,8 +942,8 @@ def _handle_v3(text: str, db_path: Path, anchors: list[dict],
     # Skill injection (v3-basic fallback): append skill content to system prompt
     if skill_commands:
         try:
-            from tether_premium.bot.skill_loader import load_skill_content
-            skill_blocks = [load_skill_content(cmd) for cmd in skill_commands]
+            from tether_premium.bot.skill_registry import load_skill
+            skill_blocks = [load_skill(f"/{cmd}") for cmd in skill_commands]
             skill_text = "\n\n".join(b for b in skill_blocks if b)
             if skill_text:
                 system = system + "\n\n" + skill_text
