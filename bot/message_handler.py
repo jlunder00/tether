@@ -1030,12 +1030,14 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         try:
             from tether_premium.register import get_premium_handler
             logger.info("dispatch: premium handler")
+            # Record user turn before calling the handler so it's never lost
+            # even if the handler raises an exception partway through.
+            insert_conversation_turn(db_path, "user", text)
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
             final = get_premium_handler()(text, db_path, anchors, current_anchor,
                                            send_fn=send_fn,
                                            skill_commands=_skill_commands)
-            insert_conversation_turn(db_path, "user", text)
             if final:
                 logger.info("reply sent: len=%d preview=%r", len(final), _log_preview(final))
                 logger.debug("reply full: %r", final)
@@ -1047,7 +1049,10 @@ def handle_message(text: str, send_fn: Callable[[str], None], db_path: Path = DB
         except (ImportError, NotImplementedError):
             pass  # Premium not installed or not yet wired
         except TypeError as _te:
-            logger.warning("Premium handler TypeError (signature mismatch?): %s", _te)
+            import traceback
+            logger.error("Premium handler raised TypeError — possible bug in handler "
+                         "(not a signature mismatch): %s\n%s", _te, traceback.format_exc())
+            # Fall through to v3-basic as graceful degradation
 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
@@ -1222,30 +1227,41 @@ def run_polling(token: str, chat_id: str) -> None:
                         if _task.get("id"):
                             init_followup_state(_active_db, _today, _current_anchor["id"],
                                                 _task["id"], _dt.now())
-                # Premium Beacon hook — review accumulated changes on anchor transition
+                # Premium Beacon hook — review accumulated changes on anchor transition.
+                # Runs in a background thread so the polling loop isn't blocked
+                # while Beacon makes its LLM calls (can take 5-30s).
                 try:
                     from tether_premium.bot.beacon import should_trigger_beacon, run_beacon
                     if should_trigger_beacon(str(_active_db), is_anchor_transition=True):
                         from tether_premium.bot.state_monitor import peek_changes, consume_changes
                         from tether_premium.bot.router import LLMRouter
                         import asyncio as _aio
+                        import threading as _threading
                         _beacon_changes = peek_changes(str(_active_db))
                         if _beacon_changes:
                             _cfg = load_config()
                             _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
                             _beacon_router = LLMRouter(mcp_server_url=_mcp_url)
+                            _beacon_db = str(_active_db)
 
-                            async def _beacon_notify(msg):
-                                _send(msg)
+                            def _run_beacon_bg():
+                                async def _beacon_notify(msg):
+                                    _send(msg)
+                                try:
+                                    _result = _aio.run(run_beacon(
+                                        router=_beacon_router,
+                                        db_path=_beacon_db,
+                                        changes=_beacon_changes,
+                                        notify=_beacon_notify,
+                                    ))
+                                    if _result.get("triggered"):
+                                        consume_changes(_beacon_db)
+                                except Exception as _be:
+                                    logger.warning("Beacon background run failed: %s", _be)
 
-                            _result = _aio.run(run_beacon(
-                                router=_beacon_router,
-                                db_path=str(_active_db),
-                                changes=_beacon_changes,
-                                notify=_beacon_notify,
-                            ))
-                            if _result.get("triggered"):
-                                consume_changes(str(_active_db))
+                            _threading.Thread(
+                                target=_run_beacon_bg, daemon=True, name="beacon"
+                            ).start()
                 except ImportError:
                     pass  # Premium not installed
                 except Exception as _be:
