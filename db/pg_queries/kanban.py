@@ -131,3 +131,12 @@ async def update_kanban_column(
 
 async def delete_kanban_column(conn: asyncpg.Connection, column_id: str) -> None:
     await conn.execute("DELETE FROM kanban_columns WHERE id = $1", column_id)
+
+
+async def migrate_backlog_column(conn: asyncpg.Connection) -> None:
+    """Tighten Backlog match_rules and add unschedule entry_rule (fixes drag-drop)."""
+    await conn.execute(
+        "UPDATE kanban_columns SET match_rules = $1, entry_rules = $2 WHERE id = 'col_backlog'",
+        {"plan_date": None, "status": "pending"},
+        {"set_status": "pending", "unschedule": True},
+    )
