@@ -336,6 +336,7 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
             return float('inf')
         return (now - ts).total_seconds() / 60
 
+    # Phase 1: load all data (connection held only for reads + config lookups)
     async with pg.get_conn(pool, user_id) as conn:
         rows = await get_active_followup_states(conn, today)
         if not rows:
@@ -345,7 +346,6 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
         pre_ack_due = []
         post_ack_due = []
 
-        # Only ping for anchors that are currently in their time window
         all_anchors = await get_anchors(conn)
         active_anchor_ids = {a["id"] for a in all_anchors if is_anchor_active(a, now)}
         logger.debug("check_followups: %d rows, %d active anchors (%s)",
@@ -372,52 +372,55 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
                         and minutes_since(ref_ts) >= config["post_ack_interval_min"]):
                     post_ack_due.append(row)
 
-        if pre_ack_due:
-            from collections import defaultdict
-            by_anchor: dict = defaultdict(list)
-            for row in pre_ack_due:
-                by_anchor[row["anchor_id"]].append(row)
-            for anchor_id, anchor_rows in by_anchor.items():
-                plan = await get_plan(conn, today)
-                task_lines = []
-                for row in anchor_rows:
-                    task = None
-                    if plan and anchor_id in plan.get("anchors", {}):
-                        task = next(
-                            (t for t in plan["anchors"][anchor_id]["tasks"]
-                             if t["id"] == row["task_id"]), None
-                        )
-                    task_lines.append(f"• {task['text'] if task else row['task_id']}")
-                anchor_name = next((a["name"] for a in all_anchors if a["id"] == anchor_id), anchor_id)
-                msg = (f"Your **{anchor_name}** block is underway. You haven't checked in yet on:\n"
-                       + "\n".join(task_lines)
-                       + "\n\n`/check-in` when you're on it.")
-                send_fn(msg)
+        plan = await get_plan(conn, today) if (pre_ack_due or post_ack_due) else {}
+
+    # Phase 2: send messages + record pings (connection released between HTTP calls)
+    if pre_ack_due:
+        from collections import defaultdict
+        by_anchor: dict = defaultdict(list)
+        for row in pre_ack_due:
+            by_anchor[row["anchor_id"]].append(row)
+        for anchor_id, anchor_rows in by_anchor.items():
+            task_lines = []
+            for row in anchor_rows:
+                task = None
+                if plan and anchor_id in plan.get("anchors", {}):
+                    task = next(
+                        (t for t in plan["anchors"][anchor_id]["tasks"]
+                         if t["id"] == row["task_id"]), None
+                    )
+                task_lines.append(f"• {task['text'] if task else row['task_id']}")
+            anchor_name = next((a["name"] for a in all_anchors if a["id"] == anchor_id), anchor_id)
+            msg = (f"Your **{anchor_name}** block is underway. You haven't checked in yet on:\n"
+                   + "\n".join(task_lines)
+                   + "\n\n`/check-in` when you're on it.")
+            send_fn(msg)
+            async with pg.get_conn(pool, user_id) as conn:
                 for row in anchor_rows:
                     await record_ping(conn, row["id"], "pre", now)
 
-        if post_ack_due:
-            from collections import defaultdict
-            by_anchor: dict = defaultdict(list)
-            for row in post_ack_due:
-                by_anchor[row["anchor_id"]].append(row)
-            for anchor_id, anchor_rows in by_anchor.items():
-                plan = await get_plan(conn, today)
-                task_lines = []
-                for row in anchor_rows:
-                    task = None
-                    if plan and anchor_id in plan.get("anchors", {}):
-                        task = next(
-                            (t for t in plan["anchors"][anchor_id]["tasks"]
-                             if t["id"] == row["task_id"]), None
-                        )
-                    status = f" ({task['status']})" if task else ""
-                    task_lines.append(f"• {task['text'] if task else row['task_id']}{status}")
-                anchor_name = next((a["name"] for a in all_anchors if a["id"] == anchor_id), anchor_id)
-                msg = (f"Quick check — progress on **{anchor_name}**:\n"
-                       + "\n".join(task_lines)
-                       + "\n\nWhat have you knocked out?")
-                send_fn(msg)
+    if post_ack_due:
+        from collections import defaultdict
+        by_anchor: dict = defaultdict(list)
+        for row in post_ack_due:
+            by_anchor[row["anchor_id"]].append(row)
+        for anchor_id, anchor_rows in by_anchor.items():
+            task_lines = []
+            for row in anchor_rows:
+                task = None
+                if plan and anchor_id in plan.get("anchors", {}):
+                    task = next(
+                        (t for t in plan["anchors"][anchor_id]["tasks"]
+                         if t["id"] == row["task_id"]), None
+                    )
+                status = f" ({task['status']})" if task else ""
+                task_lines.append(f"• {task['text'] if task else row['task_id']}{status}")
+            anchor_name = next((a["name"] for a in all_anchors if a["id"] == anchor_id), anchor_id)
+            msg = (f"Quick check — progress on **{anchor_name}**:\n"
+                   + "\n".join(task_lines)
+                   + "\n\nWhat have you knocked out?")
+            send_fn(msg)
+            async with pg.get_conn(pool, user_id) as conn:
                 for row in anchor_rows:
                     await record_ping(conn, row["id"], "post", now)
 
@@ -1053,9 +1056,9 @@ async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_i
                 await insert_conversation_turn(conn, "user", text)
             # Premium handler uses send_fn for Beacon notifications;
             # it returns the main response text without sending it.
-            final = get_premium_handler()(text, pool, user_id, anchors, current_anchor,
-                                           send_fn=send_fn,
-                                           skill_commands=_skill_commands)
+            final = await get_premium_handler()(text, pool, user_id, anchors, current_anchor,
+                                               send_fn=send_fn,
+                                               skill_commands=_skill_commands)
             if final:
                 logger.info("reply sent: len=%d preview=%r", len(final), _log_preview(final))
                 logger.debug("reply full: %r", final)
