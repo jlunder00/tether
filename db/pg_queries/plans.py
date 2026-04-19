@@ -85,23 +85,6 @@ async def list_plan_dates(conn: asyncpg.Connection) -> list[str]:
     return [r["date"] for r in rows]
 
 
-async def insert_check_in(
-    conn: asyncpg.Connection,
-    date: str,
-    anchor_id: str,
-    accomplished: str,
-    current_status: str,
-) -> None:
-    await conn.execute(
-        """
-        INSERT INTO check_ins
-            (plan_date, anchor_id, type, timestamp, accomplished, current_status)
-        VALUES ($1, $2, 'user_checkin', now(), $3, $4)
-        """,
-        date, anchor_id, accomplished, current_status,
-    )
-
-
 def _row_to_task(row, *, include_schedule: bool = False) -> dict:
     r = dict(row)
     d = {

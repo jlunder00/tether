@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import uuid as _uuid
 
 import asyncpg
 
@@ -127,15 +128,15 @@ async def resolve_followup_config(
         WHERE uuid = $1
           AND user_id = current_setting('app.current_user_id', true)::uuid
         """,
-        task_id,
+        _uuid.UUID(task_id),
     )
     anchor_row = await conn.fetchrow(
         """
         SELECT followup_config FROM anchors
-        WHERE id = $1::uuid
+        WHERE id = $1
           AND user_id = current_setting('app.current_user_id', true)::uuid
         """,
-        anchor_id,
+        _uuid.UUID(anchor_id),
     )
     task_fc = task_row["followup_config"] if task_row else None    # already dict from JSONB
     anchor_fc = anchor_row["followup_config"] if anchor_row else None
