@@ -2,10 +2,7 @@ from __future__ import annotations
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
-from pathlib import Path
 from fastapi import Request, HTTPException
-from db.auth_schema import init_auth_db
-from db.auth_queries import get_user_by_id
 import api.config as cfg
 
 
@@ -31,12 +28,8 @@ def decode_jwt(token: str) -> dict:
     return jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
 
 
-def get_user_db_path(user_id: str) -> Path:
-    return cfg.USERS_DB_DIR / f"{user_id}.db"
-
-
 async def auth_dependency(request: Request):
-    """FastAPI dependency — extracts JWT from cookie, sets request.state.user_id and request.state.db_path."""
+    """FastAPI dependency — extracts JWT from cookie, sets request.state.user_id."""
     token = request.cookies.get("tether_token")
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -49,5 +42,4 @@ async def auth_dependency(request: Request):
     request.state.user_id = payload["user_id"]
     request.state.username = payload["username"]
     request.state.is_admin = payload.get("is_admin", False)
-    request.state.db_path = get_user_db_path(payload["user_id"])
     return payload

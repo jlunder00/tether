@@ -1,9 +1,8 @@
-import sqlite3
+import asyncpg
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from api.routes import plan as plan_routes
 from api.routes import anchors as anchor_routes
 from api.routes import context as context_routes
@@ -21,21 +20,17 @@ from api.routes import nodes as nodes_routes
 from api.routes import settings as settings_routes
 from api.ws import manager
 from api.auth import decode_jwt
-from db.auth_schema import init_auth_db
+from db.pool_middleware import lifespan
+from db.pg_queries.errors import StaleReadError
 import api.config as cfg
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 
 def create_app(db_path: Path | None = None) -> FastAPI:
-    if db_path is not None:
-        cfg.DB_PATH = db_path
-
     cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    cfg.USERS_DB_DIR.mkdir(parents=True, exist_ok=True)
-    init_auth_db(cfg.AUTH_DB_PATH)
 
-    app = FastAPI(title="Tether")
+    app = FastAPI(title="Tether", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -49,13 +44,20 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     async def value_error_handler(request, exc):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    @app.exception_handler(sqlite3.IntegrityError)
-    async def integrity_error_handler(request, exc):
-        msg = str(exc)
-        if "FOREIGN KEY" in msg:
-            return JSONResponse(status_code=404, content={"detail": "Referenced resource not found"})
-        if "UNIQUE" in msg:
-            return JSONResponse(status_code=409, content={"detail": "Resource already exists (duplicate)"})
+    @app.exception_handler(StaleReadError)
+    async def stale_read_handler(request, exc):
+        return JSONResponse(status_code=409, content={"current_version": exc.current_version})
+
+    @app.exception_handler(asyncpg.UniqueViolationError)
+    async def unique_violation_handler(request, exc):
+        return JSONResponse(status_code=409, content={"detail": "Resource already exists (duplicate)"})
+
+    @app.exception_handler(asyncpg.ForeignKeyViolationError)
+    async def fk_violation_handler(request, exc):
+        return JSONResponse(status_code=422, content={"detail": "Referenced resource not found"})
+
+    @app.exception_handler(asyncpg.IntegrityConstraintViolationError)
+    async def integrity_handler(request, exc):
         return JSONResponse(status_code=400, content={"detail": "Database constraint violated"})
 
     app.include_router(auth_routes.router)  # No /api prefix — OAuth callbacks need clean /auth URLs
