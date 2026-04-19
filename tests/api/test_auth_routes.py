@@ -10,9 +10,7 @@ import asyncpg
 # Cleanup fixture — remove any users created during auth tests
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-async def cleanup_auth_data(pool):
-    yield
+async def _wipe_test_users() -> None:
     c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
     try:
         await c.execute("DELETE FROM users WHERE email LIKE '%@example.com'")
@@ -20,6 +18,15 @@ async def cleanup_auth_data(pool):
         pass
     finally:
         await c.close()
+
+
+@pytest.fixture(autouse=True)
+async def cleanup_auth_data(pool):
+    # Clean before each test so conftest's test user (test@example.com) doesn't
+    # leak into auth tests that assert count-dependent behavior (e.g. first-user-is-admin).
+    await _wipe_test_users()
+    yield
+    await _wipe_test_users()
 
 
 # ---------------------------------------------------------------------------
