@@ -542,6 +542,8 @@ async def update_subtask(conn: asyncpg.Connection, subtask_id: int, **fields) ->
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
+    if "done" in updates:
+        updates["done"] = bool(updates["done"])
     params = list(updates.values())
     params.append(subtask_id)
     set_clause = ", ".join(f"{k} = ${i + 1}" for i, k in enumerate(updates))

@@ -55,7 +55,7 @@ async def test_create_task_links_milestone(api_client, conn):
     assert resp.status_code == 200
     task_id = resp.json()["id"]
     row = await conn.fetchrow(
-        "SELECT milestone_id FROM milestone_tasks WHERE task_id = $1::uuid",
+        "SELECT milestone_id FROM milestone_tasks WHERE task_id = $1",
         task_id,
     )
     assert row is not None

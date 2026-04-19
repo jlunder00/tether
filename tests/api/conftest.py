@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import pytest
 import asyncpg
-from contextlib import asynccontextmanager
 from httpx import AsyncClient, ASGITransport
 from api.auth import create_jwt
 
@@ -36,7 +35,7 @@ async def _ensure_test_user(url: str) -> None:
 
 @pytest.fixture
 async def pool():
-    """Shared pool per test — used by auth routes that access app.state.pool directly."""
+    """Per-test pool shared by auth_client (routes that access app.state.pool directly)."""
     url = _db_url()
     p = await asyncpg.create_pool(dsn=url)
     yield p
@@ -45,7 +44,7 @@ async def pool():
 
 @pytest.fixture
 async def conn():
-    """Per-test transactional connection with RLS set to TEST_USER_ID. Rolls back after."""
+    """Per-test transactional connection with RLS set. Rolls back after."""
     url = _db_url()
     await _ensure_test_user(url)
     c = await asyncpg.connect(dsn=url)
@@ -58,20 +57,18 @@ async def conn():
 
 
 @pytest.fixture
-async def api_client(conn):
-    """AsyncClient for non-auth routes. Routes use same conn as test setup (same transaction)."""
+async def api_client(conn, pool):
+    """AsyncClient for non-auth routes. Routes use test conn for DB reads via override,
+    but can also access app.state.pool for operations like sync_crontab (typically mocked)."""
     from api.main import create_app
     from db.pool_middleware import get_db_conn
 
     async def override_get_db_conn():
         yield conn
 
-    @asynccontextmanager
-    async def test_lifespan(app):
-        app.state.pool = None  # routes use override, not pool
-        yield
-
-    app = create_app(lifespan_override=test_lifespan)
+    app = create_app()
+    # ASGITransport does not trigger lifespan — set state directly.
+    app.state.pool = pool
     app.dependency_overrides[get_db_conn] = override_get_db_conn
 
     token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
@@ -88,12 +85,9 @@ async def auth_client(pool):
     """AsyncClient for auth routes. Uses real pool (auth routes access app.state.pool directly)."""
     from api.main import create_app
 
-    @asynccontextmanager
-    async def test_lifespan(app):
-        app.state.pool = pool
-        yield
+    app = create_app()
+    app.state.pool = pool
 
-    app = create_app(lifespan_override=test_lifespan)
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

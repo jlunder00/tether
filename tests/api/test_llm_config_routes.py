@@ -18,12 +18,9 @@ async def llm_client(tmp_path, monkeypatch):
     from api.main import create_app
     from db.pool_middleware import get_db_conn
 
-    @asynccontextmanager
-    async def test_lifespan(app):
-        app.state.pool = None
-        yield
-
-    app = create_app(lifespan_override=test_lifespan)
+    app = create_app()
+    # ASGITransport does not trigger lifespan — set state directly.
+    app.state.pool = None
 
     # llm-config routes don't use get_db_conn, but override anyway to prevent errors
     async def override_get_db_conn():

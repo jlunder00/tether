@@ -15,7 +15,7 @@ def _db_url() -> str:
     return url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def pg_pool():
     url = _db_url()
     pool = await asyncpg.create_pool(dsn=url)

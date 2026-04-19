@@ -24,7 +24,7 @@ def set_tether_env():
     os.environ.pop("TETHER_USER_ID", None)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 async def pg_pool():
     url = _db_url()
     pool = await asyncpg.create_pool(dsn=url)

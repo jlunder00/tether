@@ -32,8 +32,8 @@ async def _run(existing_crontab=""):
             r.returncode = 0
         return r
 
-    with patch("db.postgres.get_conn", mock_get_conn), \
-         patch("db.pg_queries.anchors.get_anchors", AsyncMock(return_value=ANCHORS)), \
+    with patch("bot.crontab.pg.get_conn", mock_get_conn), \
+         patch("bot.crontab.get_anchors", AsyncMock(return_value=ANCHORS)), \
          patch("bot.crontab.subprocess.run", side_effect=fake_run):
         await sync_crontab(mock_pool, "00000000-0000-0000-0000-000000000001")
 
