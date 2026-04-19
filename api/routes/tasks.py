@@ -85,7 +85,8 @@ async def patch_task(task_uuid: str, body: dict,
 @router.delete("/tasks/{task_uuid}")
 async def delete_task(task_uuid: str, _auth=Depends(auth_dependency),
                       conn: asyncpg.Connection = Depends(get_db_conn)):
-    await delete_task_by_uuid(conn, task_uuid)
+    async with conn.transaction():
+        await delete_task_by_uuid(conn, task_uuid)
     return {"ok": True}
 
 

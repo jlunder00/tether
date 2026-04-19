@@ -1,6 +1,5 @@
 """Async Postgres queries — anchors table."""
 from __future__ import annotations
-import json
 import uuid as _uuid
 
 import asyncpg
@@ -32,7 +31,7 @@ async def upsert_anchor(conn: asyncpg.Connection, anchor: dict) -> None:
         anchor.get("strictness", 3),
         anchor.get("color", "#888888"),
         anchor.get("position", 0),
-        json.dumps(anchor.get("followup_config")) if anchor.get("followup_config") is not None else None,
+        anchor.get("followup_config"),
     )
 
 
