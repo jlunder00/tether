@@ -440,7 +440,7 @@ async def _migrate_user_data(
                     followup_config, notes, description, context_subject, context_node_id)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                ON CONFLICT DO NOTHING""",
-            _uuid.UUID(r["uuid"]) if r["uuid"] else _uuid.uuid4(),
+            _uuid.UUID(r["uuid"]) if r["uuid"] else _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"),
             uid,
             r["plan_date"],
             _uuid.UUID(r["anchor_id"]) if r["anchor_id"] else None,
@@ -636,8 +636,8 @@ async def _migrate_user_data(
     else:
         batch = [
             (uid, r["table_name"], r["operation"], r["record_id"],
-             _parse_json(r["before_json"], context="edit_history row before_json"),
-             _parse_json(r["after_json"], context="edit_history row after_json"),
+             _parse_json(r["before_json"], context=f"edit_history id={r['id']} before_json"),
+             _parse_json(r["after_json"], context=f"edit_history id={r['id']} after_json"),
              r["created_at"])
             for r in rows
         ]
