@@ -229,8 +229,11 @@ async def migrate(dry_run: bool = False) -> None:
             await _migrate_users(conn)
 
         print("\nRebuilding FTS indexes...")
-        await conn.execute("REINDEX INDEX idx_node_sections_search")
-        print("  idx_node_sections_search: done")
+        try:
+            await conn.execute("REINDEX INDEX idx_node_sections_search")
+            print("  idx_node_sections_search: done")
+        except Exception as e:
+            print(f"  idx_node_sections_search: WARN — REINDEX failed: {e}")
 
         print("\n=== Migration Summary ===")
         print("  Auth tables: migrated")
