@@ -34,6 +34,9 @@ from typing import Any
 
 import asyncpg
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from db.postgres import register_jsonb_codec
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -114,7 +117,7 @@ def _safe_fetch_table(sq: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
 
 # ── Dry-run counting ──────────────────────────────────────────────────────────
 
-def dry_run_report() -> None:
+async def dry_run_report() -> None:
     if not AUTH_DB.exists():
         print(f"ERROR: auth.db not found at {AUTH_DB}")
         sys.exit(1)
@@ -162,12 +165,36 @@ def dry_run_report() -> None:
     for t, c in totals.items():
         print(f"  {t}: {c}")
 
+    # Postgres connectivity check
+    database_url = os.environ.get("DATABASE_URL")
+    print("\n=== Postgres Connectivity ===")
+    if not database_url:
+        print("  DATABASE_URL not set — skipping Postgres check")
+    else:
+        try:
+            pg_conn = await asyncpg.connect(dsn=database_url)
+            version = await pg_conn.fetchval("SELECT version()")
+            try:
+                await pg_conn.execute("SET row_security = off")
+                rls_ok = "OK (superuser/pg_bypassrls)"
+            except Exception:
+                rls_ok = "FAILED — will abort on actual migration"
+            tables = await pg_conn.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+            )
+            await pg_conn.close()
+            print(f"  Connected: {version[:50]}")
+            print(f"  SET row_security = off: {rls_ok}")
+            print(f"  Tables in schema: {len(tables)}")
+        except Exception as e:
+            print(f"  Connection FAILED: {e}")
+
 
 # ── Main migration ────────────────────────────────────────────────────────────
 
 async def migrate(dry_run: bool = False) -> None:
     if dry_run:
-        dry_run_report()
+        await dry_run_report()
         return
 
     if not AUTH_DB.exists():
@@ -180,12 +207,7 @@ async def migrate(dry_run: bool = False) -> None:
         sys.exit(1)
 
     conn = await asyncpg.connect(dsn=database_url)
-    await conn.set_type_codec(
-        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
-    )
-    await conn.set_type_codec(
-        "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
-    )
+    await register_jsonb_codec(conn)
     # Bypass RLS for the migration session (requires superuser or pg_bypassrls role).
     # The Postgres schema uses FOR ALL policies with no WITH CHECK clause — Postgres
     # implicitly uses USING as WITH CHECK, so INSERT fails without RLS bypass.
@@ -205,6 +227,16 @@ async def migrate(dry_run: bool = False) -> None:
         async with conn.transaction():
             await _migrate_auth(conn)
             await _migrate_users(conn)
+
+        print("\nRebuilding FTS indexes...")
+        await conn.execute("REINDEX INDEX idx_node_sections_search")
+        print("  idx_node_sections_search: done")
+
+        print("\n=== Migration Summary ===")
+        print("  Auth tables: migrated")
+        print("  Per-user data: see per-user output above")
+        print("  Review any WARN or SUMMARY lines above for data integrity issues.")
+        print("  Run row-count verification queries to confirm data landed correctly.")
     finally:
         await conn.close()
 
@@ -472,10 +504,6 @@ async def _migrate_user_data(
         if result != "INSERT 0 0":
             n += 1
     print(f"  tasks: {n}/{len(rows)}")
-
-    # Build task uuid → pg id lookup (needed for task_dependencies)
-    task_rows = await pg.fetch("SELECT id, uuid FROM tasks WHERE user_id = $1", uid)
-    task_uuid_to_pg_id: dict[str, int] = {str(r["uuid"]): r["id"] for r in task_rows}
 
     # ── task_dependencies ─────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "task_dependencies")
