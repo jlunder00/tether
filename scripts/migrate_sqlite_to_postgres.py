@@ -8,11 +8,16 @@ Options:
     --dry-run   Print row counts without writing to Postgres.
 
 Prerequisites:
-    DATABASE_URL env var pointing to Postgres (superuser credentials recommended
-    so the script can SET row_security = off for the session).
+    DATABASE_URL env var pointing to Postgres with superuser or pg_bypassrls
+    privilege (required — see C1 fix note).
     TETHER_CONFIG_DIR env var (default: ~/.tether-config).
 
-Idempotent: all inserts use ON CONFLICT DO NOTHING.
+Idempotency:
+    Most tables use ON CONFLICT DO NOTHING and are safe to re-run.
+    Exception: conversation_history, orchestrator_conversation, invocation_log,
+    and state_monitor_log have no natural unique key. These tables are skipped
+    per-user if the user already has rows in Postgres (safe re-run behavior).
+    To force a full re-migration, truncate those tables first.
 """
 
 from __future__ import annotations
@@ -46,13 +51,14 @@ def _open_sqlite(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _parse_json(val: str | None) -> dict | list | None:
+def _parse_json(val: str | None, *, context: str = "") -> dict | list | None:
     if val is None:
         return None
     try:
         return json.loads(val)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    except (json.JSONDecodeError, TypeError) as e:
+        ctx = f" ({context})" if context else ""
+        raise ValueError(f"Malformed JSON{ctx}: {e!r} — value: {val[:120]!r}") from e
 
 
 def _to_bool(val: Any) -> bool:
@@ -60,20 +66,32 @@ def _to_bool(val: Any) -> bool:
 
 
 def _topo_sort_nodes(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
-    """Return context_node rows in topological order (parents before children)."""
+    """Return context_node rows in topological order (parents before children).
+
+    Raises ValueError if a cycle is detected in parent_id references.
+    Nodes referencing a parent not in rows are included without their parent.
+    """
     by_id = {r["id"]: r for r in rows}
     result: list[sqlite3.Row] = []
     visited: set[str] = set()
+    in_progress: set[str] = set()
 
     def visit(node_id: str) -> None:
         if node_id in visited:
             return
+        if node_id in in_progress:
+            raise ValueError(
+                f"Cycle detected in context_nodes at id={node_id!r}. "
+                "Fix the SQLite data before migrating."
+            )
         row = by_id.get(node_id)
         if row is None:
             return
+        in_progress.add(node_id)
         parent_id = row["parent_id"]
         if parent_id and parent_id not in visited:
             visit(parent_id)
+        in_progress.discard(node_id)
         if node_id not in visited:
             result.append(row)
             visited.add(node_id)
@@ -81,6 +99,17 @@ def _topo_sort_nodes(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
     for row in rows:
         visit(row["id"])
     return result
+
+
+def _safe_fetch_table(sq: sqlite3.Connection, table: str) -> list[sqlite3.Row]:
+    """Fetch all rows from a SQLite table, returning [] if the table doesn't exist."""
+    try:
+        return sq.execute(f"SELECT * FROM {table}").fetchall()
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            print(f"  INFO: {table} not found in SQLite schema (old DB), skipping")
+            return []
+        raise
 
 
 # ── Dry-run counting ──────────────────────────────────────────────────────────
@@ -158,13 +187,16 @@ async def migrate(dry_run: bool = False) -> None:
         "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
     )
     # Bypass RLS for the migration session (requires superuser or pg_bypassrls role).
-    # If this fails, the script will still work for inserts (no WITH CHECK policy),
-    # but verification SELECTs will return 0 rows.
+    # The Postgres schema uses FOR ALL policies with no WITH CHECK clause — Postgres
+    # implicitly uses USING as WITH CHECK, so INSERT fails without RLS bypass.
     try:
         await conn.execute("SET row_security = off")
     except asyncpg.InsufficientPrivilegeError:
-        print("WARN: cannot SET row_security = off (not superuser); "
-              "inserts will succeed but count verification may be inaccurate")
+        print("FATAL: cannot SET row_security = off — requires superuser or pg_bypassrls role.")
+        print("  Fix: re-run with superuser DATABASE_URL, or:")
+        print("  GRANT pg_bypassrls TO <migration_user>;")
+        await conn.close()
+        sys.exit(1)
 
     try:
         async with conn.transaction():
@@ -289,7 +321,7 @@ async def _migrate_user_data(
     uid = user_id  # shorthand
 
     # ── anchors ───────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM anchors").fetchall()
+    rows = _safe_fetch_table(sq, "anchors")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -300,14 +332,14 @@ async def _migrate_user_data(
             _uuid.UUID(r["id"]), uid,
             r["name"], r["time"], r["duration_minutes"],
             r["flexibility"], r["strictness"], r["color"], r["position"],
-            _parse_json(r["followup_config"]),
+            _parse_json(r["followup_config"], context=f"anchors id={r['id']} followup_config"),
         )
         if result != "INSERT 0 0":
             n += 1
     print(f"  anchors: {n}/{len(rows)}")
 
     # ── plans ─────────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM plans").fetchall()
+    rows = _safe_fetch_table(sq, "plans")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -319,7 +351,7 @@ async def _migrate_user_data(
     print(f"  plans: {n}/{len(rows)}")
 
     # ── context_entries ───────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM context_entries").fetchall()
+    rows = _safe_fetch_table(sq, "context_entries")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -337,9 +369,15 @@ async def _migrate_user_data(
         "SELECT id, subject FROM context_entries WHERE user_id = $1", uid
     )
     subject_to_pg_id: dict[str, int] = {r["subject"]: r["id"] for r in ce_rows}
+    sqlite_ce_count = len(rows)  # rows still holds context_entries here
+    if sqlite_ce_count > 0 and not subject_to_pg_id:
+        raise RuntimeError(
+            f"[{uid}] SQLite has {sqlite_ce_count} context_entries but Postgres "
+            "returned 0 — RLS bypass likely failed. Re-run as superuser."
+        )
 
     # ── context_nodes (topological sort for self-referential FK) ──────────────
-    node_rows = sq.execute("SELECT * FROM context_nodes").fetchall()
+    node_rows = _safe_fetch_table(sq, "context_nodes")
     sorted_nodes = _topo_sort_nodes(node_rows)
     n = 0
     for r in sorted_nodes:
@@ -362,7 +400,7 @@ async def _migrate_user_data(
     print(f"  context_nodes: {n}/{len(node_rows)}")
 
     # ── node_sections ─────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM node_sections").fetchall()
+    rows = _safe_fetch_table(sq, "node_sections")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -379,7 +417,7 @@ async def _migrate_user_data(
     print(f"  node_sections: {n}/{len(rows)}")
 
     # ── node_tasks ────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM node_tasks").fetchall()
+    rows = _safe_fetch_table(sq, "node_tasks")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -393,7 +431,7 @@ async def _migrate_user_data(
     print(f"  node_tasks: {n}/{len(rows)}")
 
     # ── tasks ─────────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM tasks").fetchall()
+    rows = _safe_fetch_table(sq, "tasks")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -402,13 +440,13 @@ async def _migrate_user_data(
                     followup_config, notes, description, context_subject, context_node_id)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                ON CONFLICT DO NOTHING""",
-            _uuid.UUID(r["uuid"]) if r["uuid"] else None,
+            _uuid.UUID(r["uuid"]) if r["uuid"] else _uuid.uuid4(),
             uid,
             r["plan_date"],
             _uuid.UUID(r["anchor_id"]) if r["anchor_id"] else None,
             r["position"],
             r["text"], r["status"],
-            _parse_json(r["followup_config"]),
+            _parse_json(r["followup_config"], context=f"tasks uuid={r['uuid']} followup_config"),
             r["notes"] or "",
             r["description"],
             r["context_subject"],
@@ -423,7 +461,7 @@ async def _migrate_user_data(
     task_uuid_to_pg_id: dict[str, int] = {str(r["uuid"]): r["id"] for r in task_rows}
 
     # ── task_dependencies ─────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM task_dependencies").fetchall()
+    rows = _safe_fetch_table(sq, "task_dependencies")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -437,7 +475,7 @@ async def _migrate_user_data(
     print(f"  task_dependencies: {n}/{len(rows)}")
 
     # ── dependencies ─────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM dependencies").fetchall()
+    rows = _safe_fetch_table(sq, "dependencies")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -452,7 +490,7 @@ async def _migrate_user_data(
     print(f"  dependencies: {n}/{len(rows)}")
 
     # ── subtasks ──────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM subtasks").fetchall()
+    rows = _safe_fetch_table(sq, "subtasks")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -467,7 +505,7 @@ async def _migrate_user_data(
     print(f"  subtasks: {n}/{len(rows)}")
 
     # ── links ─────────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM links").fetchall()
+    rows = _safe_fetch_table(sq, "links")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -482,7 +520,7 @@ async def _migrate_user_data(
     print(f"  links: {n}/{len(rows)}")
 
     # ── milestones ────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM milestones").fetchall()
+    rows = _safe_fetch_table(sq, "milestones")
     n = 0
     for r in rows:
         context_entry_id = subject_to_pg_id.get(r["context_subject"])
@@ -505,7 +543,7 @@ async def _migrate_user_data(
     print(f"  milestones: {n}/{len(rows)}")
 
     # ── milestone_tasks ───────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM milestone_tasks").fetchall()
+    rows = _safe_fetch_table(sq, "milestone_tasks")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -519,7 +557,7 @@ async def _migrate_user_data(
     print(f"  milestone_tasks: {n}/{len(rows)}")
 
     # ── task_context ──────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM task_context").fetchall()
+    rows = _safe_fetch_table(sq, "task_context")
     n = 0
     for r in rows:
         context_entry_id = subject_to_pg_id.get(r["subject"])
@@ -537,7 +575,7 @@ async def _migrate_user_data(
     print(f"  task_context: {n}/{len(rows)}")
 
     # ── followup_state ────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM followup_state").fetchall()
+    rows = _safe_fetch_table(sq, "followup_state")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -559,7 +597,7 @@ async def _migrate_user_data(
     print(f"  followup_state: {n}/{len(rows)}")
 
     # ── acknowledgements ──────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM acknowledgements").fetchall()
+    rows = _safe_fetch_table(sq, "acknowledgements")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -573,7 +611,7 @@ async def _migrate_user_data(
     print(f"  acknowledgements: {n}/{len(rows)}")
 
     # ── check_ins ─────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM check_ins").fetchall()
+    rows = _safe_fetch_table(sq, "check_ins")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -589,34 +627,47 @@ async def _migrate_user_data(
     print(f"  check_ins: {n}/{len(rows)}")
 
     # ── edit_history ──────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM edit_history").fetchall()
-    n = 0
-    batch = [
-        (uid, r["table_name"], r["operation"], r["record_id"],
-         _parse_json(r["before_json"]), _parse_json(r["after_json"]), r["created_at"])
-        for r in rows
-    ]
-    await pg.executemany(
-        """INSERT INTO edit_history
-               (user_id, table_name, operation, record_id, before_json, after_json, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           ON CONFLICT DO NOTHING""",
-        batch,
+    rows = _safe_fetch_table(sq, "edit_history")
+    existing = await pg.fetchval(
+        "SELECT count(*) FROM edit_history WHERE user_id = $1", uid
     )
-    n = len(batch)
-    print(f"  edit_history: {n}/{len(rows)}")
+    if existing > 0:
+        print(f"  edit_history: SKIPPED (PG already has {existing} rows)")
+    else:
+        batch = [
+            (uid, r["table_name"], r["operation"], r["record_id"],
+             _parse_json(r["before_json"], context="edit_history row before_json"),
+             _parse_json(r["after_json"], context="edit_history row after_json"),
+             r["created_at"])
+            for r in rows
+        ]
+        await pg.executemany(
+            """INSERT INTO edit_history
+                   (user_id, table_name, operation, record_id, before_json, after_json, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT DO NOTHING""",
+            batch,
+        )
+        print(f"  edit_history: {len(batch)}/{len(rows)}")
 
     # ── conversation_history ──────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM conversation_history").fetchall()
-    batch = [(uid, r["role"], r["body"], r["ts"]) for r in rows]
-    await pg.executemany(
-        "INSERT INTO conversation_history (user_id, role, body, ts) VALUES ($1,$2,$3,$4)",
-        batch,
+    rows = _safe_fetch_table(sq, "conversation_history")
+    existing = await pg.fetchval(
+        "SELECT count(*) FROM conversation_history WHERE user_id = $1", uid
     )
-    print(f"  conversation_history: {len(batch)}/{len(rows)}")
+    if existing > 0:
+        print(f"  conversation_history: SKIPPED (PG already has {existing} rows)")
+    else:
+        batch = [(uid, r["role"], r["body"], r["ts"]) for r in rows]
+        if batch:
+            await pg.executemany(
+                "INSERT INTO conversation_history (user_id, role, body, ts) VALUES ($1,$2,$3,$4)",
+                batch,
+            )
+        print(f"  conversation_history: {len(batch)}/{len(rows)}")
 
     # ── staging_mutations ─────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM staging_mutations").fetchall()
+    rows = _safe_fetch_table(sq, "staging_mutations")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -625,7 +676,7 @@ async def _migrate_user_data(
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                ON CONFLICT DO NOTHING""",
             r["id"], uid, r["session_id"], r["type"],
-            r["description"], _parse_json(r["params_json"]) or {},
+            r["description"], _parse_json(r["params_json"], context=f"staging_mutations id={r['id']} params_json") or {},
             r["created_at"], r["updated_at"],
         )
         if result != "INSERT 0 0":
@@ -633,49 +684,73 @@ async def _migrate_user_data(
     print(f"  staging_mutations: {n}/{len(rows)}")
 
     # ── orchestrator_conversation ─────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM orchestrator_conversation").fetchall()
-    batch = [(uid, r["session_id"], r["role"], r["body"], r["round_num"], r["ts"])
-             for r in rows]
-    await pg.executemany(
-        """INSERT INTO orchestrator_conversation
-               (user_id, session_id, role, body, round_num, ts)
-           VALUES ($1,$2,$3,$4,$5,$6)""",
-        batch,
+    rows = _safe_fetch_table(sq, "orchestrator_conversation")
+    existing = await pg.fetchval(
+        "SELECT count(*) FROM orchestrator_conversation WHERE user_id = $1", uid
     )
-    print(f"  orchestrator_conversation: {len(batch)}/{len(rows)}")
+    if existing > 0:
+        print(f"  orchestrator_conversation: SKIPPED (PG already has {existing} rows)")
+    else:
+        batch = [(uid, r["session_id"], r["role"], r["body"], r["round_num"], r["ts"])
+                 for r in rows]
+        if batch:
+            await pg.executemany(
+                """INSERT INTO orchestrator_conversation
+                       (user_id, session_id, role, body, round_num, ts)
+                   VALUES ($1,$2,$3,$4,$5,$6)""",
+                batch,
+            )
+        print(f"  orchestrator_conversation: {len(batch)}/{len(rows)}")
 
     # ── invocation_log ────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM invocation_log").fetchall()
-    batch = [(uid, r["session_id"], r["stage"],
-              r["prompt"] or "", r["response"] or "", r["error"], r["ts"])
-             for r in rows]
-    await pg.executemany(
-        """INSERT INTO invocation_log
-               (user_id, session_id, stage, prompt, response, error, ts)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
-        batch,
+    rows = _safe_fetch_table(sq, "invocation_log")
+    existing = await pg.fetchval(
+        "SELECT count(*) FROM invocation_log WHERE user_id = $1", uid
     )
-    print(f"  invocation_log: {len(batch)}/{len(rows)}")
+    if existing > 0:
+        print(f"  invocation_log: SKIPPED (PG already has {existing} rows)")
+    else:
+        batch = [(uid, r["session_id"], r["stage"],
+                  r["prompt"] or "", r["response"] or "", r["error"], r["ts"])
+                 for r in rows]
+        if batch:
+            await pg.executemany(
+                """INSERT INTO invocation_log
+                       (user_id, session_id, stage, prompt, response, error, ts)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+                batch,
+            )
+        print(f"  invocation_log: {len(batch)}/{len(rows)}")
 
     # ── state_monitor_log ─────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM state_monitor_log").fetchall()
-    batch = [(uid, r["change_type"], r["entity_id"] or "",
-              r["score"] or 1, _to_bool(r["consumed"]), r["ts"])
-             for r in rows]
-    await pg.executemany(
-        """INSERT INTO state_monitor_log
-               (user_id, change_type, entity_id, score, consumed, ts)
-           VALUES ($1,$2,$3,$4,$5,$6)""",
-        batch,
+    rows = _safe_fetch_table(sq, "state_monitor_log")
+    existing = await pg.fetchval(
+        "SELECT count(*) FROM state_monitor_log WHERE user_id = $1", uid
     )
-    print(f"  state_monitor_log: {len(batch)}/{len(rows)}")
+    if existing > 0:
+        print(f"  state_monitor_log: SKIPPED (PG already has {existing} rows)")
+    else:
+        batch = [(uid, r["change_type"], r["entity_id"] or "",
+                  r["score"] or 1, _to_bool(r["consumed"]), r["ts"])
+                 for r in rows]
+        if batch:
+            await pg.executemany(
+                """INSERT INTO state_monitor_log
+                       (user_id, change_type, entity_id, score, consumed, ts)
+                   VALUES ($1,$2,$3,$4,$5,$6)""",
+                batch,
+            )
+        print(f"  state_monitor_log: {len(batch)}/{len(rows)}")
 
     # ── beacon_state (singleton → per-user row) ───────────────────────────────
     try:
         beacon = sq.execute("SELECT last_invoked_at FROM beacon_state WHERE id = 1").fetchone()
         last_invoked = beacon["last_invoked_at"] if beacon else None
-    except sqlite3.OperationalError:
-        last_invoked = None
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            last_invoked = None
+        else:
+            raise
     result = await pg.execute(
         """INSERT INTO beacon_state (user_id, last_invoked_at)
            VALUES ($1, $2)
@@ -685,7 +760,7 @@ async def _migrate_user_data(
     print(f"  beacon_state: {'1' if result != 'INSERT 0 0' else '0'}/1")
 
     # ── kanban_columns ────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM kanban_columns").fetchall()
+    rows = _safe_fetch_table(sq, "kanban_columns")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -695,8 +770,8 @@ async def _migrate_user_data(
                ON CONFLICT DO NOTHING""",
             _uuid.UUID(r["id"]), uid,
             r["name"], r["position"], r["color"],
-            _parse_json(r["match_rules"]) or {},
-            _parse_json(r["entry_rules"]) or {},
+            _parse_json(r["match_rules"], context=f"kanban_columns id={r['id']} match_rules") or {},
+            _parse_json(r["entry_rules"], context=f"kanban_columns id={r['id']} entry_rules") or {},
             r["created_by"],
         )
         if result != "INSERT 0 0":
@@ -704,7 +779,7 @@ async def _migrate_user_data(
     print(f"  kanban_columns: {n}/{len(rows)}")
 
     # ── user_settings ─────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM user_settings").fetchall()
+    rows = _safe_fetch_table(sq, "user_settings")
     n = 0
     for r in rows:
         result = await pg.execute(
@@ -718,7 +793,7 @@ async def _migrate_user_data(
     print(f"  user_settings: {n}/{len(rows)}")
 
     # ── sessions ──────────────────────────────────────────────────────────────
-    rows = sq.execute("SELECT * FROM sessions").fetchall()
+    rows = _safe_fetch_table(sq, "sessions")
     n = 0
     for r in rows:
         result = await pg.execute(
