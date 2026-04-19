@@ -6,6 +6,7 @@ import pytest
 import asyncpg
 from httpx import AsyncClient, ASGITransport
 from api.auth import create_jwt
+from db.postgres import register_jsonb_codec
 
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 TEST_USERNAME = "testuser"
@@ -37,7 +38,7 @@ async def _ensure_test_user(url: str) -> None:
 async def pool():
     """Per-test pool shared by auth_client (routes that access app.state.pool directly)."""
     url = _db_url()
-    p = await asyncpg.create_pool(dsn=url)
+    p = await asyncpg.create_pool(dsn=url, init=register_jsonb_codec)
     yield p
     await p.close()
 
@@ -48,6 +49,7 @@ async def conn():
     url = _db_url()
     await _ensure_test_user(url)
     c = await asyncpg.connect(dsn=url)
+    await register_jsonb_codec(c)
     tr = c.transaction()
     await tr.start()
     await c.execute("SELECT set_config('app.current_user_id', $1, true)", TEST_USER_ID)

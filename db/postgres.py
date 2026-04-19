@@ -12,11 +12,27 @@ Usage:
         await conn.execute("INSERT INTO tasks ...")  # auto-commits on exit
 """
 
+import json
 import os
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 import asyncpg
+
+
+async def register_jsonb_codec(conn: asyncpg.Connection) -> None:
+    """Register JSON/JSONB codecs so asyncpg auto-serialises dicts/lists.
+
+    asyncpg does NOT do this by default — without codecs, JSONB params must be
+    pre-serialised strings, and JSONB reads return TEXT. Call this on every
+    connection created outside the pool (tests, one-off scripts).
+    """
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+    await conn.set_type_codec(
+        "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
 
 _pool: asyncpg.Pool | None = None
 
@@ -35,6 +51,7 @@ async def create_pool() -> asyncpg.Pool:
             min_size=2,
             max_size=10,
             command_timeout=30,
+            init=register_jsonb_codec,
         )
     return _pool
 

@@ -5,6 +5,8 @@ import os
 import pytest
 import asyncpg
 
+from db.postgres import register_jsonb_codec
+
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 ANCHOR_ID = "00000000-0000-0000-0000-000000000010"
 
@@ -27,7 +29,7 @@ def set_tether_env():
 @pytest.fixture
 async def pg_pool():
     url = _db_url()
-    pool = await asyncpg.create_pool(dsn=url)
+    pool = await asyncpg.create_pool(dsn=url, init=register_jsonb_codec)
     async with pool.acquire() as c:
         await c.execute(
             "INSERT INTO users (id, username, email, password_hash, is_admin) "
