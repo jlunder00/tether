@@ -2,7 +2,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from db.queries import get_anchors
+import db.postgres as pg
+from db.pg_queries import get_anchors
 
 MARKER_START = "# TETHER_START"
 MARKER_END = "# TETHER_END"
@@ -14,14 +15,14 @@ def _anchor_to_cron(anchor: dict) -> str:
     return f"{m} {h} * * * {_VENV_PYTHON} -m bot.anchor_trigger {anchor['id']}"
 
 
-def sync_crontab(db_path: Path) -> None:
+async def sync_crontab(pool, user_id: str) -> None:
     """Rewrite the tether-managed crontab section from current DB anchors."""
-    anchors = get_anchors(db_path)
+    async with pg.get_conn(pool, user_id) as conn:
+        anchors = await get_anchors(conn)
 
     result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     existing = result.stdout if result.returncode == 0 else ""
 
-    # Strip old tether section
     kept, inside = [], False
     for line in existing.splitlines():
         if line.strip() == MARKER_START:

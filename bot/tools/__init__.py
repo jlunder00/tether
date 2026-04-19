@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Awaitable
 
+import asyncpg
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
 from bot.llm import ToolCall
 
@@ -31,7 +33,8 @@ def load_tools(subset: list[str] | None = None) -> list[Tool]:
 
 def make_tool_executor(
     tools: list[Tool],
-    db_path: str,
+    pool: asyncpg.Pool,
+    user_id: str,
 ) -> Callable[[ToolCall], Awaitable[dict]]:
     """Return an async callable that dispatches a ToolCall to the right tool."""
     registry = {t.name: t for t in tools}
@@ -40,7 +43,8 @@ def make_tool_executor(
         pass
 
     ctx = _Ctx()
-    ctx.db_path = db_path
+    ctx.pool = pool
+    ctx.user_id = user_id
 
     async def executor(tool_call: ToolCall) -> dict:
         tool = registry.get(tool_call.name)

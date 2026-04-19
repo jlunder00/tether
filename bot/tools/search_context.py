@@ -1,11 +1,13 @@
 """Tool: search_context — list context node paths."""
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import get_all_node_paths
+from db.pg_queries import get_all_node_paths
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
     try:
-        paths = get_all_node_paths(ctx.db_path)
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            paths = await get_all_node_paths(conn)
         prefix = inp.get("prefix", "")
         if prefix:
             paths = [p for p in paths if p.startswith(prefix)]

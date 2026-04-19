@@ -1,13 +1,15 @@
 """Tool: get_milestones — list milestones with task completion status."""
 import json
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import get_milestones
+from db.pg_queries import get_milestones
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
     context_subject = inp.get("context_subject") or None
     try:
-        milestones = get_milestones(ctx.db_path, context_subject=context_subject)
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            milestones = await get_milestones(conn, context_subject=context_subject)
         if not milestones:
             return ToolResult.ok("No milestones found.")
         # Compact representation — full task list is expensive, just show summary
