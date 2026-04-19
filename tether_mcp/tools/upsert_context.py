@@ -2,43 +2,40 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
-from tether_mcp.common import get_db_path
-from db.schema import transaction
+import asyncpg
 
 
-def _resolve_parent(db_path: Path, parent_spec: str) -> str | None:
+async def _resolve_parent(conn: asyncpg.Connection, parent_spec: str) -> str | None:
     """Resolve a parent spec (path or node_id) to a node_id, or None for root.
 
     Empty string means move to root (None).
     """
-    from db.queries import get_node, get_node_by_path
+    from db.pg_queries import get_node, get_node_by_path
 
     if parent_spec == "":
         return None
 
     # Try as direct node ID first (UUID-like)
-    node = get_node(db_path, parent_spec)
+    node = await get_node(conn, parent_spec)
     if node is not None:
         return node["id"]
 
     # Try as path
-    node = get_node_by_path(db_path, parent_spec)
+    node = await get_node_by_path(conn, parent_spec)
     if node is not None:
         return node["id"]
 
     raise ValueError(f"Parent not found: {parent_spec!r}")
 
 
-def _process_node(
-    db_path: Path,
+async def _process_node(
+    conn: asyncpg.Connection,
     spec: dict,
     parent_id: str | None,
     results: list[dict],
 ) -> None:
     """Recursively process a node spec: create/update node, sections, and children."""
-    from db.queries import (
+    from db.pg_queries import (
         find_child_by_name,
         create_node,
         patch_node_fields,
@@ -69,13 +66,13 @@ def _process_node(
 
     if node_id_spec:
         # Direct lookup by node_id
-        node = get_node(db_path, node_id_spec)
+        node = await get_node(conn, node_id_spec)
         if node is None:
             raise ValueError(f"node_id not found: {node_id_spec!r}")
         # Rename if name provided and different
         if name_raw and name_raw != node["name"]:
-            patch_node_fields(db_path, node["id"], {"name": name_raw})
-            node = get_node(db_path, node["id"])
+            await patch_node_fields(conn, node["id"], {"name": name_raw})
+            node = await get_node(conn, node["id"])
     else:
         # Walk slash-separated path, creating intermediates
         segments = [s for s in name_raw.split("/") if s]
@@ -85,15 +82,15 @@ def _process_node(
         current_parent_id = parent_id
         for i, segment in enumerate(segments):
             is_last = (i == len(segments) - 1)
-            existing = find_child_by_name(db_path, current_parent_id, segment)
+            existing = await find_child_by_name(conn, current_parent_id, segment)
             if existing is None:
                 # Create intermediate or final node
                 seg_type = node_type if is_last else "context"
                 seg_status = (status or "pending") if is_last else "pending"
                 seg_target_date = target_date if is_last else None
                 seg_color = color if is_last else None
-                new_node = create_node(
-                    db_path,
+                new_node = await create_node(
+                    conn,
                     parent_id=current_parent_id,
                     name=segment,
                     node_type=seg_type,
@@ -107,7 +104,7 @@ def _process_node(
                 current_parent_id = new_node["id"]
             else:
                 if is_last:
-                    node = get_node(db_path, existing["id"])
+                    node = await get_node(conn, existing["id"])
                     # action remains "updated"
                 current_parent_id = existing["id"]
 
@@ -116,9 +113,9 @@ def _process_node(
     # ── Reparent if `parent` field provided ────────────────────────────────
 
     if parent_spec is not None:
-        new_parent_id = _resolve_parent(db_path, parent_spec)
-        move_node(db_path, node_id, new_parent_id)
-        node = get_node(db_path, node_id)
+        new_parent_id = await _resolve_parent(conn, parent_spec)
+        await move_node(conn, node_id, new_parent_id)
+        node = await get_node(conn, node_id)
         action = "moved"
 
     # ── Patch scalar fields (skip on fresh creates if already set) ─────────
@@ -144,8 +141,8 @@ def _process_node(
         patch_fields["description"] = new_desc
 
     if patch_fields:
-        patch_node_fields(db_path, node_id, patch_fields)
-        node = get_node(db_path, node_id)
+        await patch_node_fields(conn, node_id, patch_fields)
+        node = await get_node(conn, node_id)
 
     # ── Sections with named files ───────────────────────────────────────────
 
@@ -159,19 +156,19 @@ def _process_node(
                 continue
             mode, value = resolved
             if mode == "replace":
-                upsert_section(db_path, node_id, section_type, value, name=filename)
+                await upsert_section(conn, node_id, section_type, value, name=filename)
             elif mode in ("append", "patch"):
-                existing_sec = get_section(db_path, node_id, section_type, filename)
+                existing_sec = await get_section(conn, node_id, section_type, filename)
                 existing_body = existing_sec["body"] if existing_sec else ""
                 result = apply_text_mode(existing_body, mode, value)
                 if isinstance(result, tuple):
-                    upsert_section(db_path, node_id, section_type, result[0], name=filename)
+                    await upsert_section(conn, node_id, section_type, result[0], name=filename)
                 else:
-                    upsert_section(db_path, node_id, section_type, result, name=filename)
+                    await upsert_section(conn, node_id, section_type, result, name=filename)
 
     # ── Build result entry ─────────────────────────────────────────────────
 
-    node_path = get_node_path(db_path, node_id) or ""
+    node_path = await get_node_path(conn, node_id) or ""
     results.append({
         "id": node_id,
         "name": node["name"],
@@ -183,10 +180,10 @@ def _process_node(
     # ── Recurse into children ───────────────────────────────────────────────
 
     for child_spec in children:
-        _process_node(db_path, child_spec, node_id, results)
+        await _process_node(conn, child_spec, node_id, results)
 
 
-def execute_upsert_context(nodes: list[dict]) -> list[dict]:
+async def execute_upsert_context(conn: asyncpg.Connection, nodes: list[dict]) -> list[dict]:
     """Batch create or update context nodes with write modes, named sections, and reparenting.
 
     Each spec may contain:
@@ -204,10 +201,8 @@ def execute_upsert_context(nodes: list[dict]) -> list[dict]:
     Returns flat list of {id, name, path, node_type, action} dicts.
     """
     results: list[dict] = []
-    db_path = get_db_path()
 
-    with transaction(db_path):
-        for spec in nodes:
-            _process_node(db_path, spec, parent_id=None, results=results)
+    for spec in nodes:
+        await _process_node(conn, spec, parent_id=None, results=results)
 
     return results

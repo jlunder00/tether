@@ -38,12 +38,12 @@ async def create_milestone(
     row = await conn.fetchrow(
         """
         INSERT INTO milestones
-            (user_id, context_entry_id, name, description, target_date, color)
-        VALUES ($1, $2, $3, $4, $5, $6)
+            (id, user_id, context_entry_id, name, description, target_date, color)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, name, description, target_date, color, status, status_override,
                   created_at, updated_at, version
         """,
-        user_uuid, entry_id, name, description, target_date, color,
+        _uuid.uuid4(), user_uuid, entry_id, name, description, target_date, color,
     )
     return {
         "id": str(row["id"]),

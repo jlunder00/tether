@@ -3,10 +3,18 @@ import json
 import logging
 import sqlite3
 import uuid
+import warnings
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from db.schema import get_db, transaction
+
+warnings.warn(
+    "db.queries (SQLite) is deprecated and will be removed after Phase 4 cutover. "
+    "Use db.pg_queries instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 logger = logging.getLogger(__name__)
 

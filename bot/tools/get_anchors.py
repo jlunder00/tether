@@ -1,12 +1,14 @@
 """Tool: get_anchors — list all anchor definitions."""
 import json
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import get_anchors
+from db.pg_queries import get_anchors
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
     try:
-        anchors = get_anchors(ctx.db_path)
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            anchors = await get_anchors(conn)
         return ToolResult.ok(json.dumps(anchors, indent=2))
     except Exception as e:
         return ToolResult.error(f"Could not fetch anchors: {e}")

@@ -1,74 +1,78 @@
+"""Tests for bot/crontab — crontab formatting and subprocess wiring."""
 import pytest
-from unittest.mock import patch, call
-from pathlib import Path
-from db.schema import init_db
-from db.queries import upsert_anchor
+from contextlib import asynccontextmanager
+from unittest.mock import patch, AsyncMock
 from bot.crontab import sync_crontab, MARKER_START, MARKER_END
 
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "tether.db"
-    init_db(path)
-    upsert_anchor(path, {"id": "grind_am", "name": "The Grind", "time": "08:00",
-                          "duration_minutes": 120, "flexibility": "locked",
-                          "strictness": 4, "color": "#e05c5c", "position": 0})
-    upsert_anchor(path, {"id": "deep_work", "name": "Deep Work", "time": "10:30",
-                          "duration_minutes": 120, "flexibility": "flexible",
-                          "strictness": 2, "color": "#7c6af7", "position": 1})
-    return path
+ANCHORS = [
+    {"id": "00000000-0000-0000-0000-000000000010", "name": "The Grind", "time": "08:00"},
+    {"id": "00000000-0000-0000-0000-000000000011", "name": "Deep Work", "time": "10:30"},
+]
 
 
-def _run_sync(db_path, existing_crontab=""):
-    """Helper: run sync_crontab with mocked subprocess, return written crontab."""
+async def _run(existing_crontab=""):
+    """Run sync_crontab with mocked DB and subprocess; return written crontab."""
     written = []
+    mock_pool = AsyncMock()
+    mock_conn = AsyncMock()
+
+    @asynccontextmanager
+    async def mock_get_conn(pool, user_id=None):
+        yield mock_conn
 
     def fake_run(cmd, **kwargs):
+        class R:
+            pass
+        r = R()
         if cmd == ["crontab", "-l"]:
-            class R:
-                stdout = existing_crontab
-                returncode = 0 if existing_crontab else 1
-            return R()
-        if cmd == ["crontab", "-"]:
-            written.append(kwargs["input"])
-            class R:
-                returncode = 0
-            return R()
+            r.stdout = existing_crontab
+            r.returncode = 0 if existing_crontab else 1
+        else:
+            written.append(kwargs.get("input", ""))
+            r.returncode = 0
+        return r
 
-    with patch("bot.crontab.subprocess.run", side_effect=fake_run):
-        sync_crontab(db_path)
+    with patch("bot.crontab.pg.get_conn", mock_get_conn), \
+         patch("bot.crontab.get_anchors", AsyncMock(return_value=ANCHORS)), \
+         patch("bot.crontab.subprocess.run", side_effect=fake_run):
+        await sync_crontab(mock_pool, "00000000-0000-0000-0000-000000000001")
 
     return written[0] if written else ""
 
 
-def test_sync_writes_anchor_entries(db_path):
-    result = _run_sync(db_path)
-    assert "bot.anchor_trigger grind_am" in result
-    assert "bot.anchor_trigger deep_work" in result
+@pytest.mark.asyncio
+async def test_sync_writes_anchor_entries():
+    result = await _run()
+    assert "bot.anchor_trigger 00000000-0000-0000-0000-000000000010" in result
+    assert "bot.anchor_trigger 00000000-0000-0000-0000-000000000011" in result
 
 
-def test_sync_uses_correct_cron_times(db_path):
-    result = _run_sync(db_path)
-    assert "0 8 * * *" in result   # 08:00
+@pytest.mark.asyncio
+async def test_sync_uses_correct_cron_times():
+    result = await _run()
+    assert "0 8 * * *" in result    # 08:00
     assert "30 10 * * *" in result  # 10:30
 
 
-def test_sync_wraps_in_markers(db_path):
-    result = _run_sync(db_path)
+@pytest.mark.asyncio
+async def test_sync_wraps_in_markers():
+    result = await _run()
     assert MARKER_START in result
     assert MARKER_END in result
 
 
-def test_sync_preserves_existing_non_tether_entries(db_path):
+@pytest.mark.asyncio
+async def test_sync_preserves_existing_non_tether_entries():
     existing = "0 9 * * * /usr/bin/backup.sh\n"
-    result = _run_sync(db_path, existing_crontab=existing)
+    result = await _run(existing_crontab=existing)
     assert "/usr/bin/backup.sh" in result
-    assert "bot.anchor_trigger grind_am" in result
+    assert "bot.anchor_trigger" in result
 
 
-def test_sync_replaces_old_tether_section(db_path):
+@pytest.mark.asyncio
+async def test_sync_replaces_old_tether_section():
     existing = f"0 9 * * * /usr/bin/backup.sh\n{MARKER_START}\n0 6 * * * old_entry\n{MARKER_END}\n"
-    result = _run_sync(db_path, existing_crontab=existing)
+    result = await _run(existing_crontab=existing)
     assert "old_entry" not in result
     assert "/usr/bin/backup.sh" in result
-    assert "bot.anchor_trigger grind_am" in result
+    assert "bot.anchor_trigger" in result

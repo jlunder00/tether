@@ -8,6 +8,8 @@ import os
 import pytest
 import asyncpg
 
+from db.postgres import register_jsonb_codec
+
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 
@@ -40,6 +42,7 @@ async def conn():
     url = _db_url()
     await _ensure_test_user(url)
     c = await asyncpg.connect(dsn=url)
+    await register_jsonb_codec(c)
     tr = c.transaction()
     await tr.start()
     await c.execute(
@@ -56,6 +59,7 @@ async def auth_conn():
     url = _db_url()
     await _ensure_test_user(url)
     c = await asyncpg.connect(dsn=url)
+    await register_jsonb_codec(c)
     tr = c.transaction()
     await tr.start()
     yield c

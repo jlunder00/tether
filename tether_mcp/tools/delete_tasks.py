@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from tether_mcp.common import get_db_path
-from db.schema import transaction
+import asyncpg
 
 
-def execute_delete_tasks(operations: list[dict]) -> list[dict]:
+async def execute_delete_tasks(conn: asyncpg.Connection, operations: list[dict]) -> list[dict]:
     """Batch delete tasks or clear specific task content.
 
     Each operation dict:
@@ -21,69 +20,64 @@ def execute_delete_tasks(operations: list[dict]) -> list[dict]:
     Returns list of {task_uuid, action, cleared?} where action is "deleted" or "cleared"
     (with `cleared` list of what was cleared).
     """
-    from db.queries import (
+    from db.pg_queries import (
         get_task_by_uuid,
         delete_task_by_uuid,
         patch_task_fields,
         get_subtasks,
         delete_subtask,
     )
-    from db.schema import get_db
 
-    db_path = get_db_path()
     results: list[dict] = []
 
-    with transaction(db_path):
-        for op in operations:
-            task_uuid = op.get("task_uuid") or ""
-            if not task_uuid:
-                raise ValueError("Each operation must have 'task_uuid'")
+    for op in operations:
+        task_uuid = op.get("task_uuid") or ""
+        if not task_uuid:
+            raise ValueError("Each operation must have 'task_uuid'")
 
-            task = get_task_by_uuid(db_path, task_uuid)
-            if task is None:
-                raise ValueError(f"Task not found: {task_uuid!r}")
+        task = await get_task_by_uuid(conn, task_uuid)
+        if task is None:
+            raise ValueError(f"Task not found: {task_uuid!r}")
 
-            delete = op.get("delete", False)
+        delete = op.get("delete", False)
 
-            if delete:
-                delete_task_by_uuid(db_path, task_uuid)
-                results.append({"task_uuid": task_uuid, "action": "deleted"})
-                continue
+        if delete:
+            await delete_task_by_uuid(conn, task_uuid)
+            results.append({"task_uuid": task_uuid, "action": "deleted"})
+            continue
 
-            # Selective clearing
-            cleared: list[str] = []
+        # Selective clearing
+        cleared: list[str] = []
 
-            if op.get("clear_description"):
-                patch_task_fields(db_path, task_uuid, {"description": None})
-                cleared.append("description")
+        if op.get("clear_description"):
+            await patch_task_fields(conn, task_uuid, {"description": None})
+            cleared.append("description")
 
-            if op.get("clear_subtasks"):
-                subtasks = get_subtasks(db_path, task_uuid)
-                for sub in subtasks:
-                    delete_subtask(db_path, sub["id"])
-                cleared.append("subtasks")
+        if op.get("clear_subtasks"):
+            subtasks = await get_subtasks(conn, task_uuid)
+            for sub in subtasks:
+                await delete_subtask(conn, sub["id"])
+            cleared.append("subtasks")
 
-            if op.get("clear_deps"):
-                with get_db(db_path) as conn:
-                    conn.execute(
-                        "DELETE FROM dependencies WHERE "
-                        "(blocker_type='task' AND blocker_id=?) OR "
-                        "(blocked_type='task' AND blocked_id=?)",
-                        (task_uuid, task_uuid),
-                    )
-                cleared.append("deps")
+        if op.get("clear_deps"):
+            await conn.execute(
+                "DELETE FROM dependencies WHERE "
+                "(blocker_type='task' AND blocker_id=$1) OR "
+                "(blocked_type='task' AND blocked_id=$2)",
+                task_uuid, task_uuid,
+            )
+            cleared.append("deps")
 
-            if op.get("clear_node_links"):
-                with get_db(db_path) as conn:
-                    conn.execute("DELETE FROM node_tasks WHERE task_id = ?", (task_uuid,))
-                    conn.execute("DELETE FROM milestone_tasks WHERE task_id = ?", (task_uuid,))
-                cleared.append("node_links")
+        if op.get("clear_node_links"):
+            await conn.execute("DELETE FROM node_tasks WHERE task_id = $1", task_uuid)
+            await conn.execute("DELETE FROM milestone_tasks WHERE task_id = $1", task_uuid)
+            cleared.append("node_links")
 
-            if op.get("clear_context"):
-                patch_task_fields(db_path, task_uuid, {"context_subject": None})
-                cleared.append("context")
+        if op.get("clear_context"):
+            await patch_task_fields(conn, task_uuid, {"context_subject": None})
+            cleared.append("context")
 
-            result: dict = {"task_uuid": task_uuid, "action": "cleared", "cleared": cleared}
-            results.append(result)
+        result: dict = {"task_uuid": task_uuid, "action": "cleared", "cleared": cleared}
+        results.append(result)
 
     return results

@@ -1,13 +1,16 @@
-from fastapi import APIRouter, Depends, Request
-from db.queries import get_last_bot_activity
+from fastapi import APIRouter, Depends
+import asyncpg
+from db.pg_queries import get_last_bot_activity
+from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency
 
 router = APIRouter()
 
 
 @router.get("/bot/health")
-async def bot_health(request: Request, _auth=Depends(auth_dependency)):
-    activity = get_last_bot_activity(request.state.db_path)
+async def bot_health(_auth=Depends(auth_dependency),
+                     conn: asyncpg.Connection = Depends(get_db_conn)):
+    activity = await get_last_bot_activity(conn)
     if not activity:
         return {"status": "unknown", "last_activity": None}
     from datetime import datetime, timezone
