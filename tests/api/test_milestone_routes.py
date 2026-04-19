@@ -2,8 +2,9 @@ import pytest
 from datetime import date
 from db.pg_queries import upsert_anchor, upsert_plan, upsert_tasks, upsert_context_entry
 
+ANCHOR_ID = "00000000-0000-0000-0000-000000000010"
 ANCHOR = {
-    "id": "grind_am", "name": "The Grind", "time": "08:00",
+    "id": ANCHOR_ID, "name": "The Grind", "time": "08:00",
     "duration_minutes": 120, "flexibility": "locked",
     "strictness": 4, "color": "#e05c5c", "position": 1,
 }
@@ -81,7 +82,7 @@ async def test_link_and_unlink_task(api_client, conn):
     await upsert_context_entry(conn, "Proj", "body")
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
-    tasks = await upsert_tasks(conn, str(date.today()), "grind_am", [{"text": "T1"}], notes="")
+    tasks = await upsert_tasks(conn, str(date.today()), ANCHOR_ID, [{"text": "T1"}], notes="")
     task_id = tasks[0]["id"]
     mid = (await api_client.post("/api/context/Proj/milestones", json={"name": "Goal"})).json()["id"]
     await api_client.post(f"/api/milestones/{mid}/tasks", json={"task_id": task_id})

@@ -32,7 +32,7 @@ async def create_anchor(body: AnchorUpdate, request: Request,
                         _auth=Depends(auth_dependency),
                         conn: asyncpg.Connection = Depends(get_db_conn)):
     import uuid
-    anchor_id = body.name.lower().replace(" ", "_") + "_" + uuid.uuid4().hex[:6]
+    anchor_id = str(uuid.uuid4())
     anchor = {"id": anchor_id, **body.model_dump()}
     await upsert_anchor(conn, anchor)
     await sync_crontab(request.app.state.pool, request.state.user_id)

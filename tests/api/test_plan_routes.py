@@ -2,8 +2,9 @@ import pytest
 from datetime import date
 from db.pg_queries import upsert_anchor, upsert_plan, upsert_tasks, get_plan
 
+ANCHOR_ID = "00000000-0000-0000-0000-000000000010"
 ANCHOR = {
-    "id": "grind_am", "name": "The Grind", "time": "08:00",
+    "id": ANCHOR_ID, "name": "The Grind", "time": "08:00",
     "duration_minutes": 120, "flexibility": "locked",
     "strictness": 4, "color": "#e05c5c", "position": 0,
 }
@@ -13,7 +14,7 @@ ANCHOR = {
 async def test_get_plan_returns_date(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
-    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    await upsert_tasks(conn, str(date.today()), ANCHOR_ID, tasks=["Apply to jobs"], notes="ML roles")
     resp = await api_client.get(f"/api/plan/{date.today()}")
     assert resp.status_code == 200
     assert resp.json()["date"] == str(date.today())
@@ -23,9 +24,9 @@ async def test_get_plan_returns_date(api_client, conn):
 async def test_get_plan_returns_anchors(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
-    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    await upsert_tasks(conn, str(date.today()), ANCHOR_ID, tasks=["Apply to jobs"], notes="ML roles")
     resp = await api_client.get(f"/api/plan/{date.today()}")
-    assert "grind_am" in resp.json()["anchors"]
+    assert ANCHOR_ID in resp.json()["anchors"]
 
 
 @pytest.mark.asyncio
@@ -33,12 +34,12 @@ async def test_put_anchor_tasks_updates_db(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
     resp = await api_client.put(
-        f"/api/plan/{date.today()}/anchors/grind_am",
+        f"/api/plan/{date.today()}/anchors/{ANCHOR_ID}",
         json={"tasks": ["Updated task"], "notes": ""}
     )
     assert resp.status_code == 200
     plan = await get_plan(conn, str(date.today()))
-    texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
+    texts = [t["text"] for t in plan["anchors"][ANCHOR_ID]["tasks"]]
     assert "Updated task" in texts
 
 
@@ -47,7 +48,7 @@ async def test_get_anchors(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     resp = await api_client.get("/api/anchors")
     assert resp.status_code == 200
-    assert any(a["id"] == "grind_am" for a in resp.json())
+    assert any(a["id"] == ANCHOR_ID for a in resp.json())
 
 
 @pytest.mark.asyncio
@@ -55,7 +56,7 @@ async def test_put_anchor_tasks_returns_task_objects(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
     resp = await api_client.put(
-        f"/api/plan/{date.today()}/anchors/grind_am",
+        f"/api/plan/{date.today()}/anchors/{ANCHOR_ID}",
         json={"tasks": [{"text": "New task", "status": "pending"}], "notes": ""}
     )
     assert resp.status_code == 200
@@ -70,9 +71,9 @@ async def test_put_anchor_tasks_returns_task_objects(api_client, conn):
 async def test_get_plan_returns_task_objects_with_status(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
-    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    await upsert_tasks(conn, str(date.today()), ANCHOR_ID, tasks=["Apply to jobs"], notes="ML roles")
     resp = await api_client.get(f"/api/plan/{date.today()}")
-    task = resp.json()["anchors"]["grind_am"]["tasks"][0]
+    task = resp.json()["anchors"][ANCHOR_ID]["tasks"][0]
     assert isinstance(task, dict)
     assert "id" in task and "status" in task
 
@@ -82,7 +83,7 @@ async def test_patch_task_status(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
     put_resp = await api_client.put(
-        f"/api/plan/{date.today()}/anchors/grind_am",
+        f"/api/plan/{date.today()}/anchors/{ANCHOR_ID}",
         json={"tasks": [{"text": "Task"}], "notes": ""}
     )
     task_id = put_resp.json()["tasks"][0]["id"]
@@ -105,13 +106,13 @@ async def test_move_task(api_client, conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, today)
     put_resp = await api_client.put(
-        f"/api/plan/{today}/anchors/grind_am",
+        f"/api/plan/{today}/anchors/{ANCHOR_ID}",
         json={"tasks": [{"text": "Move me"}], "notes": ""}
     )
     task_id = put_resp.json()["tasks"][0]["id"]
     resp = await api_client.put(
         f"/api/tasks/{task_id}/move",
-        json={"date": tomorrow, "anchor_id": "grind_am"}
+        json={"date": tomorrow, "anchor_id": ANCHOR_ID}
     )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True

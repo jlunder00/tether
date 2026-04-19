@@ -6,8 +6,9 @@ from db.pg_queries import (
     create_milestone, get_task_by_uuid,
 )
 
+ANCHOR_ID = "00000000-0000-0000-0000-000000000010"
 ANCHOR = {
-    "id": "grind_am", "name": "The Grind", "time": "08:00",
+    "id": ANCHOR_ID, "name": "The Grind", "time": "08:00",
     "duration_minutes": 120, "flexibility": "locked",
     "strictness": 4, "color": "#e05c5c", "position": 1,
 }
@@ -33,13 +34,13 @@ async def test_create_task_with_context_and_schedule(api_client, conn):
         "text": "Scheduled task",
         "context_subject": "Proj",
         "date": today,
-        "anchor_id": "grind_am",
+        "anchor_id": ANCHOR_ID,
     })
     assert resp.status_code == 200
     data = resp.json()
     assert data["context_subject"] == "Proj"
     assert data["plan_date"] == today
-    assert data["anchor_id"] == "grind_am"
+    assert data["anchor_id"] == ANCHOR_ID
 
 
 @pytest.mark.asyncio

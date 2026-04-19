@@ -2,8 +2,9 @@ import pytest
 from datetime import date
 from db.pg_queries import upsert_anchor, upsert_plan, upsert_tasks
 
+ANCHOR_ID = "00000000-0000-0000-0000-000000000010"
 ANCHOR = {
-    "id": "grind_am", "name": "The Grind", "time": "08:00",
+    "id": ANCHOR_ID, "name": "The Grind", "time": "08:00",
     "duration_minutes": 120, "flexibility": "locked",
     "strictness": 4, "color": "#e05c5c", "position": 1,
 }
@@ -13,7 +14,7 @@ ANCHOR = {
 async def task_uuid(conn):
     await upsert_anchor(conn, ANCHOR)
     await upsert_plan(conn, str(date.today()))
-    tasks = await upsert_tasks(conn, str(date.today()), "grind_am", [{"text": "Linked task"}], notes="")
+    tasks = await upsert_tasks(conn, str(date.today()), ANCHOR_ID, [{"text": "Linked task"}], notes="")
     return tasks[0]["id"]
 
 

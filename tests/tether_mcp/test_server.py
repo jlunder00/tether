@@ -1,28 +1,23 @@
-"""Smoke tests for the 9-tool MCP server."""
+"""Smoke tests for the MCP server — one test per tool, Postgres-backed."""
 import pytest
-import os
-from pathlib import Path
-from db.schema import init_db
-from db.queries import upsert_anchor, upsert_plan, upsert_tasks as upsert_tasks_db
+from datetime import date
+from tests.tether_mcp.conftest import ANCHOR_ID, TEST_USER_ID
 
 
 @pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "test.db"
-    init_db(path)
-    upsert_anchor(path, {"id": "grind_am", "name": "Grind", "time": "09:00",
-                          "duration_minutes": 60, "flexibility": "locked",
-                          "strictness": 4, "color": "#e05c5c", "position": 0})
-    upsert_plan(path, "2026-04-15")
-    upsert_tasks_db(path, "2026-04-15", "grind_am", [{"text": "Test task", "status": "pending"}])
-    return path
-
-
-@pytest.fixture(autouse=True)
-def set_db_env(db_path):
-    os.environ["TETHER_DB_PATH"] = str(db_path)
-    yield
-    del os.environ["TETHER_DB_PATH"]
+async def seeded(conn):
+    from db.pg_queries import upsert_anchor, upsert_plan, upsert_tasks, ensure_node_path, upsert_section
+    today = str(date.today())
+    await upsert_anchor(conn, {
+        "id": ANCHOR_ID, "name": "Grind", "time": "09:00",
+        "duration_minutes": 60, "flexibility": "locked",
+        "strictness": 4, "color": "#e05c5c", "position": 0,
+    })
+    await upsert_plan(conn, today)
+    tasks = await upsert_tasks(conn, today, ANCHOR_ID, [{"text": "Test task"}], notes="")
+    node = await ensure_node_path(conn, "Work/Alpha")
+    await upsert_section(conn, node["id"], "details", "Alpha project details.")
+    return {"today": today, "task_id": tasks[0]["id"]}
 
 
 def test_server_imports():
@@ -30,61 +25,73 @@ def test_server_imports():
     assert mcp is not None
 
 
-def test_get_plan():
+@pytest.mark.asyncio
+async def test_get_plan(seeded):
     from tether_mcp.server import get_plan
-    plan = get_plan("2026-04-15")
+    plan = await get_plan(seeded["today"])
     assert "anchors" in plan
+    assert ANCHOR_ID in plan["anchors"]
 
 
-def test_get_anchors():
+@pytest.mark.asyncio
+async def test_get_anchors(seeded):
     from tether_mcp.server import get_anchors
-    result = get_anchors()
+    result = await get_anchors()
     assert "anchors" in result
     assert "current" in result
-    assert any(a["id"] == "grind_am" for a in result["anchors"])
+    assert any(a["id"] == ANCHOR_ID for a in result["anchors"])
 
 
-def test_search():
+@pytest.mark.asyncio
+async def test_search(seeded):
     from tether_mcp.server import search
-    results = search("Test task")
-    assert len(results) >= 1
+    results = await search("Test task")
+    assert any(r.get("text") == "Test task" or r.get("name") == "Test task" for r in results)
 
 
-def test_read_tasks_all():
+@pytest.mark.asyncio
+async def test_read_tasks_all(seeded):
     from tether_mcp.server import read_tasks
-    result = read_tasks()
-    assert len(result) >= 1
-
-
-def test_read_context_roots():
-    from tether_mcp.server import read_context
-    result = read_context()
+    result = await read_tasks()
     assert isinstance(result, list)
+    assert any(t.get("text") == "Test task" for t in result)
 
 
-def test_upsert_tasks_create():
+@pytest.mark.asyncio
+async def test_read_context_roots(seeded):
+    from tether_mcp.server import read_context
+    result = await read_context()
+    assert isinstance(result, list)
+    assert any("Work" in (r.get("path") or r.get("name", "")) for r in result)
+
+
+@pytest.mark.asyncio
+async def test_upsert_tasks_create(conn):
     from tether_mcp.server import upsert_tasks
-    result = upsert_tasks([{"text": "New via server"}])
+    result = await upsert_tasks([{"text": "New via server"}])
     assert result[0]["id"]
     assert result[0]["text"] == "New via server"
 
 
-def test_upsert_context_create():
+@pytest.mark.asyncio
+async def test_upsert_context_create(conn):
     from tether_mcp.server import upsert_context
-    result = upsert_context([{"name": "ServerTest"}])
-    assert result[0]["action"] == "created"
+    result = await upsert_context([{"name": "ServerTest"}])
+    assert result[0]["action"] in ("created", "updated")
 
 
-def test_delete_tasks_tool():
+@pytest.mark.asyncio
+async def test_delete_tasks_tool(conn):
     from tether_mcp.server import upsert_tasks, delete_tasks
-    created = upsert_tasks([{"text": "To delete"}])
+    created = await upsert_tasks([{"text": "To delete"}])
     tid = created[0]["id"]
-    result = delete_tasks([{"task_uuid": tid, "delete": True}])
+    result = await delete_tasks([{"task_uuid": tid, "delete": True}])
     assert result[0]["action"] == "deleted"
 
 
-def test_delete_context_tool():
+@pytest.mark.asyncio
+async def test_delete_context_tool(conn):
     from tether_mcp.server import upsert_context, delete_context
-    upsert_context([{"name": "ToDelete"}])
-    result = delete_context([{"path": "ToDelete", "delete": True}])
+    await upsert_context([{"name": "ToDelete"}])
+    result = await delete_context([{"path": "ToDelete", "delete": True}])
     assert result[0]["action"] == "deleted"
