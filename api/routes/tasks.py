@@ -76,7 +76,8 @@ async def get_task(task_uuid: str, _auth=Depends(auth_dependency),
 async def patch_task(task_uuid: str, body: dict,
                      _auth=Depends(auth_dependency),
                      conn: asyncpg.Connection = Depends(get_db_conn)):
-    result = await patch_task_fields(conn, task_uuid, body)
+    async with conn.transaction():
+        result = await patch_task_fields(conn, task_uuid, body)
     if result is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return result

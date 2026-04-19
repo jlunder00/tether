@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from api.routes import plan as plan_routes
 from api.routes import anchors as anchor_routes
 from api.routes import context as context_routes
