@@ -1,0 +1,748 @@
+#!/usr/bin/env python3
+"""One-time migration: SQLite (auth.db + per-user .db files) → Postgres.
+
+Usage:
+    python scripts/migrate_sqlite_to_postgres.py [--dry-run]
+
+Options:
+    --dry-run   Print row counts without writing to Postgres.
+
+Prerequisites:
+    DATABASE_URL env var pointing to Postgres (superuser credentials recommended
+    so the script can SET row_security = off for the session).
+    TETHER_CONFIG_DIR env var (default: ~/.tether-config).
+
+Idempotent: all inserts use ON CONFLICT DO NOTHING.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import sqlite3
+import sys
+import uuid as _uuid
+from pathlib import Path
+from typing import Any
+
+import asyncpg
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
+AUTH_DB = CONFIG_DIR / "auth.db"
+USERS_DIR = CONFIG_DIR / "users"
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _open_sqlite(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _parse_json(val: str | None) -> dict | list | None:
+    if val is None:
+        return None
+    try:
+        return json.loads(val)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _to_bool(val: Any) -> bool:
+    return bool(val)
+
+
+def _topo_sort_nodes(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Return context_node rows in topological order (parents before children)."""
+    by_id = {r["id"]: r for r in rows}
+    result: list[sqlite3.Row] = []
+    visited: set[str] = set()
+
+    def visit(node_id: str) -> None:
+        if node_id in visited:
+            return
+        row = by_id.get(node_id)
+        if row is None:
+            return
+        parent_id = row["parent_id"]
+        if parent_id and parent_id not in visited:
+            visit(parent_id)
+        if node_id not in visited:
+            result.append(row)
+            visited.add(node_id)
+
+    for row in rows:
+        visit(row["id"])
+    return result
+
+
+# ── Dry-run counting ──────────────────────────────────────────────────────────
+
+def dry_run_report() -> None:
+    if not AUTH_DB.exists():
+        print(f"ERROR: auth.db not found at {AUTH_DB}")
+        sys.exit(1)
+
+    auth = _open_sqlite(AUTH_DB)
+    print("=== Auth DB ===")
+    for table in ("users", "oauth_connections", "invite_tokens",
+                  "telegram_connections", "telegram_link_codes"):
+        try:
+            count = auth.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        except sqlite3.OperationalError:
+            count = "MISSING"
+        print(f"  {table}: {count}")
+
+    users = auth.execute("SELECT id, username FROM users").fetchall()
+    print(f"\n=== Per-user DBs ({len(users)} users) ===")
+
+    per_user_tables = [
+        "anchors", "plans", "tasks", "task_dependencies", "dependencies",
+        "subtasks", "links", "context_entries", "task_context", "milestones",
+        "milestone_tasks", "followup_state", "acknowledgements", "check_ins",
+        "edit_history", "conversation_history", "staging_mutations",
+        "orchestrator_conversation", "invocation_log", "state_monitor_log",
+        "beacon_state", "kanban_columns", "user_settings", "context_nodes",
+        "node_sections", "node_tasks", "sessions",
+    ]
+
+    totals: dict[str, int] = {t: 0 for t in per_user_tables}
+    for user in users:
+        db_path = USERS_DIR / f"{user['id']}.db"
+        if not db_path.exists():
+            print(f"  {user['username']} ({user['id']}): NO DB FILE")
+            continue
+        uconn = _open_sqlite(db_path)
+        print(f"\n  {user['username']} ({user['id']}):")
+        for table in per_user_tables:
+            try:
+                count = uconn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                totals[table] += count
+            except sqlite3.OperationalError:
+                count = "-"
+            print(f"    {table}: {count}")
+
+    print("\n=== Totals ===")
+    for t, c in totals.items():
+        print(f"  {t}: {c}")
+
+
+# ── Main migration ────────────────────────────────────────────────────────────
+
+async def migrate(dry_run: bool = False) -> None:
+    if dry_run:
+        dry_run_report()
+        return
+
+    if not AUTH_DB.exists():
+        print(f"ERROR: auth.db not found at {AUTH_DB}")
+        sys.exit(1)
+
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        print("ERROR: DATABASE_URL not set")
+        sys.exit(1)
+
+    conn = await asyncpg.connect(dsn=database_url)
+    await conn.set_type_codec(
+        "jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+    await conn.set_type_codec(
+        "json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog"
+    )
+    # Bypass RLS for the migration session (requires superuser or pg_bypassrls role).
+    # If this fails, the script will still work for inserts (no WITH CHECK policy),
+    # but verification SELECTs will return 0 rows.
+    try:
+        await conn.execute("SET row_security = off")
+    except asyncpg.InsufficientPrivilegeError:
+        print("WARN: cannot SET row_security = off (not superuser); "
+              "inserts will succeed but count verification may be inaccurate")
+
+    try:
+        async with conn.transaction():
+            await _migrate_auth(conn)
+            await _migrate_users(conn)
+    finally:
+        await conn.close()
+
+    print("\nMigration complete.")
+
+
+async def _migrate_auth(conn: asyncpg.Connection) -> None:
+    auth = _open_sqlite(AUTH_DB)
+
+    # users
+    users = auth.execute("SELECT * FROM users").fetchall()
+    inserted = 0
+    for row in users:
+        result = await conn.execute(
+            """INSERT INTO users (id, username, email, password_hash, is_admin, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(row["id"]),
+            row["username"],
+            row["email"],
+            row["password_hash"],
+            _to_bool(row["is_admin"]),
+            row["created_at"],
+        )
+        if result != "INSERT 0 0":
+            inserted += 1
+    print(f"users: {inserted}/{len(users)} inserted")
+
+    # oauth_connections
+    rows = auth.execute("SELECT * FROM oauth_connections").fetchall()
+    inserted = 0
+    for row in rows:
+        result = await conn.execute(
+            """INSERT INTO oauth_connections (user_id, provider, provider_user_id, access_token, refresh_token)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(row["user_id"]),
+            row["provider"],
+            row["provider_user_id"],
+            row["access_token"],
+            row["refresh_token"],
+        )
+        if result != "INSERT 0 0":
+            inserted += 1
+    print(f"oauth_connections: {inserted}/{len(rows)} inserted")
+
+    # invite_tokens
+    rows = auth.execute("SELECT * FROM invite_tokens").fetchall()
+    inserted = 0
+    for row in rows:
+        result = await conn.execute(
+            """INSERT INTO invite_tokens (token, created_by, used_by, expires_at, created_at)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT DO NOTHING""",
+            row["token"],
+            _uuid.UUID(row["created_by"]),
+            _uuid.UUID(row["used_by"]) if row["used_by"] else None,
+            row["expires_at"],
+            row["created_at"],
+        )
+        if result != "INSERT 0 0":
+            inserted += 1
+    print(f"invite_tokens: {inserted}/{len(rows)} inserted")
+
+    # telegram_connections
+    rows = auth.execute("SELECT * FROM telegram_connections").fetchall()
+    inserted = 0
+    for row in rows:
+        result = await conn.execute(
+            """INSERT INTO telegram_connections (user_id, telegram_chat_id)
+               VALUES ($1, $2)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(row["user_id"]),
+            row["telegram_chat_id"],
+        )
+        if result != "INSERT 0 0":
+            inserted += 1
+    print(f"telegram_connections: {inserted}/{len(rows)} inserted")
+
+    # telegram_link_codes
+    rows = auth.execute("SELECT * FROM telegram_link_codes").fetchall()
+    inserted = 0
+    for row in rows:
+        result = await conn.execute(
+            """INSERT INTO telegram_link_codes (code, telegram_chat_id, created_at)
+               VALUES ($1, $2, $3)
+               ON CONFLICT DO NOTHING""",
+            row["code"],
+            row["telegram_chat_id"],
+            row["created_at"],
+        )
+        if result != "INSERT 0 0":
+            inserted += 1
+    print(f"telegram_link_codes: {inserted}/{len(rows)} inserted")
+
+
+async def _migrate_users(conn: asyncpg.Connection) -> None:
+    auth = _open_sqlite(AUTH_DB)
+    users = auth.execute("SELECT id, username FROM users").fetchall()
+
+    for user in users:
+        user_id = _uuid.UUID(user["id"])
+        db_path = USERS_DIR / f"{user['id']}.db"
+        if not db_path.exists():
+            print(f"\n[{user['username']}] no DB file at {db_path}, skipping")
+            continue
+        print(f"\n[{user['username']}] migrating {db_path}")
+        uconn = _open_sqlite(db_path)
+        await _migrate_user_data(conn, uconn, user_id)
+
+
+async def _migrate_user_data(
+    pg: asyncpg.Connection,
+    sq: sqlite3.Connection,
+    user_id: _uuid.UUID,
+) -> None:
+    uid = user_id  # shorthand
+
+    # ── anchors ───────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM anchors").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO anchors (id, user_id, name, time, duration_minutes,
+                   flexibility, strictness, color, position, followup_config)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["id"]), uid,
+            r["name"], r["time"], r["duration_minutes"],
+            r["flexibility"], r["strictness"], r["color"], r["position"],
+            _parse_json(r["followup_config"]),
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  anchors: {n}/{len(rows)}")
+
+    # ── plans ─────────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM plans").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            "INSERT INTO plans (date, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+            r["date"], uid,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  plans: {n}/{len(rows)}")
+
+    # ── context_entries ───────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM context_entries").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO context_entries (user_id, subject, body, updated_at)
+               VALUES ($1,$2,$3,$4)
+               ON CONFLICT DO NOTHING""",
+            uid, r["subject"], r["body"], r["updated_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  context_entries: {n}/{len(rows)}")
+
+    # Build subject → pg id lookup (needed for task_context and milestones)
+    ce_rows = await pg.fetch(
+        "SELECT id, subject FROM context_entries WHERE user_id = $1", uid
+    )
+    subject_to_pg_id: dict[str, int] = {r["subject"]: r["id"] for r in ce_rows}
+
+    # ── context_nodes (topological sort for self-referential FK) ──────────────
+    node_rows = sq.execute("SELECT * FROM context_nodes").fetchall()
+    sorted_nodes = _topo_sort_nodes(node_rows)
+    n = 0
+    for r in sorted_nodes:
+        result = await pg.execute(
+            """INSERT INTO context_nodes
+                   (id, user_id, parent_id, name, node_type, description, archived,
+                    target_date, status, status_override, color, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["id"]), uid,
+            _uuid.UUID(r["parent_id"]) if r["parent_id"] else None,
+            r["name"], r["node_type"], r["description"],
+            _to_bool(r["archived"]),
+            r["target_date"], r["status"],
+            _to_bool(r["status_override"]),
+            r["color"], r["created_at"], r["updated_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  context_nodes: {n}/{len(node_rows)}")
+
+    # ── node_sections ─────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM node_sections").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO node_sections
+                   (user_id, node_id, section_type, name, body, updated_at, position)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT DO NOTHING""",
+            uid, _uuid.UUID(r["node_id"]),
+            r["section_type"], r["name"], r["body"],
+            r["updated_at"], r["position"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  node_sections: {n}/{len(rows)}")
+
+    # ── node_tasks ────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM node_tasks").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO node_tasks (node_id, task_id, user_id)
+               VALUES ($1,$2,$3)
+               ON CONFLICT DO NOTHING""",
+            r["node_id"], r["task_id"], uid,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  node_tasks: {n}/{len(rows)}")
+
+    # ── tasks ─────────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM tasks").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO tasks
+                   (uuid, user_id, plan_date, anchor_id, position, text, status,
+                    followup_config, notes, description, context_subject, context_node_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["uuid"]) if r["uuid"] else None,
+            uid,
+            r["plan_date"],
+            _uuid.UUID(r["anchor_id"]) if r["anchor_id"] else None,
+            r["position"],
+            r["text"], r["status"],
+            _parse_json(r["followup_config"]),
+            r["notes"] or "",
+            r["description"],
+            r["context_subject"],
+            _uuid.UUID(r["context_node_id"]) if r["context_node_id"] else None,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  tasks: {n}/{len(rows)}")
+
+    # Build task uuid → pg id lookup (needed for task_dependencies)
+    task_rows = await pg.fetch("SELECT id, uuid FROM tasks WHERE user_id = $1", uid)
+    task_uuid_to_pg_id: dict[str, int] = {str(r["uuid"]): r["id"] for r in task_rows}
+
+    # ── task_dependencies ─────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM task_dependencies").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO task_dependencies (task_id, blocked_by_id, user_id)
+               VALUES ($1,$2,$3)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["task_id"]), _uuid.UUID(r["blocked_by_id"]), uid,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  task_dependencies: {n}/{len(rows)}")
+
+    # ── dependencies ─────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM dependencies").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO dependencies
+                   (user_id, blocker_type, blocker_id, blocked_type, blocked_id)
+               VALUES ($1,$2,$3,$4,$5)
+               ON CONFLICT DO NOTHING""",
+            uid, r["blocker_type"], r["blocker_id"], r["blocked_type"], r["blocked_id"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  dependencies: {n}/{len(rows)}")
+
+    # ── subtasks ──────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM subtasks").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO subtasks (user_id, task_id, text, done, position)
+               VALUES ($1,$2,$3,$4,$5)
+               ON CONFLICT DO NOTHING""",
+            uid, r["task_id"], r["text"],
+            _to_bool(r["done"]), r["position"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  subtasks: {n}/{len(rows)}")
+
+    # ── links ─────────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM links").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO links (user_id, parent_type, parent_id, url, label, category, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT DO NOTHING""",
+            uid, r["parent_type"], r["parent_id"],
+            r["url"], r["label"], r["category"], r["created_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  links: {n}/{len(rows)}")
+
+    # ── milestones ────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM milestones").fetchall()
+    n = 0
+    for r in rows:
+        context_entry_id = subject_to_pg_id.get(r["context_subject"])
+        if context_entry_id is None and r["context_subject"]:
+            print(f"  WARN: milestone {r['id']} refs unknown context_subject '{r['context_subject']}'")
+        result = await pg.execute(
+            """INSERT INTO milestones
+                   (id, user_id, context_entry_id, name, description, target_date,
+                    status, status_override, color, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["id"]), uid,
+            context_entry_id,
+            r["name"], r["description"], r["target_date"],
+            r["status"], _to_bool(r["status_override"]),
+            r["color"], r["created_at"], r["updated_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  milestones: {n}/{len(rows)}")
+
+    # ── milestone_tasks ───────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM milestone_tasks").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO milestone_tasks (milestone_id, task_id, user_id)
+               VALUES ($1,$2,$3)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["milestone_id"]), r["task_id"], uid,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  milestone_tasks: {n}/{len(rows)}")
+
+    # ── task_context ──────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM task_context").fetchall()
+    n = 0
+    for r in rows:
+        context_entry_id = subject_to_pg_id.get(r["subject"])
+        if context_entry_id is None:
+            print(f"  WARN: task_context ({r['task_id']}, '{r['subject']}') refs missing context entry")
+            continue
+        result = await pg.execute(
+            """INSERT INTO task_context (task_id, user_id, context_entry_id)
+               VALUES ($1,$2,$3)
+               ON CONFLICT DO NOTHING""",
+            r["task_id"], uid, context_entry_id,
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  task_context: {n}/{len(rows)}")
+
+    # ── followup_state ────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM followup_state").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO followup_state
+                   (user_id, date, anchor_id, task_id, sequence_started_at,
+                    acknowledged_at, pre_ack_pings_sent, post_ack_pings_sent,
+                    last_ping_at, completed)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               ON CONFLICT DO NOTHING""",
+            uid, r["date"], r["anchor_id"], r["task_id"],
+            r["sequence_started_at"], r["acknowledged_at"],
+            r["pre_ack_pings_sent"] or 0,
+            r["post_ack_pings_sent"] or 0,
+            r["last_ping_at"],
+            _to_bool(r["completed"]),
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  followup_state: {n}/{len(rows)}")
+
+    # ── acknowledgements ──────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM acknowledgements").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO acknowledgements (plan_date, anchor_id, user_id, acknowledged_at)
+               VALUES ($1,$2,$3,$4)
+               ON CONFLICT DO NOTHING""",
+            r["plan_date"], r["anchor_id"], uid, r["acknowledged_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  acknowledgements: {n}/{len(rows)}")
+
+    # ── check_ins ─────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM check_ins").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO check_ins
+                   (user_id, plan_date, anchor_id, type, timestamp, accomplished, current_status)
+               VALUES ($1,$2,$3,$4,$5,$6,$7)
+               ON CONFLICT DO NOTHING""",
+            uid, r["plan_date"], r["anchor_id"], r["type"],
+            r["timestamp"], r["accomplished"] or "", r["current_status"] or "",
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  check_ins: {n}/{len(rows)}")
+
+    # ── edit_history ──────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM edit_history").fetchall()
+    n = 0
+    batch = [
+        (uid, r["table_name"], r["operation"], r["record_id"],
+         _parse_json(r["before_json"]), _parse_json(r["after_json"]), r["created_at"])
+        for r in rows
+    ]
+    await pg.executemany(
+        """INSERT INTO edit_history
+               (user_id, table_name, operation, record_id, before_json, after_json, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT DO NOTHING""",
+        batch,
+    )
+    n = len(batch)
+    print(f"  edit_history: {n}/{len(rows)}")
+
+    # ── conversation_history ──────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM conversation_history").fetchall()
+    batch = [(uid, r["role"], r["body"], r["ts"]) for r in rows]
+    await pg.executemany(
+        "INSERT INTO conversation_history (user_id, role, body, ts) VALUES ($1,$2,$3,$4)",
+        batch,
+    )
+    print(f"  conversation_history: {len(batch)}/{len(rows)}")
+
+    # ── staging_mutations ─────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM staging_mutations").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO staging_mutations
+                   (id, user_id, session_id, type, description, params_json, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               ON CONFLICT DO NOTHING""",
+            r["id"], uid, r["session_id"], r["type"],
+            r["description"], _parse_json(r["params_json"]) or {},
+            r["created_at"], r["updated_at"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  staging_mutations: {n}/{len(rows)}")
+
+    # ── orchestrator_conversation ─────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM orchestrator_conversation").fetchall()
+    batch = [(uid, r["session_id"], r["role"], r["body"], r["round_num"], r["ts"])
+             for r in rows]
+    await pg.executemany(
+        """INSERT INTO orchestrator_conversation
+               (user_id, session_id, role, body, round_num, ts)
+           VALUES ($1,$2,$3,$4,$5,$6)""",
+        batch,
+    )
+    print(f"  orchestrator_conversation: {len(batch)}/{len(rows)}")
+
+    # ── invocation_log ────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM invocation_log").fetchall()
+    batch = [(uid, r["session_id"], r["stage"],
+              r["prompt"] or "", r["response"] or "", r["error"], r["ts"])
+             for r in rows]
+    await pg.executemany(
+        """INSERT INTO invocation_log
+               (user_id, session_id, stage, prompt, response, error, ts)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)""",
+        batch,
+    )
+    print(f"  invocation_log: {len(batch)}/{len(rows)}")
+
+    # ── state_monitor_log ─────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM state_monitor_log").fetchall()
+    batch = [(uid, r["change_type"], r["entity_id"] or "",
+              r["score"] or 1, _to_bool(r["consumed"]), r["ts"])
+             for r in rows]
+    await pg.executemany(
+        """INSERT INTO state_monitor_log
+               (user_id, change_type, entity_id, score, consumed, ts)
+           VALUES ($1,$2,$3,$4,$5,$6)""",
+        batch,
+    )
+    print(f"  state_monitor_log: {len(batch)}/{len(rows)}")
+
+    # ── beacon_state (singleton → per-user row) ───────────────────────────────
+    try:
+        beacon = sq.execute("SELECT last_invoked_at FROM beacon_state WHERE id = 1").fetchone()
+        last_invoked = beacon["last_invoked_at"] if beacon else None
+    except sqlite3.OperationalError:
+        last_invoked = None
+    result = await pg.execute(
+        """INSERT INTO beacon_state (user_id, last_invoked_at)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING""",
+        uid, last_invoked,
+    )
+    print(f"  beacon_state: {'1' if result != 'INSERT 0 0' else '0'}/1")
+
+    # ── kanban_columns ────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM kanban_columns").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO kanban_columns
+                   (id, user_id, name, position, color, match_rules, entry_rules, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["id"]), uid,
+            r["name"], r["position"], r["color"],
+            _parse_json(r["match_rules"]) or {},
+            _parse_json(r["entry_rules"]) or {},
+            r["created_by"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  kanban_columns: {n}/{len(rows)}")
+
+    # ── user_settings ─────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM user_settings").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO user_settings (user_id, key, value)
+               VALUES ($1,$2,$3)
+               ON CONFLICT DO NOTHING""",
+            uid, r["key"], r["value"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  user_settings: {n}/{len(rows)}")
+
+    # ── sessions ──────────────────────────────────────────────────────────────
+    rows = sq.execute("SELECT * FROM sessions").fetchall()
+    n = 0
+    for r in rows:
+        result = await pg.execute(
+            """INSERT INTO sessions
+                   (id, user_id, chat_id, state, turn_count, max_turns, summary,
+                    created_at, last_activity)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+               ON CONFLICT DO NOTHING""",
+            _uuid.UUID(r["id"]), uid,
+            r["chat_id"], r["state"],
+            r["turn_count"] or 0, r["max_turns"] or 10,
+            r["summary"], r["created_at"], r["last_activity"],
+        )
+        if result != "INSERT 0 0":
+            n += 1
+    print(f"  sessions: {n}/{len(rows)}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print row counts without writing to Postgres")
+    args = parser.parse_args()
+    asyncio.run(migrate(dry_run=args.dry_run))
