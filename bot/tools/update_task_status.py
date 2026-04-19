@@ -1,6 +1,7 @@
 """Tool: update_task_status — set the status of an existing task by ID."""
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import patch_task_fields
+from db.pg_queries import patch_task_fields
 
 VALID_STATUSES = {"pending", "in_progress", "done", "skipped", "blocked"}
 
@@ -13,7 +14,8 @@ async def _execute(inp: dict, ctx) -> ToolResult:
     if status not in VALID_STATUSES:
         return ToolResult.error(f"Invalid status {status!r}. Must be one of: {sorted(VALID_STATUSES)}")
     try:
-        result = patch_task_fields(ctx.db_path, task_id, {"status": status})
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            result = await patch_task_fields(conn, task_id, {"status": status})
         if result is None:
             return ToolResult.error(f"Task not found: {task_id!r}")
         return ToolResult.ok(f"Task {task_id} status set to {status!r}")

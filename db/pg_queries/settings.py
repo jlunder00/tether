@@ -56,7 +56,7 @@ async def get_links(
 ) -> list[dict]:
     rows = await conn.fetch(
         """
-        SELECT id, parent_type, parent_id, url, label, created_at
+        SELECT id, parent_type, parent_id, url, label, category, created_at
         FROM links
         WHERE parent_type = $1
           AND parent_id = $2
@@ -75,17 +75,19 @@ async def create_link(
     parent_id: str,
     url: str,
     label: str | None = None,
+    category: str = "other",
 ) -> dict:
     row = await conn.fetchrow(
         """
-        INSERT INTO links (user_id, parent_type, parent_id, url, label)
-        VALUES (current_setting('app.current_user_id', true)::uuid, $1, $2, $3, $4)
-        RETURNING id, parent_type, parent_id, url, label, created_at
+        INSERT INTO links (user_id, parent_type, parent_id, url, label, category)
+        VALUES (current_setting('app.current_user_id', true)::uuid, $1, $2, $3, $4, $5)
+        RETURNING id, parent_type, parent_id, url, label, category, created_at
         """,
         parent_type,
         parent_id,
         url,
         label,
+        category,
     )
     return dict(row)
 

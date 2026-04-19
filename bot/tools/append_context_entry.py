@@ -1,6 +1,7 @@
 """Tool: append_context_entry — append content to a context node's details section."""
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import ensure_node_path, append_section
+from db.pg_queries import ensure_node_path, append_section
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
@@ -9,8 +10,9 @@ async def _execute(inp: dict, ctx) -> ToolResult:
     if not subject:
         return ToolResult.error("subject is required")
     try:
-        node = ensure_node_path(ctx.db_path, subject)
-        append_section(ctx.db_path, node["id"], "details", content)
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            node = await ensure_node_path(conn, subject)
+            await append_section(conn, node["id"], "details", content)
         return ToolResult.ok(f"Appended to context node {subject!r}.")
     except Exception as e:
         return ToolResult.error(f"Failed to append to context: {e}")

@@ -1,34 +1,26 @@
 from __future__ import annotations
 import os
 from datetime import date as date_type, datetime
-from pathlib import Path
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
+import db.postgres as pg
+
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
 
-_CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
+_pool: pg.asyncpg.Pool | None = None
 
 
-def _load_secrets() -> dict:
-    p = _CONFIG_DIR / "secrets.json"
-    if p.exists():
-        import json
-        return json.loads(p.read_text())
-    return {}
-
-_secrets = _load_secrets()
+async def _get_pool() -> pg.asyncpg.Pool:
+    global _pool
+    if _pool is None:
+        _pool = await pg.create_pool()
+    return _pool
 
 
-def _db() -> Path:
-    env = os.environ.get("TETHER_DB_PATH")
-    if env:
-        return Path(env)
-    user_id = os.environ.get("TETHER_USER_ID") or _secrets.get("TETHER_USER_ID")
-    if user_id:
-        return _CONFIG_DIR / "users" / f"{user_id}.db"
-    return _CONFIG_DIR / "tether.db"
+def _get_user_id() -> str | None:
+    return os.environ.get("TETHER_USER_ID")
 
 
 def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict:
@@ -50,7 +42,7 @@ def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict
 # ─── 9 Consolidated MCP Tools ───────────────────────────────────────────────
 
 @mcp.tool()
-def upsert_tasks(tasks: list[dict]) -> list[dict]:
+async def upsert_tasks(tasks: list[dict]) -> list[dict]:
     """Batch create or update tasks.
 
     Each spec: {task_uuid?, text, status?, description?, date?, anchor_id?, backlog?,
@@ -59,42 +51,50 @@ def upsert_tasks(tasks: list[dict]) -> list[dict]:
     Text/description support write modes: bare string=replace, {mode:"append",value:"..."},
     {mode:"patch",operations:[{find,replace}]} or {mode:"patch",operations:[{lines,replace}]}."""
     from tether_mcp.tools.upsert_tasks import execute_upsert_tasks
-    return execute_upsert_tasks(tasks)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_upsert_tasks(conn, tasks)
 
 
 @mcp.tool()
-def upsert_context(nodes: list[dict]) -> list[dict]:
+async def upsert_context(nodes: list[dict]) -> list[dict]:
     """Batch create or update context nodes/milestones.
 
     Each spec: {name (slash-path ok), node_id?, node_type?, description?, status?, color?,
     target_date?, parent?, sections?: {type: {filename: body}}, children?: [...]}.
     Section bodies and description support write modes."""
     from tether_mcp.tools.upsert_context import execute_upsert_context
-    return execute_upsert_context(nodes)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_upsert_context(conn, nodes)
 
 
 @mcp.tool()
-def delete_tasks(operations: list[dict]) -> list[dict]:
+async def delete_tasks(operations: list[dict]) -> list[dict]:
     """Delete tasks or clear content within tasks.
 
     Each op: {task_uuid, delete?, clear_description?, clear_subtasks?, clear_deps?,
     clear_node_links?, clear_context?}. delete=True removes entire task."""
     from tether_mcp.tools.delete_tasks import execute_delete_tasks
-    return execute_delete_tasks(operations)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_delete_tasks(conn, operations)
 
 
 @mcp.tool()
-def delete_context(operations: list[dict]) -> list[dict]:
+async def delete_context(operations: list[dict]) -> list[dict]:
     """Delete context nodes or clear content within nodes.
 
     Each op: {node_id or path, delete?, archive?, clear_sections?, delete_files?,
     clear_description?, clear_task_links?}. delete=True removes entire node+children."""
     from tether_mcp.tools.delete_context import execute_delete_context
-    return execute_delete_context(operations)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_delete_context(conn, operations)
 
 
 @mcp.tool()
-def read_context(
+async def read_context(
     paths: list[str] = [],
     node_ids: list[str] = [],
     depth: int = 0,
@@ -104,11 +104,13 @@ def read_context(
     """Read context nodes. No params=roots. depth: 0=node only, 1=children, -1=full subtree.
     Section bodies in cat-n format (1-indexed line numbers with tabs)."""
     from tether_mcp.tools.read_context import execute_read_context
-    return execute_read_context(paths, node_ids, depth, include_sections, include_tasks)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_read_context(conn, paths, node_ids, depth, include_sections, include_tasks)
 
 
 @mcp.tool()
-def read_tasks(
+async def read_tasks(
     task_ids: list[str] = [],
     status: str = "",
     context: str = "",
@@ -121,33 +123,41 @@ def read_tasks(
 ) -> list[dict]:
     """Read tasks with filters (AND'd). No filters=all tasks. include_deps/include_subtasks expand."""
     from tether_mcp.tools.read_tasks import execute_read_tasks
-    return execute_read_tasks(task_ids, status, context, milestone_id, date, anchor_id, unscheduled, include_deps, include_subtasks)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await execute_read_tasks(conn, task_ids, status, context, milestone_id, date, anchor_id, unscheduled, include_deps, include_subtasks)
 
 
 @mcp.tool()
-def get_plan(date: str = "") -> dict:
+async def get_plan(date: str = "") -> dict:
     """Get structured daily plan with anchor-grouped tasks. Default=today."""
-    from db.queries import get_plan as _get_plan
+    from db.pg_queries import get_plan as _get_plan
     d = date or str(date_type.today())
-    return _get_plan(_db(), d)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await _get_plan(conn, d)
 
 
 @mcp.tool()
-def get_anchors() -> dict:
+async def get_anchors() -> dict:
     """Get all anchor definitions + currently active anchor."""
-    from db.queries import get_anchors as _get_anchors_db
-    anchors = _get_anchors_db(_db())
+    from db.pg_queries import get_anchors as _get_anchors_db
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        anchors = await _get_anchors_db(conn)
     current = _current_anchor(anchors) if anchors else None
     return {"anchors": anchors, "current": current}
 
 
 @mcp.tool()
-def search(query: str, type: str = "all") -> list[dict]:
+async def search(query: str, type: str = "all") -> list[dict]:
     """Full-text search across tasks, milestones, context. type: all/task/milestone/context."""
-    from db.queries import search_entities
+    from db.pg_queries import search_entities
     if not query.strip():
         return []
-    return search_entities(_db(), query.strip(), type)
+    pool = await _get_pool()
+    async with pg.get_conn(pool, _get_user_id()) as conn:
+        return await search_entities(conn, query.strip(), type)
 
 
 # ─── Premium Plugin Hook ────────────────────────────────────────────────────

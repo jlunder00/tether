@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from tether_mcp.common import get_db_path
+import asyncpg
 
 
-def _build_node_response(
-    db_path: Path,
+async def _build_node_response(
+    conn: asyncpg.Connection,
     node: dict,
     depth: int,
     include_sections: bool,
     include_tasks: bool,
 ) -> dict:
     """Build the response dict for a single node, optionally with children/sections/tasks."""
-    from db.queries import get_node, get_children, get_sections, get_node_tasks
+    from db.pg_queries import get_node, get_children, get_sections, get_node_tasks
     from tether_mcp.write_modes import format_cat_n, line_count
 
     # Ensure we have full node dict (with section_types and children_count)
     if "section_types" not in node or "children_count" not in node:
-        full = get_node(db_path, node["id"])
+        full = await get_node(conn, node["id"])
         if full is None:
             return node
         node = full
@@ -29,7 +27,7 @@ def _build_node_response(
 
     # Sections
     if include_sections:
-        all_sections = get_sections(db_path, node["id"])
+        all_sections = await get_sections(conn, node["id"])
         grouped: dict[str, list[dict]] = {}
         for s in all_sections:
             st = s["section_type"]
@@ -45,30 +43,33 @@ def _build_node_response(
 
     # Tasks
     if include_tasks:
-        result["tasks"] = get_node_tasks(db_path, node["id"])
+        result["tasks"] = await get_node_tasks(conn, node["id"])
 
     # Children (recursive)
     if depth != 0:
-        children = get_children(db_path, node["id"])
+        children = await get_children(conn, node["id"])
         next_depth = depth - 1 if depth > 0 else -1  # -1 means unlimited
-        result["children"] = [
-            _build_node_response(db_path, child, next_depth, include_sections, include_tasks)
-            for child in children
-        ]
+        result["children"] = []
+        for child in children:
+            result["children"].append(
+                await _build_node_response(conn, child, next_depth, include_sections, include_tasks)
+            )
 
     return result
 
 
-def execute_read_context(
-    paths: Optional[list[str]] = None,
-    node_ids: Optional[list[str]] = None,
+async def execute_read_context(
+    conn: asyncpg.Connection,
+    paths=None,
+    node_ids=None,
     depth: int = 0,
     include_sections: bool = False,
     include_tasks: bool = False,
-) -> list[Optional[dict]]:
+) -> list:
     """Fetch context nodes with optional depth traversal, section content, and linked tasks.
 
     Args:
+        conn: asyncpg connection (user-scoped via RLS).
         paths: List of slash-separated paths like ["Projects/Tether"]. Resolved to nodes.
         node_ids: List of node IDs to fetch directly.
         depth: How deep to traverse children.
@@ -83,39 +84,38 @@ def execute_read_context(
         List of node dicts (or None for not-found entries), in same order as inputs.
         If no paths and no node_ids, returns root nodes.
     """
-    from db.queries import get_node, get_node_by_path, get_children
-
-    db_path = get_db_path()
+    from db.pg_queries import get_node, get_node_by_path, get_children
 
     # No args → return root nodes
     if not paths and not node_ids:
-        roots = get_children(db_path, parent_id=None)
-        return [
-            _build_node_response(db_path, root, depth, include_sections, include_tasks)
-            for root in roots
-        ]
+        roots = await get_children(conn, parent_id=None)
+        result = []
+        for root in roots:
+            result.append(
+                await _build_node_response(conn, root, depth, include_sections, include_tasks)
+            )
+        return result
 
-    results: list[Optional[dict]] = []
+    results = []
 
     # Resolve paths
     for path in (paths or []):
-        node = get_node_by_path(db_path, path)
+        node = await get_node_by_path(conn, path)
         if node is None:
             results.append(None)
         else:
-            # get_node_by_path already calls get_node internally, so full dict is returned
             results.append(
-                _build_node_response(db_path, node, depth, include_sections, include_tasks)
+                await _build_node_response(conn, node, depth, include_sections, include_tasks)
             )
 
     # Resolve node_ids
     for nid in (node_ids or []):
-        node = get_node(db_path, nid)
+        node = await get_node(conn, nid)
         if node is None:
             results.append(None)
         else:
             results.append(
-                _build_node_response(db_path, node, depth, include_sections, include_tasks)
+                await _build_node_response(conn, node, depth, include_sections, include_tasks)
             )
 
     return results

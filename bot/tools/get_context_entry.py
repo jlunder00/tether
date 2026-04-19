@@ -1,6 +1,7 @@
 """Tool: get_context_entry — fetch context node details by path."""
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import get_node_by_path, get_section
+from db.pg_queries import get_node_by_path, get_section
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
@@ -8,10 +9,11 @@ async def _execute(inp: dict, ctx) -> ToolResult:
     if not subject:
         return ToolResult.error("subject is required")
     try:
-        node = get_node_by_path(ctx.db_path, subject)
-        if not node:
-            return ToolResult.error(f"No context node found for path: {subject!r}")
-        sec = get_section(ctx.db_path, node["id"], "details")
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            node = await get_node_by_path(conn, subject)
+            if not node:
+                return ToolResult.error(f"No context node found for path: {subject!r}")
+            sec = await get_section(conn, node["id"], "details")
         body = sec["body"] if sec else "(no details section)"
         return ToolResult.ok(body)
     except Exception as e:

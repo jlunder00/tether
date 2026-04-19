@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from tether_mcp.common import get_db_path
+import asyncpg
 
 
-def execute_read_tasks(
-    task_ids: Optional[list[str]] = None,
+async def execute_read_tasks(
+    conn: asyncpg.Connection,
+    task_ids=None,
     status: str = "",
     context: str = "",
     milestone_id: str = "",
@@ -21,6 +20,7 @@ def execute_read_tasks(
     """Fetch tasks with optional filters and expansion.
 
     Args:
+        conn: asyncpg connection (user-scoped via RLS).
         task_ids: If provided, fetch these specific tasks by UUID.
         status: Filter by task.status (exact match).
         context: Filter by task.context_subject (exact match).
@@ -36,19 +36,16 @@ def execute_read_tasks(
         context_subject, plan_date, anchor_id. "deps" and "subtasks" present only
         when the corresponding include_* flag is True.
     """
-    from db.queries import get_all_tasks, get_task_by_uuid, get_dependencies_for, get_subtasks
-    from db.schema import get_db
-
-    db_path = get_db_path()
+    from db.pg_queries import get_all_tasks, get_task_by_uuid, get_dependencies_for, get_subtasks
 
     # Fetch tasks
     if task_ids:
         raw_tasks = []
         for tid in task_ids:
-            t = get_task_by_uuid(db_path, tid)
+            t = await get_task_by_uuid(conn, tid)
             raw_tasks.append(t)  # None preserved for missing IDs (matching read_context behaviour)
     else:
-        raw_tasks = get_all_tasks(db_path)
+        raw_tasks = await get_all_tasks(conn)
 
         # Apply filters (AND'd together)
         if status:
@@ -62,12 +59,11 @@ def execute_read_tasks(
         if unscheduled:
             raw_tasks = [t for t in raw_tasks if t.get("plan_date") is None]
         if milestone_id:
-            with get_db(db_path) as conn:
-                rows = conn.execute(
-                    "SELECT task_id FROM milestone_tasks WHERE milestone_id = ?",
-                    (milestone_id,),
-                ).fetchall()
-            linked_ids = {r["task_id"] for r in rows}
+            rows = await conn.fetch(
+                "SELECT task_id FROM milestone_tasks WHERE milestone_id = $1",
+                milestone_id,
+            )
+            linked_ids = {str(r["task_id"]) for r in rows}
             raw_tasks = [t for t in raw_tasks if t.get("id") in linked_ids]
 
     # Build response dicts
@@ -88,10 +84,10 @@ def execute_read_tasks(
         }
 
         if include_deps:
-            task_dict["deps"] = get_dependencies_for(db_path, "task", t["id"])
+            task_dict["deps"] = await get_dependencies_for(conn, "task", t["id"])
 
         if include_subtasks:
-            task_dict["subtasks"] = get_subtasks(db_path, t["id"])
+            task_dict["subtasks"] = await get_subtasks(conn, t["id"])
 
         result.append(task_dict)
 

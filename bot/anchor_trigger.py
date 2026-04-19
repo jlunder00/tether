@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,12 +24,6 @@ def load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def load_anchors() -> dict[str, dict]:
-    with open(CONFIG_DIR / "anchors.yaml") as f:
-        data = yaml.safe_load(f)
-    return {a["id"]: a for a in data["anchors"]}
-
-
 def call_claude(prompt: str) -> str:
     result = subprocess.run(
         ["claude", "-p", prompt],
@@ -44,16 +40,30 @@ def send_telegram(bot_token: str, chat_id: str, text: str) -> None:
     resp.raise_for_status()
 
 
-def trigger_anchor(anchor_id: str) -> None:
-    anchors = load_anchors()
-
-    if anchor_id not in anchors:
-        print(f"[tether] unknown anchor: {anchor_id}", file=sys.stderr)
+async def trigger_anchor(anchor_id: str) -> None:
+    user_id = os.environ.get("TETHER_USER_ID")
+    if not user_id:
+        print("[tether] TETHER_USER_ID not set", file=sys.stderr)
         sys.exit(1)
 
-    anchor = anchors[anchor_id]
-    plan = load_plan(CONFIG_DIR)
-    context = load_context(CONFIG_DIR)
+    import db.postgres as pg
+    from db.pg_queries import anchors as anchors_module
+
+    pool = await pg.create_pool()
+    try:
+        async with pg.get_conn(pool, user_id) as conn:
+            anchors_list = await anchors_module.get_anchors(conn)
+        anchors = {a["id"]: a for a in anchors_list}
+
+        if anchor_id not in anchors:
+            print(f"[tether] unknown anchor: {anchor_id}", file=sys.stderr)
+            sys.exit(1)
+
+        anchor = anchors[anchor_id]
+        plan = await load_plan(pool, user_id)
+        context = await load_context(pool, user_id)
+    finally:
+        await pool.close()
 
     anchor_plan = plan.anchors.get(anchor_id)
     if anchor_plan is None:
@@ -81,7 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Tether anchor trigger")
     parser.add_argument("anchor_id", help="Anchor to trigger (e.g. grind_am)")
     args = parser.parse_args()
-    trigger_anchor(args.anchor_id)
+    asyncio.run(trigger_anchor(args.anchor_id))
 
 
 if __name__ == "__main__":

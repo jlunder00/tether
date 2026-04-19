@@ -1,18 +1,17 @@
 """API routes for session status — shows active multi-turn sessions."""
-from fastapi import APIRouter, Depends, Request
-
+from fastapi import APIRouter, Depends
+import asyncpg
 from api.auth import auth_dependency
-from db.queries import get_db
+from db.pool_middleware import get_db_conn
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 @router.get("")
-async def get_active_sessions(request: Request, _auth=Depends(auth_dependency)):
-    db = request.state.db_path
-    with get_db(db) as conn:
-        rows = conn.execute(
-            "SELECT * FROM sessions WHERE state IN ('active', 'waiting_user') "
-            "ORDER BY last_activity DESC"
-        ).fetchall()
+async def get_active_sessions(_auth=Depends(auth_dependency),
+                              conn: asyncpg.Connection = Depends(get_db_conn)):
+    rows = await conn.fetch(
+        "SELECT * FROM sessions WHERE state IN ('active', 'waiting_user') "
+        "ORDER BY last_activity DESC"
+    )
     return {"sessions": [dict(r) for r in rows]}

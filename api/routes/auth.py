@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -11,34 +12,14 @@ from pydantic import BaseModel
 from api.auth import (
     auth_dependency,
     create_jwt,
-    get_user_db_path,
     hash_password,
     verify_password,
 )
 import api.config as cfg
-from db.auth_queries import (
-    create_invite_token,
-    create_oauth_connection,
-    create_user,
-    get_invite_tokens,
-    get_user_by_email,
-    get_user_by_oauth,
-    get_user_by_username,
-    get_user_count,
-    set_telegram_connection,
-    use_invite_token,
-    verify_and_consume_link_code,
-)
-from db.auth_schema import init_auth_db
-from db.schema import init_db
-from db.queries import seed_default_anchors, seed_kanban_columns
+import db.postgres as pg
+import db.pg_auth_queries as auth_queries
+from db.pg_queries import seed_default_anchors, seed_kanban_columns
 
-
-def _init_user_db(user_db_path):
-    """Initialize a new user's DB with schema, default anchors, and kanban columns."""
-    init_db(user_db_path)
-    seed_default_anchors(user_db_path)
-    seed_kanban_columns(user_db_path)
 
 router = APIRouter()
 
@@ -77,45 +58,44 @@ class RegisterBody(BaseModel):
 
 
 @router.post("/auth/register")
-async def register(body: RegisterBody, response: Response):
-    count = get_user_count(cfg.AUTH_DB_PATH)
-    is_admin = False
+async def register(body: RegisterBody, response: Response, request: Request):
+    pool = request.app.state.pool
+    async with pg.get_conn(pool) as conn:
+        count = await auth_queries.get_user_count(conn)
+        is_admin = count == 0
 
-    if count == 0:
-        # First user — no invite needed, becomes admin
-        is_admin = True
-    else:
-        if not body.invite_token:
-            raise HTTPException(status_code=400, detail="invite_token required")
-        # Validate token exists and is not expired/used (use a placeholder user_id for now)
-        # We do a pre-check without consuming it yet
-        import sqlite3
-        from db.auth_schema import get_auth_db
-        now = datetime.now(timezone.utc).isoformat()
-        with get_auth_db(cfg.AUTH_DB_PATH) as conn:
-            row = conn.execute(
-                "SELECT used_by, expires_at FROM invite_tokens WHERE token = ?",
-                (body.invite_token,),
-            ).fetchone()
-        if row is None or row["used_by"] is not None or row["expires_at"] < now:
-            raise HTTPException(status_code=400, detail="Invalid or expired invite token")
+        if not is_admin:
+            if not body.invite_token:
+                raise HTTPException(status_code=400, detail="invite_token required")
+            # Validate token before creating user (within same transaction for atomicity)
+            valid = await auth_queries.check_invite_token(conn, body.invite_token)
+            if not valid:
+                raise HTTPException(status_code=400, detail="Invalid or expired invite token")
 
-    # Check uniqueness
-    if get_user_by_email(cfg.AUTH_DB_PATH, body.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    if get_user_by_username(cfg.AUTH_DB_PATH, body.username):
-        raise HTTPException(status_code=400, detail="Username already taken")
+        if await auth_queries.get_user_by_email(conn, body.email):
+            raise HTTPException(status_code=400, detail="Email already registered")
+        if await auth_queries.get_user_by_username(conn, body.username):
+            raise HTTPException(status_code=400, detail="Username already taken")
 
-    password_hash = hash_password(body.password)
-    user = create_user(cfg.AUTH_DB_PATH, body.username, body.email, password_hash, is_admin=is_admin)
+        password_hash = hash_password(body.password)
+        user = await auth_queries.create_user(conn, body.username, body.email, password_hash, is_admin=is_admin)
 
-    # Consume invite token now that user exists
-    if count > 0 and body.invite_token:
-        use_invite_token(cfg.AUTH_DB_PATH, body.invite_token, user["id"])
+        if body.invite_token:
+            ok = await auth_queries.use_invite_token(conn, body.invite_token, user["id"])
+            if not ok:
+                raise HTTPException(status_code=400, detail="Invalid or expired invite token")
 
-    # Create the user's personal DB
-    user_db_path = get_user_db_path(user["id"])
-    _init_user_db(user_db_path)
+    # Seed user data with user-scoped connection (RLS)
+    try:
+        async with pg.get_conn(pool, user_id=user["id"]) as user_conn:
+            await seed_default_anchors(user_conn)
+            await seed_kanban_columns(user_conn)
+    except Exception:
+        logging.getLogger(__name__).error(
+            "Failed to seed defaults for new user %s — account exists but may be missing defaults",
+            user["id"],
+        )
+        raise
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     _set_auth_cookie(response, token)
@@ -132,11 +112,13 @@ class LoginBody(BaseModel):
 
 
 @router.post("/auth/login")
-async def login(body: LoginBody, response: Response):
-    # Try email first, then username
-    user = get_user_by_email(cfg.AUTH_DB_PATH, body.login)
-    if user is None:
-        user = get_user_by_username(cfg.AUTH_DB_PATH, body.login)
+async def login(body: LoginBody, response: Response, request: Request):
+    pool = request.app.state.pool
+    async with pg.get_conn(pool) as conn:
+        # Try email first, then username
+        user = await auth_queries.get_user_by_email(conn, body.login)
+        if user is None:
+            user = await auth_queries.get_user_by_username(conn, body.login)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.get("password_hash"):
@@ -217,25 +199,35 @@ async def github_callback(code: str, request: Request):
         )
         github_user = user_resp.json()
 
+    pool = request.app.state.pool
     provider_user_id = str(github_user["id"])
-    user = get_user_by_oauth(cfg.AUTH_DB_PATH, "github", provider_user_id)
+    new_user = False
 
-    if user is None:
-        # Create a new user
-        username = github_user.get("login", f"github_{provider_user_id}")
-        email = github_user.get("email") or f"{provider_user_id}@github.invalid"
+    async with pg.get_conn(pool) as conn:
+        user = await auth_queries.get_user_by_oauth(conn, "github", provider_user_id)
+        if user is None:
+            username = github_user.get("login", f"github_{provider_user_id}")
+            email = github_user.get("email") or f"{provider_user_id}@github.invalid"
+            if await auth_queries.get_user_by_username(conn, username):
+                username = f"{username}_{provider_user_id}"
+            if await auth_queries.get_user_by_email(conn, email):
+                email = f"{provider_user_id}@github.invalid"
+            count = await auth_queries.get_user_count(conn)
+            user = await auth_queries.create_user(conn, username, email, password_hash=None, is_admin=(count == 0))
+            await auth_queries.create_oauth_connection(conn, user["id"], "github", provider_user_id, access_token)
+            new_user = True
 
-        # Ensure unique username/email
-        if get_user_by_username(cfg.AUTH_DB_PATH, username):
-            username = f"{username}_{provider_user_id}"
-        if get_user_by_email(cfg.AUTH_DB_PATH, email):
-            email = f"{provider_user_id}@github.invalid"
-
-        count = get_user_count(cfg.AUTH_DB_PATH)
-        user = create_user(cfg.AUTH_DB_PATH, username, email, password_hash=None, is_admin=(count == 0))
-        create_oauth_connection(cfg.AUTH_DB_PATH, user["id"], "github", provider_user_id, access_token)
-        user_db_path = get_user_db_path(user["id"])
-        _init_user_db(user_db_path)
+    if new_user:
+        try:
+            async with pg.get_conn(pool, user_id=user["id"]) as user_conn:
+                await seed_default_anchors(user_conn)
+                await seed_kanban_columns(user_conn)
+        except Exception:
+            logging.getLogger(__name__).error(
+                "Failed to seed defaults for new user %s — account exists but may be missing defaults",
+                user["id"],
+            )
+            raise
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     response = RedirectResponse("/plan/day")
@@ -288,24 +280,36 @@ async def google_callback(code: str, request: Request):
         )
         google_user = user_resp.json()
 
+    pool = request.app.state.pool
     provider_user_id = str(google_user["id"])
-    user = get_user_by_oauth(cfg.AUTH_DB_PATH, "google", provider_user_id)
+    new_user = False
 
-    if user is None:
-        email = google_user.get("email", f"{provider_user_id}@google.invalid")
-        username_base = email.split("@")[0]
-        username = username_base
+    async with pg.get_conn(pool) as conn:
+        user = await auth_queries.get_user_by_oauth(conn, "google", provider_user_id)
+        if user is None:
+            email = google_user.get("email", f"{provider_user_id}@google.invalid")
+            username_base = email.split("@")[0]
+            username = username_base
+            if await auth_queries.get_user_by_username(conn, username):
+                username = f"{username_base}_{provider_user_id}"
+            if await auth_queries.get_user_by_email(conn, email):
+                email = f"{provider_user_id}@google.invalid"
+            count = await auth_queries.get_user_count(conn)
+            user = await auth_queries.create_user(conn, username, email, password_hash=None, is_admin=(count == 0))
+            await auth_queries.create_oauth_connection(conn, user["id"], "google", provider_user_id, access_token)
+            new_user = True
 
-        if get_user_by_username(cfg.AUTH_DB_PATH, username):
-            username = f"{username_base}_{provider_user_id}"
-        if get_user_by_email(cfg.AUTH_DB_PATH, email):
-            email = f"{provider_user_id}@google.invalid"
-
-        count = get_user_count(cfg.AUTH_DB_PATH)
-        user = create_user(cfg.AUTH_DB_PATH, username, email, password_hash=None, is_admin=(count == 0))
-        create_oauth_connection(cfg.AUTH_DB_PATH, user["id"], "google", provider_user_id, access_token)
-        user_db_path = get_user_db_path(user["id"])
-        _init_user_db(user_db_path)
+    if new_user:
+        try:
+            async with pg.get_conn(pool, user_id=user["id"]) as user_conn:
+                await seed_default_anchors(user_conn)
+                await seed_kanban_columns(user_conn)
+        except Exception:
+            logging.getLogger(__name__).error(
+                "Failed to seed defaults for new user %s — account exists but may be missing defaults",
+                user["id"],
+            )
+            raise
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     response = RedirectResponse("/plan/day")
@@ -322,7 +326,8 @@ async def create_invite(request: Request, _auth=Depends(auth_dependency)):
     if not request.state.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    token = create_invite_token(cfg.AUTH_DB_PATH, request.state.user_id, expires_at)
+    async with pg.get_conn(request.app.state.pool) as conn:
+        token = await auth_queries.create_invite_token(conn, request.state.user_id, expires_at)
     return {"token": token, "expires_at": expires_at.isoformat()}
 
 
@@ -330,7 +335,8 @@ async def create_invite(request: Request, _auth=Depends(auth_dependency)):
 async def list_invites(request: Request, _auth=Depends(auth_dependency)):
     if not request.state.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
-    tokens = get_invite_tokens(cfg.AUTH_DB_PATH, request.state.user_id)
+    async with pg.get_conn(request.app.state.pool) as conn:
+        tokens = await auth_queries.get_invite_tokens(conn, request.state.user_id)
     return tokens
 
 
@@ -345,8 +351,9 @@ class TelegramLinkBody(BaseModel):
 @router.post("/auth/telegram-link")
 async def telegram_link(body: TelegramLinkBody, request: Request, _auth=Depends(auth_dependency)):
     """Verify a 6-digit /link code from the Telegram bot and connect the user's account."""
-    chat_id = verify_and_consume_link_code(cfg.AUTH_DB_PATH, body.code)
-    if chat_id is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired link code")
-    set_telegram_connection(cfg.AUTH_DB_PATH, request.state.user_id, chat_id)
+    async with pg.get_conn(request.app.state.pool) as conn:
+        chat_id = await auth_queries.verify_and_consume_link_code(conn, body.code)
+        if chat_id is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired link code")
+        await auth_queries.set_telegram_connection(conn, request.state.user_id, chat_id)
     return {"ok": True, "telegram_chat_id": chat_id}

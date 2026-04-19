@@ -1,7 +1,8 @@
 """Tool: upsert_task — create or update a task in an anchor."""
 from datetime import date
+import db.postgres as pg
 from bot.tools.base import Tool, ToolResult
-from db.queries import upsert_tasks, get_anchors
+from db.pg_queries import upsert_tasks, get_anchors
 
 
 async def _execute(inp: dict, ctx) -> ToolResult:
@@ -12,10 +13,11 @@ async def _execute(inp: dict, ctx) -> ToolResult:
 
     # Validate anchor exists
     try:
-        anchors = get_anchors(ctx.db_path)
-        anchor_ids = {a["id"] for a in anchors}
-        if anchor_id not in anchor_ids:
-            return ToolResult.error(f"Unknown anchor_id: {anchor_id!r}")
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            anchors = await get_anchors(conn)
+            anchor_ids = {a["id"] for a in anchors}
+            if anchor_id not in anchor_ids:
+                return ToolResult.error(f"Unknown anchor_id: {anchor_id!r}")
     except Exception as e:
         return ToolResult.error(f"Could not validate anchor: {e}")
 
@@ -29,7 +31,8 @@ async def _execute(inp: dict, ctx) -> ToolResult:
         task["id"] = inp["task_id"]
 
     try:
-        upsert_tasks(ctx.db_path, target_date, anchor_id, [task])
+        async with pg.get_conn(ctx.pool, ctx.user_id) as conn:
+            await upsert_tasks(conn, target_date, anchor_id, [task])
         return ToolResult.ok(f"Task upserted in {anchor_id}: {text!r}")
     except Exception as e:
         return ToolResult.error(f"Failed to upsert task: {e}")
