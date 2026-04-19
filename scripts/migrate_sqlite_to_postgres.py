@@ -198,6 +198,9 @@ async def migrate(dry_run: bool = False) -> None:
         await conn.close()
         sys.exit(1)
 
+    # SQLite timestamps are naive UTC strings; enforce UTC session to prevent offset shifts.
+    await conn.execute("SET TIME ZONE 'UTC'")
+
     try:
         async with conn.transaction():
             await _migrate_auth(conn)
@@ -301,6 +304,7 @@ async def _migrate_auth(conn: asyncpg.Connection) -> None:
 async def _migrate_users(conn: asyncpg.Connection) -> None:
     auth = _open_sqlite(AUTH_DB)
     users = auth.execute("SELECT id, username FROM users").fetchall()
+    failed: list[tuple[str, str]] = []
 
     for user in users:
         user_id = _uuid.UUID(user["id"])
@@ -310,7 +314,18 @@ async def _migrate_users(conn: asyncpg.Connection) -> None:
             continue
         print(f"\n[{user['username']}] migrating {db_path}")
         uconn = _open_sqlite(db_path)
-        await _migrate_user_data(conn, uconn, user_id)
+        try:
+            async with conn.transaction():
+                await _migrate_user_data(conn, uconn, user_id)
+        except Exception as e:
+            print(f"\n[{user['username']}] FAILED: {e}")
+            failed.append((user["username"], str(e)))
+
+    if failed:
+        print("\n=== MIGRATION FAILURES ===")
+        for username, err in failed:
+            print(f"  FAILED: {username}: {err}")
+        sys.exit(1)
 
 
 async def _migrate_user_data(
@@ -319,6 +334,8 @@ async def _migrate_user_data(
     user_id: _uuid.UUID,
 ) -> None:
     uid = user_id  # shorthand
+    skipped_task_context = 0
+    null_milestone_context = 0
 
     # ── anchors ───────────────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "anchors")
@@ -526,6 +543,7 @@ async def _migrate_user_data(
         context_entry_id = subject_to_pg_id.get(r["context_subject"])
         if context_entry_id is None and r["context_subject"]:
             print(f"  WARN: milestone {r['id']} refs unknown context_subject '{r['context_subject']}'")
+            null_milestone_context += 1
         result = await pg.execute(
             """INSERT INTO milestones
                    (id, user_id, context_entry_id, name, description, target_date,
@@ -563,6 +581,7 @@ async def _migrate_user_data(
         context_entry_id = subject_to_pg_id.get(r["subject"])
         if context_entry_id is None:
             print(f"  WARN: task_context ({r['task_id']}, '{r['subject']}') refs missing context entry")
+            skipped_task_context += 1
             continue
         result = await pg.execute(
             """INSERT INTO task_context (task_id, user_id, context_entry_id)
@@ -634,21 +653,21 @@ async def _migrate_user_data(
     if existing > 0:
         print(f"  edit_history: SKIPPED (PG already has {existing} rows)")
     else:
-        batch = [
-            (uid, r["table_name"], r["operation"], r["record_id"],
-             _parse_json(r["before_json"], context=f"edit_history id={r['id']} before_json"),
-             _parse_json(r["after_json"], context=f"edit_history id={r['id']} after_json"),
-             r["created_at"])
-            for r in rows
-        ]
-        await pg.executemany(
-            """INSERT INTO edit_history
-                   (user_id, table_name, operation, record_id, before_json, after_json, created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7)
-               ON CONFLICT DO NOTHING""",
-            batch,
-        )
-        print(f"  edit_history: {len(batch)}/{len(rows)}")
+        n = 0
+        for r in rows:
+            result = await pg.execute(
+                """INSERT INTO edit_history
+                       (user_id, table_name, operation, record_id, before_json, after_json, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)
+                   ON CONFLICT DO NOTHING""",
+                uid, r["table_name"], r["operation"], r["record_id"],
+                _parse_json(r["before_json"], context=f"edit_history id={r['id']} before_json"),
+                _parse_json(r["after_json"], context=f"edit_history id={r['id']} after_json"),
+                r["created_at"],
+            )
+            if result != "INSERT 0 0":
+                n += 1
+        print(f"  edit_history: {n}/{len(rows)}")
 
     # ── conversation_history ──────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "conversation_history")
@@ -731,7 +750,7 @@ async def _migrate_user_data(
         print(f"  state_monitor_log: SKIPPED (PG already has {existing} rows)")
     else:
         batch = [(uid, r["change_type"], r["entity_id"] or "",
-                  r["score"] or 1, _to_bool(r["consumed"]), r["ts"])
+                  r["score"] if r["score"] is not None else 1, _to_bool(r["consumed"]), r["ts"])
                  for r in rows]
         if batch:
             await pg.executemany(
@@ -804,12 +823,17 @@ async def _migrate_user_data(
                ON CONFLICT DO NOTHING""",
             _uuid.UUID(r["id"]), uid,
             r["chat_id"], r["state"],
-            r["turn_count"] or 0, r["max_turns"] or 10,
+            r["turn_count"] if r["turn_count"] is not None else 0,
+            r["max_turns"] if r["max_turns"] is not None else 10,
             r["summary"], r["created_at"], r["last_activity"],
         )
         if result != "INSERT 0 0":
             n += 1
     print(f"  sessions: {n}/{len(rows)}")
+
+    if skipped_task_context or null_milestone_context:
+        print(f"  SUMMARY: {skipped_task_context} task_context rows skipped, "
+              f"{null_milestone_context} milestones with NULL context_entry_id")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
