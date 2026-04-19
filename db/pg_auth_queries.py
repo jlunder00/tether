@@ -116,6 +116,16 @@ async def create_invite_token(
     return token
 
 
+async def check_invite_token(conn: asyncpg.Connection, token: str) -> bool:
+    """Return True if token exists, is unused, and is not expired."""
+    row = await conn.fetchrow(
+        "SELECT used_by, expires_at FROM invite_tokens WHERE token = $1", token
+    )
+    if row is None or row["used_by"] is not None:
+        return False
+    return row["expires_at"] >= datetime.now(timezone.utc)
+
+
 async def use_invite_token(conn: asyncpg.Connection, token: str, user_id: str) -> bool:
     row = await conn.fetchrow(
         "SELECT used_by, expires_at FROM invite_tokens WHERE token = $1", token
