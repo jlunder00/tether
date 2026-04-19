@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
+from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from db.postgres import register_jsonb_codec
@@ -66,6 +67,15 @@ def _parse_json(val: str | None, *, context: str = "") -> dict | list | None:
 
 def _to_bool(val: Any) -> bool:
     return bool(val)
+
+
+def _parse_dt(val: str | None) -> datetime | None:
+    """Parse SQLite ISO timestamp string → UTC-aware datetime for asyncpg."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(str(val).replace(" ", "T")).replace(tzinfo=timezone.utc)
 
 
 def _topo_sort_nodes(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
@@ -262,7 +272,7 @@ async def _migrate_auth(conn: asyncpg.Connection) -> None:
             row["email"],
             row["password_hash"],
             _to_bool(row["is_admin"]),
-            row["created_at"],
+            _parse_dt(row["created_at"]),
         )
         if result != "INSERT 0 0":
             inserted += 1
@@ -297,8 +307,8 @@ async def _migrate_auth(conn: asyncpg.Connection) -> None:
             row["token"],
             _uuid.UUID(row["created_by"]),
             _uuid.UUID(row["used_by"]) if row["used_by"] else None,
-            row["expires_at"],
-            row["created_at"],
+            _parse_dt(row["expires_at"]),
+            _parse_dt(row["created_at"]),
         )
         if result != "INSERT 0 0":
             inserted += 1
@@ -329,7 +339,7 @@ async def _migrate_auth(conn: asyncpg.Connection) -> None:
                ON CONFLICT DO NOTHING""",
             row["code"],
             row["telegram_chat_id"],
-            row["created_at"],
+            _parse_dt(row["created_at"]),
         )
         if result != "INSERT 0 0":
             inserted += 1
@@ -410,7 +420,7 @@ async def _migrate_user_data(
             """INSERT INTO context_entries (user_id, subject, body, updated_at)
                VALUES ($1,$2,$3,$4)
                ON CONFLICT DO NOTHING""",
-            uid, r["subject"], r["body"], r["updated_at"],
+            uid, r["subject"], r["body"], _parse_dt(r["updated_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -445,7 +455,7 @@ async def _migrate_user_data(
             _to_bool(r["archived"]),
             r["target_date"], r["status"],
             _to_bool(r["status_override"]),
-            r["color"], r["created_at"], r["updated_at"],
+            r["color"], _parse_dt(r["created_at"]), _parse_dt(r["updated_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -462,7 +472,7 @@ async def _migrate_user_data(
                ON CONFLICT DO NOTHING""",
             uid, _uuid.UUID(r["node_id"]),
             r["section_type"], r["name"], r["body"],
-            r["updated_at"], r["position"],
+            _parse_dt(r["updated_at"]), r["position"],
         )
         if result != "INSERT 0 0":
             n += 1
@@ -561,7 +571,7 @@ async def _migrate_user_data(
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT DO NOTHING""",
             uid, r["parent_type"], r["parent_id"],
-            r["url"], r["label"], r["category"], r["created_at"],
+            r["url"], r["label"], r["category"], _parse_dt(r["created_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -585,7 +595,7 @@ async def _migrate_user_data(
             context_entry_id,
             r["name"], r["description"], r["target_date"],
             r["status"], _to_bool(r["status_override"]),
-            r["color"], r["created_at"], r["updated_at"],
+            r["color"], _parse_dt(r["created_at"]), _parse_dt(r["updated_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -636,10 +646,10 @@ async def _migrate_user_data(
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                ON CONFLICT DO NOTHING""",
             uid, r["date"], r["anchor_id"], r["task_id"],
-            r["sequence_started_at"], r["acknowledged_at"],
+            _parse_dt(r["sequence_started_at"]), _parse_dt(r["acknowledged_at"]),
             r["pre_ack_pings_sent"] or 0,
             r["post_ack_pings_sent"] or 0,
-            r["last_ping_at"],
+            _parse_dt(r["last_ping_at"]),
             _to_bool(r["completed"]),
         )
         if result != "INSERT 0 0":
@@ -654,7 +664,7 @@ async def _migrate_user_data(
             """INSERT INTO acknowledgements (plan_date, anchor_id, user_id, acknowledged_at)
                VALUES ($1,$2,$3,$4)
                ON CONFLICT DO NOTHING""",
-            r["plan_date"], r["anchor_id"], uid, r["acknowledged_at"],
+            r["plan_date"], r["anchor_id"], uid, _parse_dt(r["acknowledged_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -670,7 +680,7 @@ async def _migrate_user_data(
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT DO NOTHING""",
             uid, r["plan_date"], r["anchor_id"], r["type"],
-            r["timestamp"], r["accomplished"] or "", r["current_status"] or "",
+            _parse_dt(r["timestamp"]), r["accomplished"] or "", r["current_status"] or "",
         )
         if result != "INSERT 0 0":
             n += 1
@@ -694,7 +704,7 @@ async def _migrate_user_data(
                 uid, r["table_name"], r["operation"], r["record_id"],
                 _parse_json(r["before_json"], context=f"edit_history id={r['id']} before_json"),
                 _parse_json(r["after_json"], context=f"edit_history id={r['id']} after_json"),
-                r["created_at"],
+                _parse_dt(r["created_at"]),
             )
             if result != "INSERT 0 0":
                 n += 1
@@ -708,7 +718,7 @@ async def _migrate_user_data(
     if existing > 0:
         print(f"  conversation_history: SKIPPED (PG already has {existing} rows)")
     else:
-        batch = [(uid, r["role"], r["body"], r["ts"]) for r in rows]
+        batch = [(uid, r["role"], r["body"], _parse_dt(r["ts"])) for r in rows]
         if batch:
             await pg.executemany(
                 "INSERT INTO conversation_history (user_id, role, body, ts) VALUES ($1,$2,$3,$4)",
@@ -727,7 +737,7 @@ async def _migrate_user_data(
                ON CONFLICT DO NOTHING""",
             r["id"], uid, r["session_id"], r["type"],
             r["description"], _parse_json(r["params_json"], context=f"staging_mutations id={r['id']} params_json") or {},
-            r["created_at"], r["updated_at"],
+            _parse_dt(r["created_at"]), _parse_dt(r["updated_at"]),
         )
         if result != "INSERT 0 0":
             n += 1
@@ -741,7 +751,7 @@ async def _migrate_user_data(
     if existing > 0:
         print(f"  orchestrator_conversation: SKIPPED (PG already has {existing} rows)")
     else:
-        batch = [(uid, r["session_id"], r["role"], r["body"], r["round_num"], r["ts"])
+        batch = [(uid, r["session_id"], r["role"], r["body"], r["round_num"], _parse_dt(r["ts"]))
                  for r in rows]
         if batch:
             await pg.executemany(
@@ -761,7 +771,7 @@ async def _migrate_user_data(
         print(f"  invocation_log: SKIPPED (PG already has {existing} rows)")
     else:
         batch = [(uid, r["session_id"], r["stage"],
-                  r["prompt"] or "", r["response"] or "", r["error"], r["ts"])
+                  r["prompt"] or "", r["response"] or "", r["error"], _parse_dt(r["ts"]))
                  for r in rows]
         if batch:
             await pg.executemany(
@@ -781,7 +791,7 @@ async def _migrate_user_data(
         print(f"  state_monitor_log: SKIPPED (PG already has {existing} rows)")
     else:
         batch = [(uid, r["change_type"], r["entity_id"] or "",
-                  r["score"] if r["score"] is not None else 1, _to_bool(r["consumed"]), r["ts"])
+                  r["score"] if r["score"] is not None else 1, _to_bool(r["consumed"]), _parse_dt(r["ts"]))
                  for r in rows]
         if batch:
             await pg.executemany(
@@ -805,7 +815,7 @@ async def _migrate_user_data(
         """INSERT INTO beacon_state (user_id, last_invoked_at)
            VALUES ($1, $2)
            ON CONFLICT DO NOTHING""",
-        uid, last_invoked,
+        uid, _parse_dt(last_invoked),
     )
     print(f"  beacon_state: {'1' if result != 'INSERT 0 0' else '0'}/1")
 
@@ -856,7 +866,7 @@ async def _migrate_user_data(
             r["chat_id"], r["state"],
             r["turn_count"] if r["turn_count"] is not None else 0,
             r["max_turns"] if r["max_turns"] is not None else 10,
-            r["summary"], r["created_at"], r["last_activity"],
+            r["summary"], _parse_dt(r["created_at"]), _parse_dt(r["last_activity"]),
         )
         if result != "INSERT 0 0":
             n += 1
