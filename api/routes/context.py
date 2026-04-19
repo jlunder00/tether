@@ -1,26 +1,29 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from db.queries import (
+import asyncpg
+from db.pg_queries import (
     get_context_entries, upsert_context_entry, delete_context_entry,
     rename_context_subject,
 )
+from db.pool_middleware import get_db_conn
 from api.ws import manager
 from api.auth import auth_dependency
-import api.config as cfg
 
 router = APIRouter()
 
 
 @router.get("/context")
-async def list_context(request: Request, _auth=Depends(auth_dependency), prefix: str = "", top_level_only: bool = False):
-    return get_context_entries(request.state.db_path,
-                               prefix=prefix or None,
-                               top_level_only=top_level_only)
+async def list_context(_auth=Depends(auth_dependency),
+                       conn: asyncpg.Connection = Depends(get_db_conn),
+                       prefix: str = "", top_level_only: bool = False):
+    return await get_context_entries(conn, prefix=prefix or None,
+                                     top_level_only=top_level_only)
 
 
 @router.get("/context/{subject:path}")
-async def get_context(subject: str, request: Request, _auth=Depends(auth_dependency)):
-    entries = get_context_entries(request.state.db_path, prefix=subject)
+async def get_context(subject: str, _auth=Depends(auth_dependency),
+                      conn: asyncpg.Connection = Depends(get_db_conn)):
+    entries = await get_context_entries(conn, prefix=subject)
     match = next((e for e in entries if e["subject"] == subject), None)
     if not match:
         raise HTTPException(status_code=404, detail="Context entry not found")
@@ -28,8 +31,10 @@ async def get_context(subject: str, request: Request, _auth=Depends(auth_depende
 
 
 @router.put("/context/{subject:path}")
-async def put_context(subject: str, body: dict, request: Request, _auth=Depends(auth_dependency)):
-    upsert_context_entry(request.state.db_path, subject, body.get("body", ""))
+async def put_context(subject: str, body: dict, request: Request,
+                      _auth=Depends(auth_dependency),
+                      conn: asyncpg.Connection = Depends(get_db_conn)):
+    await upsert_context_entry(conn, subject, body.get("body", ""))
     await manager.broadcast({"type": "context_updated"}, request.state.user_id)
     return {"ok": True}
 
@@ -39,14 +44,18 @@ class RenameBody(BaseModel):
 
 
 @router.post("/context/{subject:path}/rename")
-async def rename_context(subject: str, body: RenameBody, request: Request, _auth=Depends(auth_dependency)):
-    rename_context_subject(request.state.db_path, subject, body.new_subject)
+async def rename_context(subject: str, body: RenameBody, request: Request,
+                         _auth=Depends(auth_dependency),
+                         conn: asyncpg.Connection = Depends(get_db_conn)):
+    await rename_context_subject(conn, subject, body.new_subject)
     await manager.broadcast({"type": "context_updated"}, request.state.user_id)
     return {"ok": True}
 
 
 @router.delete("/context/{subject:path}")
-async def delete_context(subject: str, request: Request, _auth=Depends(auth_dependency)):
-    delete_context_entry(request.state.db_path, subject)
+async def delete_context(subject: str, request: Request,
+                         _auth=Depends(auth_dependency),
+                         conn: asyncpg.Connection = Depends(get_db_conn)):
+    await delete_context_entry(conn, subject)
     await manager.broadcast({"type": "context_updated"}, request.state.user_id)
     return {"ok": True}
