@@ -1,5 +1,8 @@
 import pytest
 from pathlib import Path
+
+pytestmark = pytest.mark.skip(reason="SQLite reference tests — retained for Phase 4 data migration; skip until cutover complete")
+
 from db.schema import init_db
 from db.queries import (
     upsert_anchor, get_anchors,

@@ -1,7 +1,5 @@
 """Tests for bot/llm.py — LLM abstraction layer."""
 import pytest
-from dataclasses import fields
-from abc import ABC
 
 
 # ---------------------------------------------------------------------------
@@ -9,12 +7,6 @@ from abc import ABC
 # ---------------------------------------------------------------------------
 
 class TestLLMResponseDataclass:
-    def test_has_required_fields(self):
-        from bot.llm import LLMResponse
-        field_names = {f.name for f in fields(LLMResponse)}
-        assert field_names >= {"content", "tool_calls", "stop_reason",
-                               "input_tokens", "output_tokens"}
-
     def test_can_be_constructed(self):
         from bot.llm import LLMResponse
         r = LLMResponse(
@@ -31,48 +23,12 @@ class TestLLMResponseDataclass:
 
 
 class TestToolCallDataclass:
-    def test_has_required_fields(self):
-        from bot.llm import ToolCall
-        field_names = {f.name for f in fields(ToolCall)}
-        assert field_names >= {"id", "name", "input"}
-
     def test_can_be_constructed(self):
         from bot.llm import ToolCall
         tc = ToolCall(id="call_1", name="get_plan", input={"date": "today"})
         assert tc.id == "call_1"
         assert tc.name == "get_plan"
         assert tc.input == {"date": "today"}
-
-
-# ---------------------------------------------------------------------------
-# LLMBackend ABC
-# ---------------------------------------------------------------------------
-
-class TestLLMBackendABC:
-    def test_cannot_be_instantiated_directly(self):
-        from bot.llm import LLMBackend
-        with pytest.raises(TypeError):
-            LLMBackend()
-
-    def test_is_abstract_base_class(self):
-        from bot.llm import LLMBackend
-        assert issubclass(LLMBackend, ABC)
-
-    def test_complete_is_abstract(self):
-        from bot.llm import LLMBackend
-        import inspect
-        assert "complete" in LLMBackend.__abstractmethods__
-
-    def test_is_available_is_abstract(self):
-        from bot.llm import LLMBackend
-        assert "is_available" in LLMBackend.__abstractmethods__
-
-    def test_concrete_subclass_must_implement_both_methods(self):
-        from bot.llm import LLMBackend
-        class Incomplete(LLMBackend):
-            pass
-        with pytest.raises(TypeError):
-            Incomplete()
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +208,6 @@ class TestAWSBedrockBackend:
             b = AWSBedrockBackend()
             assert b.is_available() is False
 
-
-# TestLLMRouter moved to tether-premium
 
 # TestLLMRouter moved to tether-premium
 

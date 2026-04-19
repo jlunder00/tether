@@ -3,9 +3,6 @@ import os
 from pathlib import Path
 
 CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
-DB_PATH = CONFIG_DIR / "tether.db"
-AUTH_DB_PATH = CONFIG_DIR / "auth.db"
-USERS_DB_DIR = CONFIG_DIR / "users"
 SECRETS_FILE = CONFIG_DIR / "secrets.json"
 
 # Load secrets from file at startup — env vars override for dev/CI
