@@ -10,10 +10,12 @@ from db.pg_queries.plans import (
 )
 from db.pg_queries.tasks import (
     upsert_tasks, patch_task_fields, get_task_by_uuid, get_all_tasks,
-    get_unscheduled_tasks, delete_task_by_uuid, move_task_atomic, search_tasks,
+    get_unscheduled_tasks, create_unscheduled_task, delete_task_by_uuid, move_task_atomic,
+    search_tasks, search_entities,
     add_dependency, remove_dependency, get_dependencies_for, get_full_task_dependencies,
     add_task_dependency, remove_task_dependency,
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
+    resolve_blocked_status,
 )
 from db.pg_queries.context import (
     upsert_context_entry, get_context_entries, delete_context_entry, rename_context_subject,
@@ -38,6 +40,7 @@ from db.pg_queries.followup import (
     init_followup_state, get_active_followup_states, acknowledge_followup,
     record_ping, mark_followup_completed, resolve_followup_config,
     upsert_acknowledgement, get_acknowledgements, get_check_ins,
+    insert_check_in,
 )
 from db.pg_queries.sessions import (
     create_session, get_active_session, update_session_state,
@@ -51,7 +54,7 @@ from db.pg_queries.conversation import (
 )
 from db.pg_queries.kanban import (
     seed_kanban_columns, get_kanban_columns,
-    create_kanban_column, update_kanban_column, delete_kanban_column,
+    create_kanban_column, update_kanban_column, delete_kanban_column, migrate_backlog_column,
 )
 from db.pg_queries.settings import (
     get_user_setting, get_all_user_settings, set_user_setting,
