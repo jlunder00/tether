@@ -680,7 +680,7 @@ async def _migrate_user_data(
                VALUES ($1,$2,$3,$4,$5,$6,$7)
                ON CONFLICT DO NOTHING""",
             uid, r["plan_date"], r["anchor_id"], r["type"],
-            _parse_dt(r["timestamp"]), r["accomplished"] or "", r["current_status"] or "",
+            r["timestamp"], r["accomplished"] or "", r["current_status"] or "",
         )
         if result != "INSERT 0 0":
             n += 1
