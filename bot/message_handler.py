@@ -1156,6 +1156,17 @@ def run_polling(token: str, chat_id: str) -> None:
     last_message_db_path: Path | None = None
     last_message_chat_id: str | None = None
     logger.info("Tether bot polling started (offset=%d)", offset)
+    # Start premium meeting event listener if available
+    try:
+        _sched_cfg = load_config()
+        from tether_premium.bot.scheduling.events import start_meeting_event_listener
+        start_meeting_event_listener(
+            api_base_url=_sched_cfg.get("api", {}).get("base_url", "http://localhost:8000"),
+            api_token=_sched_cfg.get("api", {}).get("bot_token", ""),
+        )
+        logger.info("Meeting event listener started")
+    except ImportError:
+        pass
     while True:
         try:
             resp = requests.get(
@@ -1268,6 +1279,13 @@ def run_polling(token: str, chat_id: str) -> None:
                     logger.warning("Beacon anchor transition check failed: %s", _be)
             # Run follow-up pings for the active user's DB
             check_followups(_active_db, _send)
+            # Drain meeting events from premium if available
+            if last_message_chat_id:
+                try:
+                    from tether_premium.bot.scheduling.events import drain_meeting_events
+                    drain_meeting_events(db_path=str(_active_db), send_fn=_send)
+                except ImportError:
+                    pass
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
