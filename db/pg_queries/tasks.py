@@ -83,7 +83,7 @@ async def upsert_tasks(
             status = status or "pending"
             context_subject = task.get("context_subject")
             await conn.execute(
-                "SELECT id FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
+                "SELECT date FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
                 date, user_uuid,
             )
             max_pos = await conn.fetchval(
@@ -299,7 +299,7 @@ async def move_task_atomic(
     )
     if position is None:
         await conn.execute(
-            "SELECT id FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
+            "SELECT date FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
             date, user_uuid,
         )
         position = (await conn.fetchval(
