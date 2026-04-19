@@ -60,6 +60,7 @@ jobs:
                  tests/db/test_pg_nodes.py \
                  tests/db/test_pg_sections.py \
                  tests/db/test_pg_auth_queries.py \
+                 tests/api/ \
                  -v
 
   docker-build:

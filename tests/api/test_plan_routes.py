@@ -1,138 +1,130 @@
 import pytest
 from datetime import date
-from pathlib import Path
-from db.schema import init_db
-from db.queries import upsert_anchor, upsert_plan, upsert_tasks
-from api.main import create_app
-from tests.api.conftest import make_authenticated_client
+from db.pg_queries import upsert_anchor, upsert_plan, upsert_tasks, get_plan
 
-
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "tether.db"
-    init_db(path)
-    upsert_anchor(path, {"id": "grind_am", "name": "The Grind", "time": "08:00",
-                          "duration_minutes": 120, "flexibility": "locked",
-                          "strictness": 4, "color": "#e05c5c", "position": 0})
-    today = str(date.today())
-    upsert_plan(path, today)
-    upsert_tasks(path, today, "grind_am", tasks=["Apply to jobs"], notes="ML roles")
-    return path
-
-
-@pytest.fixture
-def app(db_path):
-    return create_app(db_path=db_path)
+ANCHOR = {
+    "id": "grind_am", "name": "The Grind", "time": "08:00",
+    "duration_minutes": 120, "flexibility": "locked",
+    "strictness": 4, "color": "#e05c5c", "position": 0,
+}
 
 
 @pytest.mark.asyncio
-async def test_get_plan_returns_date(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.get(f"/api/plan/{date.today()}")
+async def test_get_plan_returns_date(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    resp = await api_client.get(f"/api/plan/{date.today()}")
     assert resp.status_code == 200
     assert resp.json()["date"] == str(date.today())
 
 
 @pytest.mark.asyncio
-async def test_get_plan_returns_anchors(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.get(f"/api/plan/{date.today()}")
+async def test_get_plan_returns_anchors(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    resp = await api_client.get(f"/api/plan/{date.today()}")
     assert "grind_am" in resp.json()["anchors"]
 
 
 @pytest.mark.asyncio
-async def test_put_anchor_tasks_updates_db(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.put(
-            f"/api/plan/{date.today()}/anchors/grind_am",
-            json={"tasks": ["Updated task"], "notes": ""}
-        )
+async def test_put_anchor_tasks_updates_db(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    resp = await api_client.put(
+        f"/api/plan/{date.today()}/anchors/grind_am",
+        json={"tasks": ["Updated task"], "notes": ""}
+    )
     assert resp.status_code == 200
-    from db.queries import get_plan
-    plan = get_plan(db_path, str(date.today()))
+    plan = await get_plan(conn, str(date.today()))
     texts = [t["text"] for t in plan["anchors"]["grind_am"]["tasks"]]
     assert "Updated task" in texts
 
 
 @pytest.mark.asyncio
-async def test_get_anchors(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.get("/api/anchors")
+async def test_get_anchors(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    resp = await api_client.get("/api/anchors")
     assert resp.status_code == 200
     assert any(a["id"] == "grind_am" for a in resp.json())
 
 
 @pytest.mark.asyncio
-async def test_put_anchor_tasks_returns_task_objects(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.put(
-            f"/api/plan/{date.today()}/anchors/grind_am",
-            json={"tasks": [{"text": "New task", "status": "pending"}], "notes": ""}
-        )
+async def test_put_anchor_tasks_returns_task_objects(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    resp = await api_client.put(
+        f"/api/plan/{date.today()}/anchors/grind_am",
+        json={"tasks": [{"text": "New task", "status": "pending"}], "notes": ""}
+    )
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is True
-    # Returns all tasks for the anchor (existing + new)
     assert len(data["tasks"]) >= 1
     new_task = next(t for t in data["tasks"] if t["text"] == "New task")
     assert len(new_task["id"]) == 36
 
 
 @pytest.mark.asyncio
-async def test_get_plan_returns_task_objects_with_status(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.get(f"/api/plan/{date.today()}")
+async def test_get_plan_returns_task_objects_with_status(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    await upsert_tasks(conn, str(date.today()), "grind_am", tasks=["Apply to jobs"], notes="ML roles")
+    resp = await api_client.get(f"/api/plan/{date.today()}")
     task = resp.json()["anchors"]["grind_am"]["tasks"][0]
     assert isinstance(task, dict)
     assert "id" in task and "status" in task
 
 
 @pytest.mark.asyncio
-async def test_patch_task_status(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        put_resp = await client.put(
-            f"/api/plan/{date.today()}/anchors/grind_am",
-            json={"tasks": [{"text": "Task"}], "notes": ""}
-        )
-        task_id = put_resp.json()["tasks"][0]["id"]
-        resp = await client.patch(f"/api/tasks/{task_id}", json={"status": "in_progress"})
+async def test_patch_task_status(api_client, conn):
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, str(date.today()))
+    put_resp = await api_client.put(
+        f"/api/plan/{date.today()}/anchors/grind_am",
+        json={"tasks": [{"text": "Task"}], "notes": ""}
+    )
+    task_id = put_resp.json()["tasks"][0]["id"]
+    resp = await api_client.patch(f"/api/tasks/{task_id}", json={"status": "in_progress"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "in_progress"
 
 
 @pytest.mark.asyncio
-async def test_patch_task_not_found(app, db_path):
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.patch("/api/tasks/nonexistent-uuid", json={"status": "done"})
+async def test_patch_task_not_found(api_client, conn):
+    resp = await api_client.patch("/api/tasks/00000000-0000-0000-0000-000000000000", json={"status": "done"})
     assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_move_task(app, db_path):
+async def test_move_task(api_client, conn):
     from datetime import timedelta
     today = str(date.today())
     tomorrow = str(date.today() + timedelta(days=1))
-    async with make_authenticated_client(app, db_path) as client:
-        put_resp = await client.put(
-            f"/api/plan/{today}/anchors/grind_am",
-            json={"tasks": [{"text": "Move me"}], "notes": ""}
-        )
-        task_id = put_resp.json()["tasks"][0]["id"]
-        resp = await client.put(
-            f"/api/tasks/{task_id}/move",
-            json={"date": tomorrow, "anchor_id": "grind_am"}
-        )
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, today)
+    put_resp = await api_client.put(
+        f"/api/plan/{today}/anchors/grind_am",
+        json={"tasks": [{"text": "Move me"}], "notes": ""}
+    )
+    task_id = put_resp.json()["tasks"][0]["id"]
+    resp = await api_client.put(
+        f"/api/tasks/{task_id}/move",
+        json={"date": tomorrow, "anchor_id": "grind_am"}
+    )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
 
 
 @pytest.mark.asyncio
-async def test_get_plan_range_returns_dict_of_day_plans(app, db_path):
+async def test_get_plan_range_returns_dict_of_day_plans(api_client, conn):
     from datetime import date, timedelta
     today = str(date.today())
     tomorrow = str(date.today() + timedelta(days=1))
-    async with make_authenticated_client(app, db_path) as client:
-        resp = await client.get(f"/api/plan/range?start={today}&end={tomorrow}")
+    await upsert_anchor(conn, ANCHOR)
+    await upsert_plan(conn, today)
+    resp = await api_client.get(f"/api/plan/range?start={today}&end={tomorrow}")
     assert resp.status_code == 200
     data = resp.json()
     assert today in data

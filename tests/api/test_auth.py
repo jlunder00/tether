@@ -1,9 +1,7 @@
 """Tests for api/auth.py — password hashing, JWT roundtrip, auth dependency."""
 from __future__ import annotations
 
-import time
 import pytest
-from unittest.mock import patch
 from httpx import AsyncClient, ASGITransport
 
 from api.auth import (
@@ -12,8 +10,6 @@ from api.auth import (
     create_jwt,
     decode_jwt,
 )
-from api.main import create_app
-from db.schema import init_db
 import jwt as pyjwt
 
 
@@ -73,31 +69,17 @@ def test_decode_invalid_jwt_raises():
 # auth_dependency — unauthenticated request returns 401
 # ---------------------------------------------------------------------------
 
-@pytest.fixture
-def db_path(tmp_path):
-    path = tmp_path / "tether.db"
-    init_db(path)
-    return path
-
-
-@pytest.fixture
-def app(db_path):
-    return create_app(db_path=db_path)
-
-
 @pytest.mark.asyncio
-async def test_unauthenticated_request_returns_401(app):
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get("/api/context")
+async def test_unauthenticated_request_returns_401(auth_client):
+    resp = await auth_client.get("/api/context")
     assert resp.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_invalid_token_returns_401(app):
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
+async def test_invalid_token_returns_401(auth_client):
+    # Override the cookie on the auth_client (which has no cookie by default)
+    resp = await auth_client.get(
+        "/api/context",
         cookies={"tether_token": "bad.token.here"},
-    ) as client:
-        resp = await client.get("/api/context")
+    )
     assert resp.status_code == 401

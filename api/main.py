@@ -27,10 +27,11 @@ import api.config as cfg
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
 
-def create_app(db_path: Path | None = None) -> FastAPI:
+def create_app(lifespan_override=None) -> FastAPI:
     cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    actual_lifespan = lifespan_override if lifespan_override is not None else lifespan
 
-    app = FastAPI(title="Tether", lifespan=lifespan)
+    app = FastAPI(title="Tether", lifespan=actual_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
