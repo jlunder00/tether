@@ -391,7 +391,7 @@ async def _migrate_user_data(
                    flexibility, strictness, color, position, followup_config)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                ON CONFLICT DO NOTHING""",
-            _uuid.UUID(r["id"]), uid,
+            _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
             r["name"], r["time"], r["duration_minutes"],
             r["flexibility"], r["strictness"], r["color"], r["position"],
             _parse_json(r["followup_config"], context=f"anchors id={r['id']} followup_config"),
@@ -505,7 +505,7 @@ async def _migrate_user_data(
             _uuid.UUID(r["uuid"]) if r["uuid"] else _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"),
             uid,
             r["plan_date"],
-            _uuid.UUID(r["anchor_id"]) if r["anchor_id"] else None,
+            _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['anchor_id']}") if r["anchor_id"] else None,
             r["position"],
             r["text"], r["status"],
             _parse_json(r["followup_config"], context=f"tasks uuid={r['uuid']} followup_config"),
@@ -828,7 +828,7 @@ async def _migrate_user_data(
                    (id, user_id, name, position, color, match_rules, entry_rules, created_by)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
                ON CONFLICT DO NOTHING""",
-            _uuid.UUID(r["id"]), uid,
+            _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
             r["name"], r["position"], r["color"],
             _parse_json(r["match_rules"], context=f"kanban_columns id={r['id']} match_rules") or {},
             _parse_json(r["entry_rules"], context=f"kanban_columns id={r['id']} entry_rules") or {},
