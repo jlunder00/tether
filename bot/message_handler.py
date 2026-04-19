@@ -278,8 +278,9 @@ async def apply_mutations(mutations: list[dict], pool, user_id: str, today: str)
                     await patch_anchor(conn, m["anchor_id"], **fields)
                 elif op == "update_plan_tasks":
                     date = m.get("date", today)
-                    await upsert_plan(conn, date)
-                    await upsert_tasks(conn, date, m["anchor_id"], m["tasks"], notes="")
+                    async with conn.transaction():
+                        await upsert_plan(conn, date)
+                        await upsert_tasks(conn, date, m["anchor_id"], m["tasks"], notes="")
                 elif op == "update_context":
                     node = await ensure_node_path(conn, m["subject"])
                     await upsert_section(conn, node["id"], "details", m["body"])
