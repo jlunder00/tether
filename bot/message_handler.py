@@ -1286,6 +1286,8 @@ def run_polling(token: str, chat_id: str) -> None:
                     drain_meeting_events(db_path=str(_active_db), send_fn=_send)
                 except ImportError:
                     pass
+                except Exception as _de:
+                    logger.warning("Meeting event drain failed: %s", _de)
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
