@@ -82,6 +82,10 @@ async def upsert_tasks(
             new_uuid = _uuid.uuid4()
             status = status or "pending"
             context_subject = task.get("context_subject")
+            await conn.execute(
+                "SELECT id FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
+                date, user_uuid,
+            )
             max_pos = await conn.fetchval(
                 "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE plan_date = $1 AND anchor_id = $2",
                 date, _uuid.UUID(anchor_id),
@@ -294,6 +298,10 @@ async def move_task_atomic(
         date, user_uuid,
     )
     if position is None:
+        await conn.execute(
+            "SELECT id FROM plans WHERE date = $1 AND user_id = $2 FOR UPDATE",
+            date, user_uuid,
+        )
         position = (await conn.fetchval(
             "SELECT COALESCE(MAX(position), -1) FROM tasks WHERE plan_date = $1 AND anchor_id = $2",
             date, aid,
