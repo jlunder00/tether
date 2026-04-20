@@ -11,6 +11,9 @@ from db.postgres import register_jsonb_codec
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 TEST_USERNAME = "testuser"
 
+TEST_USER_B_ID = "00000000-0000-0000-0000-000000000002"
+TEST_USER_B_NAME = "testuser2"
+
 
 def _db_url() -> str:
     url = os.environ.get("DATABASE_URL")
@@ -29,6 +32,21 @@ async def _ensure_test_user(url: str) -> None:
             ON CONFLICT (id) DO NOTHING
             """,
             TEST_USER_ID, TEST_USERNAME,
+        )
+    finally:
+        await c.close()
+
+
+async def _ensure_test_user_b(url: str) -> None:
+    c = await asyncpg.connect(dsn=url)
+    try:
+        await c.execute(
+            """
+            INSERT INTO users (id, username, email, password_hash, is_admin)
+            VALUES ($1::uuid, $2, 'testb@example.com', 'x', false)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            TEST_USER_B_ID, TEST_USER_B_NAME,
         )
     finally:
         await c.close()
@@ -74,6 +92,40 @@ async def api_client(conn, pool):
     app.dependency_overrides[get_db_conn] = override_get_db_conn
 
     token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        cookies={"tether_token": token},
+    ) as client:
+        yield client
+
+
+@pytest.fixture
+async def api_client_b(conn, pool):
+    """AsyncClient for user B. Shares the same DB connection as api_client so cross-user
+    row visibility works within the same transaction."""
+    from api.main import create_app
+    from db.pool_middleware import get_db_conn
+
+    url = _db_url()
+    await _ensure_test_user_b(url)
+
+    async def override_get_db_conn():
+        # Switch RLS to user B for the duration of this request
+        await conn.execute(
+            "SELECT set_config('app.current_user_id', $1, true)", TEST_USER_B_ID
+        )
+        yield conn
+        # Switch back to user A after request completes
+        await conn.execute(
+            "SELECT set_config('app.current_user_id', $1, true)", TEST_USER_ID
+        )
+
+    app = create_app()
+    app.state.pool = pool
+    app.dependency_overrides[get_db_conn] = override_get_db_conn
+
+    token = create_jwt(TEST_USER_B_ID, TEST_USER_B_NAME, is_admin=False)
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",

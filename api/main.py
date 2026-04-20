@@ -19,6 +19,7 @@ from api.routes import bot as bot_routes
 from api.routes import kanban as kanban_routes
 from api.routes import nodes as nodes_routes
 from api.routes import settings as settings_routes
+from api.routes import connections as connections_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.pool_middleware import lifespan
@@ -77,6 +78,7 @@ def create_app(lifespan_override=None) -> FastAPI:
     app.include_router(kanban_routes.router, prefix="/api")
     app.include_router(nodes_routes.router, prefix="/api")
     app.include_router(settings_routes.router, prefix="/api")
+    app.include_router(connections_routes.router, prefix="/api")
 
     # --- Premium plugin hook ---
     try:
