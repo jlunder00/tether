@@ -821,22 +821,26 @@ async def _migrate_user_data(
 
     # ── kanban_columns ────────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "kanban_columns")
-    n = 0
-    for r in rows:
-        result = await pg.execute(
-            """INSERT INTO kanban_columns
-                   (id, user_id, name, position, color, match_rules, entry_rules, created_by)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-               ON CONFLICT DO NOTHING""",
-            _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
-            r["name"], r["position"], r["color"],
-            _parse_json(r["match_rules"], context=f"kanban_columns id={r['id']} match_rules") or {},
-            _parse_json(r["entry_rules"], context=f"kanban_columns id={r['id']} entry_rules") or {},
-            r["created_by"],
-        )
-        if result != "INSERT 0 0":
-            n += 1
-    print(f"  kanban_columns: {n}/{len(rows)}")
+    existing = await pg.fetchval("SELECT count(*) FROM kanban_columns WHERE user_id = $1", uid)
+    if existing > 0:
+        print(f"  kanban_columns: SKIPPED (already have {existing} columns)")
+    else:
+        n = 0
+        for r in rows:
+            result = await pg.execute(
+                """INSERT INTO kanban_columns
+                       (id, user_id, name, position, color, match_rules, entry_rules, created_by)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                   ON CONFLICT DO NOTHING""",
+                _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
+                r["name"], r["position"], r["color"],
+                _parse_json(r["match_rules"], context=f"kanban_columns id={r['id']} match_rules") or {},
+                _parse_json(r["entry_rules"], context=f"kanban_columns id={r['id']} entry_rules") or {},
+                r["created_by"],
+            )
+            if result != "INSERT 0 0":
+                n += 1
+        print(f"  kanban_columns: {n}/{len(rows)}")
 
     # ── user_settings ─────────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "user_settings")
