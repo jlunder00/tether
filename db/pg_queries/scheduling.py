@@ -319,10 +319,10 @@ async def list_meetings_for_user(
         rows = await conn.fetch(
             """
             SELECT * FROM meeting_requests
-            WHERE status = $2
+            WHERE status = $1
             ORDER BY created_at DESC
             """,
-            user_id, status_filter,
+            status_filter,
         )
     else:
         rows = await conn.fetch(
@@ -330,7 +330,6 @@ async def list_meetings_for_user(
             SELECT * FROM meeting_requests
             ORDER BY created_at DESC
             """,
-            user_id,
         )
     return _rows(rows)
 
