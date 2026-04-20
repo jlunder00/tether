@@ -85,6 +85,8 @@ async def test_rls_isolates_tasks_between_users():
     try:
         # Insert a task as User A — committed so it's visible across connections.
         c = await asyncpg.connect(dsn=url)
+        tr_a = c.transaction()
+        await tr_a.start()
         try:
             await register_jsonb_codec(c)
             result = await c.fetchval(
@@ -96,6 +98,10 @@ async def test_rls_isolates_tasks_between_users():
                 "VALUES ($1::uuid, 'secret task', 'pending') RETURNING uuid",
                 USER_A,
             )
+            await tr_a.commit()
+        except Exception:
+            await tr_a.rollback()
+            raise
         finally:
             await c.close()
 
