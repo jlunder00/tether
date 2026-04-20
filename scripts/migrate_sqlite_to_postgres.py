@@ -384,21 +384,25 @@ async def _migrate_user_data(
 
     # ── anchors ───────────────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "anchors")
-    n = 0
-    for r in rows:
-        result = await pg.execute(
-            """INSERT INTO anchors (id, user_id, name, time, duration_minutes,
-                   flexibility, strictness, color, position, followup_config)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-               ON CONFLICT DO NOTHING""",
-            _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
-            r["name"], r["time"], r["duration_minutes"],
-            r["flexibility"], r["strictness"], r["color"], r["position"],
-            _parse_json(r["followup_config"], context=f"anchors id={r['id']} followup_config"),
-        )
-        if result != "INSERT 0 0":
-            n += 1
-    print(f"  anchors: {n}/{len(rows)}")
+    existing = await pg.fetchval("SELECT count(*) FROM anchors WHERE user_id = $1", uid)
+    if existing > 0:
+        print(f"  anchors: SKIPPED (already have {existing} anchors)")
+    else:
+        n = 0
+        for r in rows:
+            result = await pg.execute(
+                """INSERT INTO anchors (id, user_id, name, time, duration_minutes,
+                       flexibility, strictness, color, position, followup_config)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                   ON CONFLICT DO NOTHING""",
+                _uuid.uuid5(_uuid.NAMESPACE_OID, f"{uid}:{r['id']}"), uid,
+                r["name"], r["time"], r["duration_minutes"],
+                r["flexibility"], r["strictness"], r["color"], r["position"],
+                _parse_json(r["followup_config"], context=f"anchors id={r['id']} followup_config"),
+            )
+            if result != "INSERT 0 0":
+                n += 1
+        print(f"  anchors: {n}/{len(rows)}")
 
     # ── plans ─────────────────────────────────────────────────────────────────
     rows = _safe_fetch_table(sq, "plans")
