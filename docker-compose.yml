@@ -42,7 +42,8 @@ services:
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
+      - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
+      - ADMIN_DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,7 +66,7 @@ services:
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
+      - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
     depends_on:
       api:
         condition: service_healthy
@@ -83,7 +84,7 @@ services:
       - TETHER_CONFIG_DIR=/data
       - TETHER_USER_ID=${TETHER_USER_ID:-}
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
+      - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
     restart: unless-stopped
 
 volumes:
