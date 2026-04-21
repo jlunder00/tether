@@ -2,9 +2,11 @@
 
 Covers:
 - user_integrations and integration_sync_state tables exist
+- tasks has the new event columns (including source_status)
 - RLS on user_integrations: user A cannot see user B's integrations
 - CHECK constraint: task with start_time but no end_time raises error
 - Unique constraint: duplicate (user_id, source, external_id) raises error
+- integration_sync_state unique on (integration_id, calendar_id)
 """
 import os
 import uuid
@@ -79,18 +81,34 @@ async def test_integration_sync_state_table_exists():
 
 @pytest.mark.asyncio
 async def test_tasks_has_event_columns():
-    """tasks table has the new event columns from the migration."""
+    """tasks table has all new event columns from the migration."""
     url = _db_url()
     c = await asyncpg.connect(dsn=url)
     try:
+        expected = {"start_time", "end_time", "source", "external_id", "external_url", "source_status"}
         rows = await c.fetch(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name = 'tasks' AND column_name = ANY($1::text[])",
-            ["start_time", "end_time", "source", "external_id", "external_url"],
+            list(expected),
         )
         found = {r["column_name"] for r in rows}
-        missing = {"start_time", "end_time", "source", "external_id", "external_url"} - found
+        missing = expected - found
         assert not missing, f"tasks table missing columns: {missing}"
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_integration_sync_state_has_calendar_id():
+    """integration_sync_state has calendar_id column (per-calendar granularity)."""
+    url = _db_url()
+    c = await asyncpg.connect(dsn=url)
+    try:
+        row = await c.fetchrow(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = 'integration_sync_state' AND column_name = 'calendar_id'"
+        )
+        assert row is not None, "integration_sync_state missing calendar_id column"
     finally:
         await c.close()
 
@@ -118,7 +136,7 @@ async def test_rls_isolates_integrations_between_users():
             )
             integration_id = await c.fetchval(
                 "INSERT INTO user_integrations (user_id, provider) "
-                "VALUES ($1::uuid, 'google_calendar') RETURNING id",
+                "VALUES ($1, 'google_calendar') RETURNING id",
                 USER_A,
             )
             await tr.commit()
@@ -141,7 +159,7 @@ async def test_rls_isolates_integrations_between_users():
                 "SELECT id FROM user_integrations WHERE id = $1", integration_id
             )
             assert len(rows) == 0, (
-                "User B can see User A's integration — RLS is not enforced on user_integrations"
+                "User B can see User A's integration — RLS not enforced on user_integrations"
             )
         finally:
             await tr.rollback()
@@ -195,6 +213,19 @@ async def test_task_both_times_allowed(conn):  # noqa: F811
     assert task_uuid is not None
 
 
+@pytest.mark.asyncio
+async def test_task_source_status_nullable(conn):  # noqa: F811
+    """source_status defaults to NULL and accepts 'cancelled'."""
+    task_uuid = await conn.fetchval(
+        "INSERT INTO tasks (user_id, text, status, source_status) "
+        "VALUES ($1::uuid, 'soft deleted event', 'pending', 'cancelled') "
+        "RETURNING uuid",
+        TEST_USER_ID,
+    )
+    row = await conn.fetchrow("SELECT source_status FROM tasks WHERE uuid = $1", task_uuid)
+    assert row["source_status"] == "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # Unique constraint: (user_id, source, external_id) WHERE source IS NOT NULL
 # ---------------------------------------------------------------------------
@@ -220,12 +251,48 @@ async def test_task_unique_external_id_constraint(conn):  # noqa: F811
 async def test_task_null_source_allows_duplicates(conn):  # noqa: F811
     """NULL source is excluded from the unique index — multiple null-source tasks allowed."""
     await conn.execute(
-        "INSERT INTO tasks (user_id, text, status, source, external_id) "
-        "VALUES ($1::uuid, 'task 1', 'pending', NULL, NULL)",
+        "INSERT INTO tasks (user_id, text, status) "
+        "VALUES ($1::uuid, 'task 1', 'pending')",
         TEST_USER_ID,
     )
     await conn.execute(
-        "INSERT INTO tasks (user_id, text, status, source, external_id) "
-        "VALUES ($1::uuid, 'task 2', 'pending', NULL, NULL)",
+        "INSERT INTO tasks (user_id, text, status) "
+        "VALUES ($1::uuid, 'task 2', 'pending')",
         TEST_USER_ID,
     )
+
+
+# ---------------------------------------------------------------------------
+# integration_sync_state unique on (integration_id, calendar_id)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sync_state_unique_per_calendar(conn):  # noqa: F811
+    """Two rows with same integration_id but different calendar_id are allowed;
+    duplicate (integration_id, calendar_id) raises UniqueViolationError."""
+    # Insert a real integration row first (bypassing RLS — conn has user set)
+    integration_id = await conn.fetchval(
+        "INSERT INTO user_integrations (user_id, provider) "
+        "VALUES ($1, 'google_calendar') RETURNING id",
+        TEST_USER_ID,
+    )
+
+    # Same integration, two different calendars — both OK
+    await conn.execute(
+        "INSERT INTO integration_sync_state (integration_id, calendar_id) "
+        "VALUES ($1, 'primary')",
+        integration_id,
+    )
+    await conn.execute(
+        "INSERT INTO integration_sync_state (integration_id, calendar_id) "
+        "VALUES ($1, 'work@example.com')",
+        integration_id,
+    )
+
+    # Duplicate (integration_id, calendar_id) must fail
+    with pytest.raises(asyncpg.exceptions.UniqueViolationError):
+        await conn.execute(
+            "INSERT INTO integration_sync_state (integration_id, calendar_id) "
+            "VALUES ($1, 'primary')",
+            integration_id,
+        )
