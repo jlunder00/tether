@@ -81,7 +81,6 @@ async def test_rls_isolates_tasks_between_users():
     url = _db_url()
     await _seed_users(url)
 
-<<<<<<< Updated upstream
     task_uuid = None
     try:
         # Insert a task as User A — committed so it's visible across connections.
@@ -94,20 +93,11 @@ async def test_rls_isolates_tasks_between_users():
                 "SELECT set_config('app.current_user_id', $1, true)", USER_A
             )
             assert result == USER_A, f"set_config did not take effect: got {result!r}"
-=======
-    # Insert a task as User A
-    c = await asyncpg.connect(dsn=url)
-    try:
-        await register_jsonb_codec(c)
-        async with c.transaction():
-            await c.execute("SELECT set_config('app.current_user_id', $1, true)", USER_A)
->>>>>>> Stashed changes
             task_uuid = await c.fetchval(
                 "INSERT INTO tasks (user_id, text, status) "
                 "VALUES ($1::uuid, 'secret task', 'pending') RETURNING uuid",
                 USER_A,
             )
-<<<<<<< Updated upstream
             await tr_a.commit()
         except Exception:
             await tr_a.rollback()
@@ -141,21 +131,3 @@ async def test_rls_isolates_tasks_between_users():
                 await cleanup.execute("DELETE FROM tasks WHERE uuid = $1", task_uuid)
             finally:
                 await cleanup.close()
-=======
-    finally:
-        await c.close()
-
-    # Query tasks as User B — must see nothing
-    c = await asyncpg.connect(dsn=url)
-    try:
-        await register_jsonb_codec(c)
-        async with c.transaction():
-            await c.execute("SELECT set_config('app.current_user_id', $1, true)", USER_B)
-            rows = await c.fetch("SELECT uuid FROM tasks WHERE uuid = $1", task_uuid)
-        assert len(rows) == 0, (
-            "User B can see User A's task — RLS is not enforced. "
-            "The database role is likely a superuser that bypasses RLS."
-        )
-    finally:
-        await c.close()
->>>>>>> Stashed changes
