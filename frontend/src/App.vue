@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
+import BotChat from './components/BotChat.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const chatOpen = ref(false)
 
 async function logout() {
   await authStore.logout()
@@ -50,6 +53,16 @@ async function logout() {
         </div>
       </div>
       <div class="flex items-center gap-2">
+        <!-- Chat toggle pill -->
+        <button
+          @click="chatOpen = !chatOpen"
+          class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+          :class="chatOpen ? 'bg-indigo-600/40 text-white' : 'text-white/60'"
+          title="Toggle chat (Ctrl+/)"
+        >
+          Chat
+        </button>
+
         <router-link v-if="authStore.user?.is_admin" to="/admin"
                      class="text-xs text-white/40 hover:text-white/80 border border-white/10 rounded px-2 py-1 transition-colors">
           Admin
@@ -69,6 +82,42 @@ async function logout() {
       </div>
     </nav>
 
-    <router-view />
+    <!-- Main layout: content + optional chat panel -->
+    <div class="flex h-[calc(100vh-49px)]" v-if="authStore.isAuthenticated">
+      <div class="flex-1 overflow-auto">
+        <router-view />
+      </div>
+
+      <!-- Slide-in chat panel -->
+      <Transition name="chat-slide">
+        <aside
+          v-if="chatOpen"
+          class="w-[420px] flex-shrink-0 border-l border-white/10 bg-gray-900 flex flex-col"
+        >
+          <BotChat @close="chatOpen = false" />
+        </aside>
+      </Transition>
+    </div>
+
+    <!-- Unauthenticated: just render the view -->
+    <router-view v-if="!authStore.isAuthenticated" />
   </div>
 </template>
+
+<style scoped>
+.chat-slide-enter-active,
+.chat-slide-leave-active {
+  transition: width 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
+}
+.chat-slide-enter-from,
+.chat-slide-leave-to {
+  width: 0;
+  opacity: 0;
+}
+.chat-slide-enter-to,
+.chat-slide-leave-from {
+  width: 420px;
+  opacity: 1;
+}
+</style>

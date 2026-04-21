@@ -52,7 +52,6 @@ describe('useChatStore', () => {
   })
 
   it('isStreaming is true during send and false after', async () => {
-    const store = useChatStore()
     // Replace transport with one that yields a single chunk after a tick
     let resolve!: () => void
     const slowTransport: BotTransport = {
