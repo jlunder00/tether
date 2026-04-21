@@ -9,11 +9,7 @@ export interface BotTransport {
 
 export function createMockTransport(): BotTransport {
   async function* send(text: string): AsyncIterable<string> {
-    const reply = `Echo: ${text}\n\nThis is a **mocked** response.`
-    for (const chunk of reply.match(/.{1,6}/g) ?? []) {
-      await new Promise<void>(r => setTimeout(r, 30))
-      yield chunk
-    }
+    yield `Echo: ${text}\n\nThis is a **mocked** response.`
   }
 
   let aliveCb: ((a: boolean) => void) | null = null

@@ -5,5 +5,4 @@ export interface ChatMessage {
   role: ChatRole
   content: string
   ts: number     // epoch ms
-  streaming?: boolean
 }

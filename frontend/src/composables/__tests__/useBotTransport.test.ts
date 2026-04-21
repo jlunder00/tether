@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createMockTransport, getBotTransport, setBotTransport } from '../useBotTransport'
 import type { BotTransport } from '../useBotTransport'
 
@@ -16,13 +16,13 @@ describe('createMockTransport', () => {
     transport.close()
   })
 
-  it('send yields multiple chunks', async () => {
+  it('send yields exactly one chunk (no streaming simulation)', async () => {
     const transport = createMockTransport()
     const chunks: string[] = []
     for await (const chunk of transport.send('test')) {
       chunks.push(chunk)
     }
-    expect(chunks.length).toBeGreaterThan(1)
+    expect(chunks).toHaveLength(1)
     transport.close()
   })
 
