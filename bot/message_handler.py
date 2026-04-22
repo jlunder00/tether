@@ -1199,6 +1199,17 @@ def run_polling(token: str, chat_id: str) -> None:
     last_user_id: str | None = None
     last_chat_id: str | None = None
     logger.info("Tether bot polling started (offset=%d)", offset)
+    # Start premium meeting event listener if available
+    try:
+        _sched_cfg = load_config()
+        from tether_premium.bot.scheduling.events import start_meeting_event_listener
+        start_meeting_event_listener(
+            api_base_url=_sched_cfg.get("api", {}).get("base_url", "http://localhost:8000"),
+            api_token=_sched_cfg.get("api", {}).get("bot_token", ""),
+        )
+        logger.info("Meeting event listener started")
+    except ImportError:
+        pass
     while True:
         try:
             resp = requests.get(
@@ -1316,6 +1327,13 @@ def run_polling(token: str, chat_id: str) -> None:
             # Run follow-up pings for the active user
             if last_user_id:
                 loop.run_until_complete(check_followups(pool, last_user_id, _send))
+                try:
+                    from tether_premium.bot.scheduling.events import drain_meeting_events
+                    loop.run_until_complete(drain_meeting_events(pool=pool, user_id=last_user_id, send_fn=_send))
+                except ImportError:
+                    pass
+                except Exception as _de:
+                    logger.warning("Meeting event drain failed: %s", _de)
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
