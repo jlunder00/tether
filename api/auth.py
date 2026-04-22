@@ -3,7 +3,9 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from fastapi import Request, HTTPException
+from starlette.websockets import WebSocket as StarletteWebSocket
 import api.config as cfg
+from typing import Union
 
 
 def hash_password(password: str) -> str:
@@ -28,7 +30,7 @@ def decode_jwt(token: str) -> dict:
     return jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
 
 
-async def auth_dependency(request: Request):
+async def auth_dependency(request: Union[Request, StarletteWebSocket]):
     """FastAPI dependency — extracts JWT from cookie, sets request.state.user_id."""
     token = request.cookies.get("tether_token")
     if not token:
