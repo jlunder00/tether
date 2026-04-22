@@ -2,10 +2,8 @@ from __future__ import annotations
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
-from fastapi import Request, HTTPException
-from starlette.websockets import WebSocket as StarletteWebSocket
+from fastapi import Request, HTTPException, WebSocket
 import api.config as cfg
-from typing import Union
 
 
 def hash_password(password: str) -> str:
@@ -29,14 +27,18 @@ def create_jwt(user_id: str, username: str, is_admin: bool) -> str:
 def decode_jwt(token: str) -> dict:
     return jwt.decode(token, cfg.JWT_SECRET, algorithms=["HS256"])
 
-
-async def auth_dependency(request: Union[Request, StarletteWebSocket]):
-    """FastAPI dependency — extracts JWT from cookie, sets request.state.user_id."""
-    token = request.cookies.get("tether_token")
+def _decode_token_from_cookies(cookies: dict) -> dict:
+    token = cookies.get('tether_token')
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise ValueError("missing")
+    return decode_jwt(token)
+
+async def auth_dependency(request: Request):
+    """FastAPI dependency — extracts JWT from cookie, sets request.state.user_id."""
     try:
-        payload = decode_jwt(token)
+        payload = _decode_token_from_cookies(request.cookies)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
@@ -44,4 +46,21 @@ async def auth_dependency(request: Union[Request, StarletteWebSocket]):
     request.state.user_id = payload["user_id"]
     request.state.username = payload["username"]
     request.state.is_admin = payload.get("is_admin", False)
+    return payload
+
+async def ws_auth_dependency(websocket: WebSocket):
+    try:
+        payload = _decode_token_from_cookies(websocket.cookies)
+    except ValueError:
+        await websocket.close(code=1008)
+        return
+    except jwt.ExpiredSignatureError:
+        await websocket.close(code=1008)
+        return
+    except jwt.InvalidTokenError:
+        await websocket.close(code=1008)
+        return
+    websocket.state.user_id = payload["user_id"]
+    websocket.state.username = payload["username"]
+    websocket.state.is_admin = payload.get("is_admin", False)
     return payload
