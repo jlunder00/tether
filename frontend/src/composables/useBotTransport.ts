@@ -42,7 +42,8 @@ export function setBotTransport(t: BotTransport): void {
 }
 
 export function createWebSocketTransport(): BotTransport {
-  const ws = new WebSocket(`ws://${location.host}/api/bot/chat`)
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  const ws = new WebSocket(`${proto}://${location.host}/api/bot/chat`)
 
   let resolve: ((val: MessageEvent) => void) | null = null
   const queue: MessageEvent[] = []

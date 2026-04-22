@@ -13,7 +13,7 @@ export const useChatStore = defineStore('chat', () => {
 
   async function send(text: string): Promise<void> {
     const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: location.protocol === 'https:' ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36),
       role: 'user',
       content: text,
       ts: Date.now(),
@@ -21,7 +21,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push(userMsg)
 
     const botMsg: ChatMessage = {
-      id: crypto.randomUUID(),
+      id: location.protocol === 'https:' ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36),
       role: 'bot',
       content: '',
       ts: Date.now(),
