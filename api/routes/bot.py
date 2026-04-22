@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 import asyncpg, asyncio
 from db.pg_queries import get_last_bot_activity
 from db.pool_middleware import get_db_conn
-from api.auth import auth_dependency
+from api.auth import auth_dependency, ws_auth_dependency
 from bot.message_handler import handle_message
 
 router = APIRouter()
@@ -25,7 +25,7 @@ async def bot_health(_auth=Depends(auth_dependency),
 
 @router.websocket("/bot/chat")
 async def bot_chat(websocket: WebSocket,
-                   _auth=Depends(auth_dependency)):
+                   _auth=Depends(ws_auth_dependency)):
     pool = websocket.app.state.pool
     user_id = websocket.state.user_id
     await websocket.accept()
