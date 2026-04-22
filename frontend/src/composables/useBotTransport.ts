@@ -40,3 +40,44 @@ export function setBotTransport(t: BotTransport): void {
   _transport?.close()
   _transport = t
 }
+
+export function createWebSocketTransport(): BotTransport {
+  const ws = new WebSocket(`ws://${location.host}/api/bot/chat`)
+
+  let resolve: ((val: MessageEvent) => void) | null = null
+  const queue: MessageEvent[] = []
+
+  ws.onmessage = (evt) => {
+    if (resolve) { resolve(evt); resolve = null }
+    else queue.push(evt)
+  }
+
+  return {
+    async *send(text: string) {
+      // 1. send the message
+      ws.send(JSON.stringify({ type: 'user', content: text}))
+
+      // 2. wait for chunks until "done"
+      while (true) {
+        const evt: MessageEvent = await new Promise(r => {
+          if (queue.length) r(queue.shift()!)
+            else resolve = r
+        })
+        const msg = JSON.parse(evt.data)
+        if (msg.type === 'chunk') yield msg.content
+        if (msg.type === 'done') return
+      }
+    },
+
+    onHeartbeat(cb) {
+      // listen for {"type": "heartbeat"}
+      // backend doesnt send thi. just call as true immediately
+      cb(true)
+      return () => {}
+    },
+    
+    close() {
+      ws.close()
+    }
+  }
+}
