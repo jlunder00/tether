@@ -20,6 +20,11 @@ follow_up:
   interval_minutes: 15
   max_attempts: 4
 
+# Bot-to-API authentication (required for agent coordination features)
+api:
+  base_url: "http://localhost:8000"
+  bot_token: ""  # JWT or shared secret — set this to enable meeting coordination
+
 # LLM model assignments per pipeline role.
 # Values are passed directly to the --model flag of `claude -p`.
 # Remove any key to fall back to the built-in default for that role.
