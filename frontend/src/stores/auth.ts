@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { setBotTransport, getBotTransport, createWebSocketTransport } from '@/composables/useBotTransport'
+import { setBotTransport, getBotTransport, createWebSocketTransport } from '../composables/useBotTransport'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<{ user_id: string; username: string; is_admin: boolean } | null>(null)
