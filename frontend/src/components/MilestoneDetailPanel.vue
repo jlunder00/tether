@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { api } from '../lib/api'
-import DetailPanel from './DetailPanel.vue'
 import SearchAutocomplete from './SearchAutocomplete.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { useMilestoneStore } from '../stores/milestones'
 import { usePlanStore } from '../stores/plan'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
+import { useSlideOver } from '../composables/useSlideOver'
 
 const props = defineProps<{ milestoneId: string }>()
-const router = useRouter()
+const { push: pushPanel, pop: popPanel } = useSlideOver()
 const milestoneStore = useMilestoneStore()
 const planStore = usePlanStore()
 
@@ -93,21 +92,21 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 function openTask(taskId: string) {
-  router.push(`/plan/day/${planStore.activeDate}/task/${taskId}`)
+  pushPanel({ kind: 'task', entityId: taskId })
 }
 
 function openDep(type: string, id: string) {
   if (type === 'task') {
-    router.push(`/plan/day/${planStore.activeDate}/task/${id}`)
+    pushPanel({ kind: 'task', entityId: id })
   } else {
-    router.push(`/plan/day/${planStore.activeDate}/milestone/${id}`)
+    pushPanel({ kind: 'milestone', entityId: id })
   }
 }
 
 async function deleteMilestone() {
   if (!confirm('Delete this milestone?')) return
   await milestoneStore.deleteMilestone(props.milestoneId)
-  router.back()
+  popPanel()
 }
 
 onMounted(async () => {
@@ -117,17 +116,15 @@ onMounted(async () => {
 </script>
 
 <template>
-  <DetailPanel>
-    <div class="p-5 flex flex-col gap-5 text-white min-h-full">
+  <div class="p-5 flex flex-col gap-5 text-white min-h-full">
 
-      <!-- Header -->
+      <!-- Header context info (close button is in SlideOverStack) -->
       <div class="flex items-start justify-between gap-2">
         <div class="flex items-center gap-2 flex-wrap">
           <span v-if="milestone" class="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60">
             {{ milestone.context_subject }}
           </span>
         </div>
-        <button @click="router.back()" class="text-white/40 hover:text-white/80 text-xl leading-none flex-shrink-0">✕</button>
       </div>
 
       <!-- Not found -->
@@ -301,6 +298,5 @@ onMounted(async () => {
         </div>
 
       </template>
-    </div>
-  </DetailPanel>
+  </div>
 </template>

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useContextStore } from '../stores/context'
 import type { ContextNode, SectionFileInfo } from '../stores/context'
 import { api } from '../lib/api'
 import ContextTreeNode from './ContextTreeNode.vue'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
+import { useSlideOver } from '../composables/useSlideOver'
 
 const props = withDefaults(defineProps<{
   node: ContextNode
@@ -16,7 +16,7 @@ const props = withDefaults(defineProps<{
 })
 
 const contextStore = useContextStore()
-const router = useRouter()
+const { push: pushPanel } = useSlideOver()
 
 // --- Local state (per-instance) ---
 const expanded = ref(false)
@@ -503,7 +503,7 @@ async function addChild() {
 
         <div class="flex gap-2 shrink-0">
           <button v-if="node.node_type === 'milestone'"
-                  @click.stop="router.push(`/context/milestone/${node.id}`)"
+                  @click.stop="pushPanel({ kind: 'milestone', entityId: node.id })"
                   class="text-xs text-blue-400/60 hover:text-blue-400">Detail</button>
           <template v-if="renaming">
             <button @click="saveRename" class="text-xs text-green-400/70 hover:text-green-400">Save</button>

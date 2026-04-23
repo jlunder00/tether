@@ -1,21 +1,11 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
-import { usePlanStore } from '../stores/plan'
+import { useSlideOver } from '../composables/useSlideOver'
 const milestoneStore = useMilestoneStore()
-const planStore = usePlanStore()
-const router = useRouter()
-const route = useRoute()
-
-// Derive the route base for detail panel navigation based on current view
-const routeBase = computed(() => {
-  if (route.path.startsWith('/kanban')) return '/kanban'
-  if (route.path.startsWith('/dashboard')) return '/dashboard'
-  return `/plan/day/${planStore.activeDate}`
-})
+const { push: pushPanel } = useSlideOver()
 
 const props = withDefaults(defineProps<{
   task: Task
@@ -130,7 +120,7 @@ function toggleFollowup(enabled: boolean) {
       :style="STATUS_CARD_STYLE[task.status]"
       :draggable="!editable && !!task.id"
       @dragstart="onDragStart"
-      @click="navigable && task.id && router.push(`${routeBase}/task/${task.id}`)">
+      @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })">
     <div class="flex flex-col gap-1 p-2">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
     <div class="absolute top-1.5 right-1.5">
@@ -192,7 +182,7 @@ function toggleFollowup(enabled: boolean) {
         </span>
         <span
           v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
-          @click.stop="router.push(`/plan/day/${planStore.activeDate}/milestone/${m.id}`)"
+          @click.stop="pushPanel({ kind: 'milestone', entityId: m.id })"
           :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
           class="text-[10px] px-1.5 py-0.5 rounded border cursor-pointer"
           :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">

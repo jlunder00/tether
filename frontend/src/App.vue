@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 import BotChat from './components/BotChat.vue'
+import SlideOverStack from './components/SlideOverStack.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -106,6 +107,9 @@ async function logout() {
 
     <!-- Unauthenticated: just render the view -->
     <router-view v-if="!authStore.isAuthenticated" />
+
+    <!-- Global slide-over panel stack (outside router-view so it persists across routes) -->
+    <SlideOverStack v-if="authStore.isAuthenticated" />
   </div>
 </template>
 

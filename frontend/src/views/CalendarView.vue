@@ -12,7 +12,6 @@ const planStore = usePlanStore()
 
 // ─── View state ───────────────────────────────────────────────
 const anchorPanelOpen = ref(true)
-const viewMode = ref<'day' | 'week'>('week')
 
 // ─── Week date range ──────────────────────────────────────────
 function localDateString(d: Date): string {
