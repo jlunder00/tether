@@ -27,6 +27,11 @@ async function logout() {
                        :class="$route.path.startsWith('/dashboard') ? 'bg-white/20 text-white' : 'text-white/60'">
             Dashboard
           </router-link>
+          <router-link to="/calendar"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
+                       :class="$route.path.startsWith('/calendar') ? 'bg-white/20 text-white' : 'text-white/60'">
+            Calendar
+          </router-link>
           <router-link to="/plan/day"
                        class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-white/10"
                        active-class="bg-white/20 text-white"

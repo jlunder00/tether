@@ -9,6 +9,15 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
     { path: '/admin', name: 'admin', component: () => import('./views/AdminView.vue') },
     {
+      path: '/calendar',
+      name: 'calendar',
+      component: () => import('./views/CalendarView.vue'),
+      children: [
+        { path: 'task/:taskId', name: 'calendar-task', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+        { path: 'event/:eventId', name: 'calendar-event', component: () => import('./components/TaskDetailPanel.vue'), props: true },
+      ],
+    },
+    {
       path: '/dashboard',
       name: 'dashboard',
       component: () => import('./views/DashboardView.vue'),
