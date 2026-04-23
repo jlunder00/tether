@@ -3,10 +3,6 @@ import { ref } from 'vue'
 import { api } from '../lib/api'
 import type { CalendarEvent } from '../types/events'
 
-// Fixture data used until GET /api/events is implemented on the backend.
-// Remove this and uncomment the real fetch once the endpoint ships.
-const FIXTURE_EVENTS: CalendarEvent[] = []
-
 export const useEventStore = defineStore('events', () => {
   const events = ref<CalendarEvent[]>([])
   const loading = ref(false)
@@ -14,25 +10,17 @@ export const useEventStore = defineStore('events', () => {
 
   /**
    * Fetch events for a date range.
-   * TODO: swap fixture for real API once backend ships:
-   *   const resp = await api(`/api/events?start=${start}&end=${end}`)
-   *   if (!resp.ok) throw new Error(`${resp.status}`)
-   *   events.value = await resp.json()
+   * Backend GET /api/events is not yet implemented — falls back to an empty
+   * list on any failure so the calendar still renders.
    */
   async function fetchEvents(start: string, end: string) {
     loading.value = true
     error.value = null
     try {
-      // Optimistic: attempt real API; fall back to fixture on 404/network error
       const resp = await api(`/api/events?start=${start}&end=${end}`)
-      if (resp.ok) {
-        events.value = await resp.json()
-      } else {
-        // Backend not yet implemented — use empty fixture
-        events.value = FIXTURE_EVENTS.filter(e => e.start_time >= start && e.start_time <= end)
-      }
+      events.value = resp.ok ? await resp.json() : []
     } catch {
-      events.value = FIXTURE_EVENTS.filter(e => e.start_time >= start && e.start_time <= end)
+      events.value = []
     } finally {
       loading.value = false
     }

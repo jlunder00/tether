@@ -8,6 +8,18 @@ const { stack, pop, close, restoreFromUrl } = useSlideOver()
 
 const hasAnyPanel = computed(() => stack.value.length > 0)
 
+// Each panel behind the top one is slightly offset, dimmed, and non-interactive.
+function panelStyle(index: number) {
+  const depth = stack.value.length - 1 - index
+  const isTop = depth === 0
+  return {
+    transform: isTop ? 'translateX(0)' : `translateX(-${depth * 16}px)`,
+    pointerEvents: isTop ? 'auto' : 'none',
+    filter: isTop ? 'none' : 'brightness(0.6)',
+    zIndex: 50 + index,
+  }
+}
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape' && hasAnyPanel.value) pop()
 }
@@ -36,13 +48,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
         v-for="(panel, index) in stack"
         :key="panel.id"
         class="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] lg:w-[520px] bg-gray-900 border-l border-white/10 shadow-2xl overflow-y-auto"
-        :style="{
-          // Staggered depth: each panel behind the top one is slightly offset + dimmed
-          transform: index < stack.length - 1 ? `translateX(-${(stack.length - 1 - index) * 16}px)` : 'translateX(0)',
-          pointerEvents: index === stack.length - 1 ? 'auto' : 'none',
-          filter: index < stack.length - 1 ? 'brightness(0.6)' : 'none',
-          zIndex: 50 + index,
-        }"
+        :style="panelStyle(index)"
       >
         <!-- Back button / close -->
         <div class="flex items-center gap-2 px-4 py-3 border-b border-white/10 flex-shrink-0">
