@@ -3,9 +3,11 @@
 Transport      Auth mechanism
 ─────────────  ──────────────────────────────────────────────────
 SSE (network)  X-Tether-API-Key header  OR  Authorization: Bearer <key>
-               Falls back to ?api_key=<key> query param for clients
-               that cannot set custom headers (e.g. some SSE libraries).
+               Query-param fallback intentionally omitted — keys in URLs
+               appear verbatim in nginx/proxy access logs.
 stdio (local)  TETHER_USER_ID env var (single-user process, trusted caller)
+               The env-var fallback is NOT honoured by the HTTP middleware —
+               stdio never hits ASGI, so there is no overlap.
 
 The resolved user_id is stored in a contextvars.ContextVar so all MCP
 tool handlers can read it without needing to carry a connection object
@@ -16,7 +18,6 @@ from __future__ import annotations
 import os
 from contextvars import ContextVar
 from typing import Callable
-from urllib.parse import parse_qs
 
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -32,34 +33,33 @@ def get_user_id() -> str | None:
     """Return the user_id for the current MCP request.
 
     SSE transport: resolved from API key by middleware.
-    stdio transport: falls back to TETHER_USER_ID env var.
+    stdio transport: falls back to TETHER_USER_ID env var (trusted local caller).
     """
     return _user_id_var.get() or os.environ.get("TETHER_USER_ID")
 
 
 def _extract_key(scope: Scope) -> str | None:
-    """Pull API key from header or query string."""
-    headers = dict(scope.get("headers", []))
+    """Pull API key from X-Tether-API-Key or Authorization: Bearer header.
 
-    # X-Tether-API-Key header (preferred)
-    key = headers.get(b"x-tether-api-key", b"").decode().strip()
-    if key:
-        return key
+    Uses first-match iteration (not dict) so duplicate headers are handled
+    with conventional first-wins semantics rather than silently keeping the
+    last value, which could let a proxy-injected header be overridden by an
+    attacker-supplied one later in the list.
 
-    # Authorization: Bearer <key>
-    auth = headers.get(b"authorization", b"").decode().strip()
-    if auth.lower().startswith("bearer "):
-        candidate = auth[7:].strip()
-        if candidate:
-            return candidate
-
-    # ?api_key=<key> query param fallback
-    qs = scope.get("query_string", b"").decode()
-    params = parse_qs(qs)
-    candidates = params.get("api_key", [])
-    if candidates:
-        return candidates[0].strip()
-
+    Query-param support is intentionally absent — keys in URLs appear in
+    server access logs as plaintext credentials.
+    """
+    for name, value in scope.get("headers", []):
+        if name == b"x-tether-api-key":
+            key = value.decode().strip()
+            if key:
+                return key
+        elif name == b"authorization":
+            auth = value.decode().strip()
+            if auth.lower().startswith("bearer "):
+                candidate = auth[7:].strip()
+                if candidate:
+                    return candidate
     return None
 
 
@@ -76,6 +76,11 @@ class TetherAPIKeyMiddleware:
 
     Sets _user_id_var so tool handlers can call get_user_id() without
     needing request context threaded through parameters.
+
+    The TETHER_USER_ID env-var fallback is deliberately NOT applied here.
+    It belongs to the stdio transport (get_user_id()) where the caller is
+    a local trusted process. Applying it to HTTP would let any unauthenticated
+    request resolve as the operator's account whenever the env var is set.
     """
 
     def __init__(self, app: ASGIApp, pool_factory: Callable) -> None:
@@ -90,17 +95,6 @@ class TetherAPIKeyMiddleware:
         raw_key = _extract_key(scope)
 
         if raw_key is None:
-            # stdio transport doesn't hit HTTP — if we got here without a key,
-            # check for the legacy env var (allows existing single-user deployments
-            # to keep working without reconfiguration until they create an API key).
-            env_uid = os.environ.get("TETHER_USER_ID")
-            if env_uid:
-                token = _user_id_var.set(env_uid)
-                try:
-                    await self.app(scope, receive, send)
-                finally:
-                    _user_id_var.reset(token)
-                return
             resp = _make_401("API key required (X-Tether-API-Key header or Authorization: Bearer)")
             await resp(scope, receive, send)
             return

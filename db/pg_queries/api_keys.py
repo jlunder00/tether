@@ -99,28 +99,15 @@ async def validate_key(
 ) -> str | None:
     """Validate a raw API key and return the user_id, or None if invalid/revoked.
 
-    Updates last_used_at on success. Requires unscoped connection (no RLS).
+    Delegates to the validate_api_key() SECURITY DEFINER SQL function which
+    executes as the function owner (superuser, BYPASSRLS). This is required
+    because api_keys has RLS enabled and validate_key is called on an unscoped
+    connection before a user_id is known.
+
+    The function also updates last_used_at atomically for valid keys.
     """
     key_hash = _hash(raw_key)
-
-    row = await conn.fetchrow(
-        """
-        SELECT id, user_id
-        FROM api_keys
-        WHERE key_hash = $1 AND revoked_at IS NULL
-        """,
-        key_hash,
-    )
-    if row is None:
+    row = await conn.fetchrow("SELECT validate_api_key($1) AS user_id", key_hash)
+    if row is None or row["user_id"] is None:
         return None
-
-    # Fire-and-forget last_used update — best effort, don't fail the request
-    try:
-        await conn.execute(
-            "UPDATE api_keys SET last_used_at = now() WHERE id = $1",
-            row["id"],
-        )
-    except Exception:
-        pass
-
     return str(row["user_id"])

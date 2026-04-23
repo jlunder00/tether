@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import asyncpg
 
 from api.auth import auth_dependency
@@ -13,7 +14,7 @@ router = APIRouter()
 
 
 class CreateKeyBody(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=100)
 
 
 @router.post("/keys", status_code=201)
@@ -39,10 +40,10 @@ async def list_keys(
 
 @router.delete("/keys/{key_id}")
 async def revoke_key(
-    key_id: str,
+    key_id: uuid.UUID,
     request: Request,
     _auth=Depends(auth_dependency),
     conn: asyncpg.Connection = Depends(get_db_conn),
 ):
-    await key_queries.revoke_key(conn, key_id, request.state.user_id)
+    await key_queries.revoke_key(conn, str(key_id), request.state.user_id)
     return {"ok": True}
