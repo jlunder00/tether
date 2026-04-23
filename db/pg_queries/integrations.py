@@ -48,11 +48,11 @@ async def upsert_integration(
              scopes, metadata, enabled)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (user_id, provider) DO UPDATE SET
-            access_token  = EXCLUDED.access_token,
-            refresh_token = EXCLUDED.refresh_token,
-            token_expiry  = EXCLUDED.token_expiry,
-            scopes        = EXCLUDED.scopes,
-            metadata      = EXCLUDED.metadata,
+            access_token  = COALESCE(EXCLUDED.access_token,  user_integrations.access_token),
+            refresh_token = COALESCE(EXCLUDED.refresh_token, user_integrations.refresh_token),
+            token_expiry  = COALESCE(EXCLUDED.token_expiry,  user_integrations.token_expiry),
+            scopes        = COALESCE(EXCLUDED.scopes,        user_integrations.scopes),
+            metadata      = COALESCE(EXCLUDED.metadata,      user_integrations.metadata),
             enabled       = EXCLUDED.enabled
         RETURNING *
         """,

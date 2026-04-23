@@ -81,6 +81,28 @@ async def test_upsert_integration_updates_existing_row(conn):  # noqa: F811
 
 
 # ---------------------------------------------------------------------------
+# upsert_integration — partial update preserves existing fields
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_upsert_integration_preserves_unmentioned_fields(conn):  # noqa: F811
+    """Updating only access_token must not wipe refresh_token or scopes."""
+    await q.upsert_integration(
+        conn, TEST_USER_ID, PROVIDER,
+        access_token="at_old",
+        refresh_token="rt_keep",
+        scopes=["calendar.readonly"],
+    )
+    updated = await q.upsert_integration(
+        conn, TEST_USER_ID, PROVIDER,
+        access_token="at_new",
+    )
+    assert updated["access_token"] == "at_new"
+    assert updated["refresh_token"] == "rt_keep"
+    assert "calendar.readonly" in updated["scopes"]
+
+
+# ---------------------------------------------------------------------------
 # delete_integration
 # ---------------------------------------------------------------------------
 
