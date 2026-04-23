@@ -82,3 +82,15 @@ async def test_revoke_key_wrong_owner_does_nothing(auth_conn):
     # key should still be valid
     result = await validate_key(auth_conn, raw_key)
     assert result == TEST_USER_ID
+
+
+async def test_validate_revoked_key_does_not_update_last_used(auth_conn):
+    """Validating a revoked key must not update last_used_at."""
+    raw_key, record = await create_key(auth_conn, TEST_USER_ID, "revoked-no-touch")
+    await revoke_key(auth_conn, record["id"], TEST_USER_ID)
+    result = await validate_key(auth_conn, raw_key)
+    assert result is None
+    rows = await auth_conn.fetch(
+        "SELECT last_used_at FROM api_keys WHERE id = $1::uuid", record["id"]
+    )
+    assert rows[0]["last_used_at"] is None
