@@ -2,6 +2,7 @@
 from __future__ import annotations
 import pytest
 
+from tests.db.pg_conftest import auth_conn  # noqa: F401
 from db.pg_queries.api_keys import (
     create_key,
     list_keys,
