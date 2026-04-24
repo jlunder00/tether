@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import asyncpg
 
-from db.pg_queries.tasks import promote_task_to_event, get_events_for_range
+from db.pg_queries.tasks import promote_task_to_event, get_events_for_range, update_event_time
 from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency
 
@@ -17,6 +17,11 @@ class PromoteEventBody(BaseModel):
     start_time: str
     end_time: str
     title: str | None = None  # informational — task text is already set in the DB
+
+
+class MoveEventBody(BaseModel):
+    start_time: str
+    end_time: str
 
 
 @router.post("/events", status_code=201)
@@ -32,6 +37,21 @@ async def post_event(
     if event is None:
         raise HTTPException(status_code=404, detail="Task not found")
     logger.info("events: promoted task %s to event at %s", body.task_id, body.start_time)
+    return event
+
+
+@router.patch("/events/{event_id}")
+async def patch_event(
+    event_id: str,
+    body: MoveEventBody,
+    _auth=Depends(auth_dependency),
+    conn: asyncpg.Connection = Depends(get_db_conn),
+):
+    """Reposition a calendar event to a new time slot (move/resize)."""
+    event = await update_event_time(conn, event_id, body.start_time, body.end_time)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    logger.info("events: moved event %s to %s", event_id, body.start_time)
     return event
 
 

@@ -634,3 +634,29 @@ async def get_events_for_range(
         start, end,
     )
     return [_row_to_event(r) for r in rows]
+
+
+async def update_event_time(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    start_time: str,
+    end_time: str,
+) -> dict | None:
+    """Reposition a calendar event to a new time slot.
+
+    Only updates tasks that already have start_time set (i.e. are promoted events).
+    Returns CalendarEvent-shaped dict, or None if not found / not an event.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1::timestamptz,
+            end_time   = $2::timestamptz,
+            version    = version + 1
+        WHERE uuid = $3
+          AND start_time IS NOT NULL
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        """,
+        start_time, end_time, _uuid.UUID(event_uuid),
+    )
+    return _row_to_event(row) if row else None

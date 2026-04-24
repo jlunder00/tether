@@ -115,3 +115,44 @@ async def test_get_events_empty_outside_range(api_client, conn):
     events = resp.json()
     ids = [e["id"] for e in events]
     assert task_id not in ids
+
+
+# ─── PATCH /api/events/:id ────────────────────────────────────────────────────
+
+async def test_patch_event_moves_time(api_client, conn):
+    """Moving a promoted event to a new slot returns the updated CalendarEvent."""
+    task_id = await _insert_task(conn, "Movable event")
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-05-02T09:00:00Z",
+        "end_time": "2026-05-02T10:00:00Z",
+        "title": "Movable event",
+    })
+
+    resp = await api_client.patch(f"/api/events/{task_id}", json={
+        "start_time": "2026-05-02T14:00:00Z",
+        "end_time": "2026-05-02T15:00:00Z",
+    })
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["id"] == task_id
+    assert "14:00" in data["start_time"] or "14" in data["start_time"]
+    assert "15:00" in data["end_time"] or "15" in data["end_time"]
+
+
+async def test_patch_event_404_not_an_event(api_client, conn):
+    """Patching a task that was never promoted (no start_time) returns 404."""
+    task_id = await _insert_task(conn, "Plain task")
+    resp = await api_client.patch(f"/api/events/{task_id}", json={
+        "start_time": "2026-05-02T14:00:00Z",
+        "end_time": "2026-05-02T15:00:00Z",
+    })
+    assert resp.status_code == 404
+
+
+async def test_patch_event_404_unknown_id(api_client, conn):
+    resp = await api_client.patch("/api/events/00000000-0000-0000-0000-000000000099", json={
+        "start_time": "2026-05-02T14:00:00Z",
+        "end_time": "2026-05-02T15:00:00Z",
+    })
+    assert resp.status_code == 404
