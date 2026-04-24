@@ -18,36 +18,29 @@ function localDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-const today = localDateString(new Date())
-const weekStart = ref(getWeekStart(new Date()))
-
 function getWeekStart(d: Date): Date {
   const result = new Date(d)
-  const day = result.getDay()
-  result.setDate(result.getDate() - day) // Sunday start
+  result.setDate(result.getDate() - result.getDay()) // Sunday start
   return result
 }
 
-function weekDays(): Date[] {
-  return Array.from({ length: 7 }, (_, i) => {
+const today = localDateString(new Date())
+const weekStart = ref(getWeekStart(new Date()))
+
+const days = computed<Date[]>(() =>
+  Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart.value)
     d.setDate(d.getDate() + i)
     return d
-  })
-}
+  }),
+)
 
-const days = computed(weekDays)
+// Cached keys so we don't recompute localDateString for every cell on every render.
+const dayKeys = computed(() => days.value.map(localDateString))
 
-function prevWeek() {
+function shiftWeek(deltaDays: number) {
   const d = new Date(weekStart.value)
-  d.setDate(d.getDate() - 7)
-  weekStart.value = d
-  loadEvents()
-}
-
-function nextWeek() {
-  const d = new Date(weekStart.value)
-  d.setDate(d.getDate() + 7)
+  d.setDate(d.getDate() + deltaDays)
   weekStart.value = d
   loadEvents()
 }
@@ -70,8 +63,7 @@ const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR
 // ─── Events mapped per day ────────────────────────────────────
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
-  for (const day of days.value) {
-    const key = localDateString(day)
+  for (const key of dayKeys.value) {
     map[key] = eventStore.events.filter(e => e.start_time.startsWith(key))
   }
   return map
@@ -130,23 +122,20 @@ async function onDrop(e: DragEvent, day: Date) {
   dragOverHour.value = null
 
   const raw = e.dataTransfer?.getData('text/plain')
-  if (!raw) return
-  let payload: { taskId?: string }
-  try { payload = JSON.parse(raw) } catch { return }
-  if (!payload.taskId) return
+  if (!raw || !(e.currentTarget instanceof HTMLElement)) return
 
-  // Find the task in plan or backlog
-  const plan = planStore.plan
+  let taskId: string | undefined
+  try { taskId = JSON.parse(raw).taskId } catch { return }
+  if (!taskId) return
+
+  // Find task title in current plan; fall back to 'Task' for backlog/unknown.
   let title = 'Task'
-  if (plan) {
-    for (const anchorPlan of Object.values(plan.anchors)) {
-      const t = anchorPlan.tasks.find(t => t.id === payload.taskId)
-      if (t) { title = t.text; break }
-    }
+  for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
+    const found = anchorPlan.tasks.find(t => t.id === taskId)
+    if (found) { title = found.text; break }
   }
 
-  // Calculate drop time
-  if (!(e.currentTarget instanceof HTMLElement)) return
+  // Map drop position to a quarter-hour slot.
   const rect = e.currentTarget.getBoundingClientRect()
   const relY = e.clientY - rect.top
   const hour = Math.floor(relY / HOUR_HEIGHT) + START_HOUR
@@ -156,19 +145,12 @@ async function onDrop(e: DragEvent, day: Date) {
   startDate.setHours(hour, minute, 0, 0)
   const endDate = new Date(startDate.getTime() + 60 * 60 * 1000) // 1 hour default
 
-  await eventStore.promoteTask(
-    payload.taskId!,
-    startDate.toISOString(),
-    endDate.toISOString(),
-    title,
-  )
+  await eventStore.promoteTask(taskId, startDate.toISOString(), endDate.toISOString(), title)
 }
 
 // ─── Data loading ──────────────────────────────────────────────
 function loadEvents() {
-  const start = localDateString(days.value[0])
-  const end = localDateString(days.value[6])
-  eventStore.fetchEvents(start, end)
+  eventStore.fetchEvents(dayKeys.value[0], dayKeys.value[6])
 }
 
 onMounted(() => {
@@ -255,9 +237,9 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
       <header class="flex items-center gap-3 px-4 py-2 border-b border-white/10 flex-shrink-0">
         <h1 class="text-lg font-bold">Calendar</h1>
         <div class="flex items-center gap-1 ml-2">
-          <button @click="prevWeek" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">‹</button>
+          <button @click="shiftWeek(-7)" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">‹</button>
           <button @click="goToday" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-xs transition-colors">Today</button>
-          <button @click="nextWeek" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">›</button>
+          <button @click="shiftWeek(7)" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">›</button>
         </div>
         <span class="text-sm text-white/50">
           {{ days[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }}
@@ -268,11 +250,11 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
       <!-- Day-of-week header -->
       <div class="flex flex-shrink-0 border-b border-white/10" style="padding-left: 48px">
         <div
-          v-for="day in days"
-          :key="localDateString(day)"
+          v-for="(day, i) in days"
+          :key="dayKeys[i]"
           class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors"
-          :class="localDateString(day) === today ? 'text-indigo-400 font-semibold' : 'text-white/50'"
-          @click="focusedDay = localDateString(day); planStore.fetchPlan(localDateString(day))"
+          :class="dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50'"
+          @click="focusedDay = dayKeys[i]; planStore.fetchPlan(dayKeys[i])"
         >
           {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
         </div>
@@ -296,10 +278,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
           <!-- Day columns -->
           <div
-            v-for="day in days"
-            :key="localDateString(day)"
+            v-for="(day, i) in days"
+            :key="dayKeys[i]"
             class="flex-1 relative border-l border-white/5 min-w-0"
-            :class="dragOverDay === localDateString(day) ? 'bg-indigo-500/10' : ''"
+            :class="dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : ''"
             :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
             @dragover="(e: DragEvent) => onDragOver(e, day)"
             @dragleave="onDragLeave"
@@ -315,13 +297,13 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
             <!-- Today highlight -->
             <div
-              v-if="localDateString(day) === today"
+              v-if="dayKeys[i] === today"
               class="absolute inset-0 bg-indigo-500/5 pointer-events-none"
             />
 
             <!-- Event blocks -->
             <div
-              v-for="event in eventsByDay[localDateString(day)]"
+              v-for="event in eventsByDay[dayKeys[i]]"
               :key="event.id"
               class="absolute inset-x-1 rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-pointer shadow-md hover:brightness-110 transition-all z-10"
               :style="{
@@ -342,7 +324,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
             <!-- Drop indicator -->
             <div
-              v-if="dragOverDay === localDateString(day) && dragOverHour !== null"
+              v-if="dragOverDay === dayKeys[i] && dragOverHour !== null"
               class="absolute inset-x-1 h-0.5 bg-indigo-400 rounded pointer-events-none z-20"
               :style="{ top: `${(dragOverHour! - START_HOUR) * HOUR_HEIGHT}px` }"
             />
