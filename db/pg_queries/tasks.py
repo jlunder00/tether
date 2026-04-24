@@ -572,6 +572,19 @@ async def reorder_subtasks(conn: asyncpg.Connection, task_id: str, id_order: lis
 
 # ─── Event queries (tasks with start_time/end_time set) ───────────────────────
 
+from datetime import datetime as _datetime
+
+
+def _parse_ts(s: str) -> _datetime:
+    """Parse an ISO 8601 timestamp string to an aware datetime for asyncpg.
+
+    asyncpg requires datetime objects for TIMESTAMPTZ parameters — it does not
+    coerce strings even when the SQL uses a ::timestamptz cast. Python 3.10's
+    fromisoformat() also rejects the 'Z' suffix, so we normalise it first.
+    """
+    return _datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
 def _row_to_event(row) -> dict:
     """Map a task row that has event fields to CalendarEvent shape."""
     r = dict(row)
@@ -604,14 +617,14 @@ async def promote_task_to_event(
     row = await conn.fetchrow(
         """
         UPDATE tasks
-        SET start_time = $1::timestamptz,
-            end_time   = $2::timestamptz,
+        SET start_time = $1,
+            end_time   = $2,
             source     = COALESCE(source, 'tether'),
             version    = version + 1
         WHERE uuid = $3
         RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
         """,
-        start_time, end_time, _uuid.UUID(task_uuid),
+        _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(task_uuid),
     )
     return _row_to_event(row) if row else None
 
@@ -627,11 +640,11 @@ async def get_events_for_range(
         SELECT uuid, text, start_time, end_time, source, external_id, anchor_id
         FROM tasks
         WHERE start_time IS NOT NULL
-          AND start_time >= $1::timestamptz
-          AND start_time <= $2::timestamptz
+          AND start_time >= $1
+          AND start_time <= $2
         ORDER BY start_time
         """,
-        start, end,
+        _parse_ts(start), _parse_ts(end),
     )
     return [_row_to_event(r) for r in rows]
 
@@ -650,13 +663,13 @@ async def update_event_time(
     row = await conn.fetchrow(
         """
         UPDATE tasks
-        SET start_time = $1::timestamptz,
-            end_time   = $2::timestamptz,
+        SET start_time = $1,
+            end_time   = $2,
             version    = version + 1
         WHERE uuid = $3
           AND start_time IS NOT NULL
         RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
         """,
-        start_time, end_time, _uuid.UUID(event_uuid),
+        _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(event_uuid),
     )
     return _row_to_event(row) if row else None
