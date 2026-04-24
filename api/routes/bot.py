@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 import asyncpg, asyncio
 from db.pg_queries import get_last_bot_activity
@@ -6,6 +8,7 @@ from api.auth import auth_dependency, ws_auth_dependency
 from bot.message_handler import handle_message
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/bot/health")
@@ -29,22 +32,25 @@ async def bot_chat(websocket: WebSocket,
     pool = websocket.app.state.pool
     user_id = websocket.state.user_id
     await websocket.accept()
-
+    logger.info("bot_chat: connection accepted, user_id=%s", user_id)
 
     try:
         while True:
             data = await websocket.receive_json()
+            logger.info("bot_chat: received message type=%s", data.get("type"))
             # expected: {"type": "user", "content": "..."}
             response_parts = []
             def send_fn(msg: str):
                 response_parts.append(msg)
 
             #pass content into the bot pipeline
-            await handle_message(data['content'], 
+            logger.info("bot_chat: calling handle_message")
+            await handle_message(data['content'],
                                  send_fn=send_fn,
                                  pool=pool,
                                  user_id=user_id
                             )
+            logger.info("bot_chat: handle_message returned, response_len=%d", sum(len(p) for p in response_parts))
 
             full_response = "".join(response_parts)
             await websocket.send_json({"type": "chunk", "content": full_response})
@@ -52,5 +58,8 @@ async def bot_chat(websocket: WebSocket,
     except WebSocketDisconnect:
         # cancel heartbeat, clean up
         return
+    except Exception as e:
+        logger.error("bot_chat: unhandled exception user_id=%s: %s: %s", user_id, type(e).__name__, e, exc_info=True)
+        raise
 
 
