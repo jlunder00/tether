@@ -138,6 +138,7 @@ async def test_query_param_returns_401(pool, raw_key):
 
 async def test_env_var_does_not_bypass_http_auth(pool):
     """TETHER_USER_ID env var must not grant access over HTTP — that's the stdio fallback."""
+    original = os.environ.get("TETHER_USER_ID")
     os.environ["TETHER_USER_ID"] = "00000000-0000-0000-0000-000000000099"
     try:
         app = _make_test_app(lambda: pool)
@@ -147,11 +148,15 @@ async def test_env_var_does_not_bypass_http_auth(pool):
             resp = await client.get("/")
         assert resp.status_code == 401
     finally:
-        os.environ.pop("TETHER_USER_ID", None)
+        if original is None:
+            os.environ.pop("TETHER_USER_ID", None)
+        else:
+            os.environ["TETHER_USER_ID"] = original
 
 
 async def test_env_var_set_with_invalid_key_still_returns_401(pool):
     """Env var must not rescue a bad key — key validation must always run when a key is present."""
+    original = os.environ.get("TETHER_USER_ID")
     os.environ["TETHER_USER_ID"] = "00000000-0000-0000-0000-000000000099"
     try:
         app = _make_test_app(lambda: pool)
@@ -161,7 +166,10 @@ async def test_env_var_set_with_invalid_key_still_returns_401(pool):
             resp = await client.get("/", headers={"X-Tether-API-Key": "ttr_notarealkey"})
         assert resp.status_code == 401
     finally:
-        os.environ.pop("TETHER_USER_ID", None)
+        if original is None:
+            os.environ.pop("TETHER_USER_ID", None)
+        else:
+            os.environ["TETHER_USER_ID"] = original
 
 
 # ── Duplicate header handling ────────────────────────────────────────────────
