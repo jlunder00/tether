@@ -98,6 +98,44 @@ async def test_missing_key_returns_401(pool):
     assert resp.status_code == 401
 
 
+async def test_missing_key_returns_www_authenticate_header():
+    """401 must include WWW-Authenticate: Bearer per RFC 7235.
+
+    No real pool needed — key is absent so the pool is never accessed.
+    """
+    async def pool_factory():
+        raise RuntimeError("pool must not be called when key is absent")
+
+    async def inner_app(scope, receive, send):
+        raise RuntimeError("inner app must not be called")
+
+    app = TetherAPIKeyMiddleware(inner_app, pool_factory)
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "query_string": b"",
+        "headers": [],
+    }
+    messages = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        messages.append(msg)
+
+    await app(scope, receive, send)
+
+    response_start = next(m for m in messages if m["type"] == "http.response.start")
+    assert response_start["status"] == 401
+    headers = dict(response_start["headers"])
+    assert headers.get(b"www-authenticate") == b"Bearer", (
+        f"Expected WWW-Authenticate: Bearer, got: {headers.get(b'www-authenticate')}"
+    )
+
+
 async def test_invalid_key_returns_401(pool):
     app = _make_test_app(lambda: pool)
     async with AsyncClient(

@@ -68,6 +68,7 @@ def _make_401(message: str) -> Response:
         content=message,
         status_code=401,
         media_type="text/plain",
+        headers={"WWW-Authenticate": "Bearer"},
     )
 
 
