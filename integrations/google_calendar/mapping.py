@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from integrations.models import TaskDraft
 
@@ -52,12 +53,21 @@ def _parse_dt(dt_field: dict | None) -> datetime | None:
     return None
 
 
+def _is_meet_link(url: str) -> bool:
+    """Return True only if url's hostname is exactly meet.google.com."""
+    try:
+        parsed = urlparse(url)
+        return parsed.scheme in ("https", "http") and parsed.netloc == "meet.google.com"
+    except Exception:
+        return False
+
+
 def _conference_url(event: dict) -> str | None:
     """Return the first Meet/video link from conferenceData, if any."""
     conf = event.get("conferenceData", {})
     for ep in conf.get("entryPoints", []):
         uri = ep.get("uri", "")
-        if uri.startswith("https://meet.google.com") or ep.get("entryPointType") == "video":
+        if _is_meet_link(uri) or ep.get("entryPointType") == "video":
             return uri
     return None
 
