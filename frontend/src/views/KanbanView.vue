@@ -1,18 +1,18 @@
 <script setup lang="ts">
 import { onMounted, computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { useKanbanStore } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
 import type { Task, TaskStatus } from '../stores/plan'
 import { api } from '../lib/api'
+import { useSlideOver } from '../composables/useSlideOver'
 
 interface KanbanTask extends Task {
   plan_date: string | null
   anchor_id: string | null
 }
 
-const router = useRouter()
+const { push: pushPanel } = useSlideOver()
 const kanbanStore = useKanbanStore()
 const milestoneStore = useMilestoneStore()
 
@@ -56,7 +56,7 @@ async function onAddTask(columnId: string, opts: { context_subject?: string; mil
     if (!resp.ok) throw new Error(`${resp.status}`)
     const task = await resp.json()
     await fetchAllTasks()
-    router.push({ name: 'kanban-task', params: { taskId: task.id } })
+    pushPanel({ kind: 'task', entityId: task.id })
   } catch (e) {
     console.error('Failed to create task:', e)
   }

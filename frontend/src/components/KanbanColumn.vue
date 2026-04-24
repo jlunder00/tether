@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
 import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { KanbanColumn } from '../stores/kanban'
 import { api } from '../lib/api'
+import { useSlideOver } from '../composables/useSlideOver'
 
-const router = useRouter()
+const { push: pushPanel } = useSlideOver()
 
 const props = defineProps<{
   column: KanbanColumn
@@ -166,7 +166,7 @@ function onColumnDrop(evt: DragEvent) {
             :level="1"
             :stickyOffset="0"
             class="mb-1"
-            @header-click="router.push(`/kanban/milestone/${mg.id}`)">
+            @header-click="pushPanel({ kind: 'milestone', entityId: mg.id })">
             <div class="space-y-1">
               <TaskCard
                 v-for="task in mg.tasks"
