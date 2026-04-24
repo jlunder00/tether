@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { CalendarEvent } from '../types/events'
 
-const props = defineProps<{
+defineProps<{
   event: CalendarEvent
   topPx: number
   heightPx: number
