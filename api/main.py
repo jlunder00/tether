@@ -1,6 +1,9 @@
 import asyncio
 import json
+import logging
 import asyncpg
+
+logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
