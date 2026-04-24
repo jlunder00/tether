@@ -88,7 +88,8 @@ class TetherAPIKeyMiddleware:
         self._pool_factory = pool_factory
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        # Only lifespan events bypass auth — http and websocket scopes must authenticate.
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
             return
 

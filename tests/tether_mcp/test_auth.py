@@ -220,3 +220,41 @@ async def test_concurrent_requests_contextvar_isolated(pool, raw_key, raw_key_b)
     assert resp_b.status_code == 200
     assert resp_a.json()["user_id"] == TEST_USER_ID
     assert resp_b.json()["user_id"] == TEST_USER_ID_B
+
+
+# ── WebSocket scope handling ─────────────────────────────────────────────────
+
+async def test_websocket_scope_without_key_does_not_reach_inner_app():
+    """WebSocket connections without an API key must be rejected — inner app must not be invoked.
+
+    No key is present so auth fails before the pool is accessed. pool_factory
+    raises if called to prove the pool is never reached.
+    """
+    inner_was_called = []
+
+    async def inner_app(scope, receive, send):
+        inner_was_called.append(True)
+
+    async def pool_factory():
+        raise RuntimeError("pool_factory must not be called when auth fails before key lookup")
+
+    app = TetherAPIKeyMiddleware(inner_app, pool_factory)
+
+    ws_scope = {
+        "type": "websocket",
+        "path": "/ws",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    messages = []
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(msg):
+        messages.append(msg)
+
+    await app(ws_scope, receive, send)
+
+    assert not inner_was_called, "Inner app must not be reached for unauthenticated WebSocket scopes"
