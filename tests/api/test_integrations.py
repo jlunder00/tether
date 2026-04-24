@@ -285,6 +285,7 @@ async def test_calendars_list_returns_google_calendar_items(api_client, conn, mo
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
+    mock_resp.is_success = True
     mock_resp.json.return_value = {
         "items": [
             {"id": "primary", "summary": "My Calendar", "primary": True},
@@ -292,7 +293,14 @@ async def test_calendars_list_returns_google_calendar_items(api_client, conn, mo
         ]
     }
 
-    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+    # Patch the AsyncClient constructor in the routes module, not the class
+    # method globally — the global patch intercepts the test client's own GET.
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch("api.routes.integrations.httpx.AsyncClient", return_value=mock_client):
         resp = await api_client.get("/api/integrations/google/calendars")
 
     assert resp.status_code == 200
