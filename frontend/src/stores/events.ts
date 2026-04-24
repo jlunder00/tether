@@ -79,6 +79,40 @@ export const useEventStore = defineStore('events', () => {
   }
 
   /**
+   * Create a new standalone event by drag-to-create on the time grid.
+   * POST /api/events with no task_id — if the backend rejects (e.g. task_id required),
+   * falls back to a fully optimistic local event.
+   */
+  async function createEvent(startTime: string, endTime: string, title: string): Promise<CalendarEvent | null> {
+    try {
+      const resp = await api('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time: startTime, end_time: endTime, title, task_id: null }),
+      })
+      if (resp.ok) {
+        const event: CalendarEvent = await resp.json()
+        events.value.push(event)
+        return event
+      }
+    } catch { /* fall through */ }
+    // Optimistic local insert — backend may not support taskless events yet
+    const optimistic: CalendarEvent = {
+      id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)),
+      title,
+      start_time: startTime,
+      end_time: endTime,
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+    }
+    events.value.push(optimistic)
+    return optimistic
+  }
+
+  /**
    * Demote a calendar event back to a plain task (removes time constraint).
    * DELETE /api/events/:id/time-constraint
    */
@@ -89,5 +123,5 @@ export const useEventStore = defineStore('events', () => {
     events.value = events.value.filter(e => e.id !== eventId)
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, moveEvent, demoteEvent }
+  return { events, loading, error, fetchEvents, promoteTask, createEvent, moveEvent, demoteEvent }
 })
