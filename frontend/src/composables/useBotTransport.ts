@@ -45,24 +45,75 @@ export function createWebSocketTransport(): BotTransport {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const ws = new WebSocket(`${proto}://${location.host}/api/bot/chat`)
 
-  let resolve: ((val: MessageEvent) => void) | null = null
-  const queue: MessageEvent[] = []
+  // C1: resolved once the socket is ready; awaited before every send.
+  let resolveOpen!: () => void
+  let rejectOpen!: (err: Error) => void
+  const openPromise = new Promise<void>((resolve, reject) => {
+    resolveOpen = resolve
+    rejectOpen = reject
+  })
+
+  // C2: slot for the currently-awaited recv; reject path lets a closed
+  // socket surface an error instead of hanging the `while (true)` loop.
+  let pendingResolve: ((val: MessageEvent) => void) | null = null
+  let pendingReject: ((err: Error) => void) | null = null
+  const incoming: MessageEvent[] = []
+
+  // H2: single heartbeat subscriber, driven by real socket events.
+  let heartbeatCb: ((alive: boolean) => void) | null = null
+
+  function failPending(err: Error): void {
+    pendingReject?.(err)
+    pendingResolve = null
+    pendingReject = null
+  }
+
+  ws.onopen = () => {
+    resolveOpen()
+    heartbeatCb?.(true)
+  }
 
   ws.onmessage = (evt) => {
-    if (resolve) { resolve(evt); resolve = null }
-    else queue.push(evt)
+    if (pendingResolve) {
+      pendingResolve(evt)
+      pendingResolve = null
+      pendingReject = null
+    } else {
+      incoming.push(evt)
+    }
+  }
+
+  ws.onerror = () => {
+    const err = new Error('WebSocket error')
+    rejectOpen(err)
+    failPending(err)
+    heartbeatCb?.(false)
+  }
+
+  ws.onclose = () => {
+    failPending(new Error('WebSocket closed'))
+    heartbeatCb?.(false)
   }
 
   return {
     async *send(text: string) {
-      // 1. send the message
-      ws.send(JSON.stringify({ type: 'user', content: text}))
+      // C1: don't send until the socket has opened.
+      await openPromise
 
-      // 2. wait for chunks until "done"
+      // H1: take a private snapshot of any buffered messages so concurrent
+      // sends don't steal each other's chunks via the shared `incoming` queue.
+      const localQueue: MessageEvent[] = incoming.splice(0)
+
+      ws.send(JSON.stringify({ type: 'user', content: text }))
+
+      // C2: each recv registers both resolve and reject, so onerror/onclose
+      // can break us out of this loop.
       while (true) {
-        const evt: MessageEvent = await new Promise(r => {
-          if (queue.length) r(queue.shift()!)
-            else resolve = r
+        const evt: MessageEvent = await new Promise((resolve, reject) => {
+          if (localQueue.length) return resolve(localQueue.shift()!)
+          if (incoming.length) return resolve(incoming.shift()!)
+          pendingResolve = resolve
+          pendingReject = reject
         })
         const msg = JSON.parse(evt.data)
         if (msg.type === 'chunk') yield msg.content
@@ -71,14 +122,23 @@ export function createWebSocketTransport(): BotTransport {
     },
 
     onHeartbeat(cb) {
-      // listen for {"type": "heartbeat"}
-      // backend doesnt send thi. just call as true immediately
-      cb(true)
-      return () => {}
+      heartbeatCb = cb
+      // Reflect current readyState immediately so subscribers don't wait
+      // for the next socket event to see the right status.
+      switch (ws.readyState) {
+        case WebSocket.OPEN:
+          cb(true)
+          break
+        case WebSocket.CLOSING:
+        case WebSocket.CLOSED:
+          cb(false)
+          break
+      }
+      return () => { heartbeatCb = null }
     },
-    
+
     close() {
       ws.close()
-    }
+    },
   }
 }
