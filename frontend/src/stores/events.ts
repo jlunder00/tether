@@ -60,6 +60,25 @@ export const useEventStore = defineStore('events', () => {
   }
 
   /**
+   * Move an existing event to a new time slot (drag-to-reposition).
+   * PATCH /api/events/:id — not yet implemented; updates optimistically.
+   */
+  async function moveEvent(eventId: string, startTime: string, endTime: string): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
+    if (!ev) return
+    // Optimistic update
+    ev.start_time = startTime
+    ev.end_time = endTime
+    try {
+      await api(`/api/events/${eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time: startTime, end_time: endTime }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
+  }
+
+  /**
    * Demote a calendar event back to a plain task (removes time constraint).
    * DELETE /api/events/:id/time-constraint
    */
@@ -70,5 +89,5 @@ export const useEventStore = defineStore('events', () => {
     events.value = events.value.filter(e => e.id !== eventId)
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, demoteEvent }
+  return { events, loading, error, fetchEvents, promoteTask, moveEvent, demoteEvent }
 })
