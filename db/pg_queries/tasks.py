@@ -568,3 +568,69 @@ async def reorder_subtasks(conn: asyncpg.Connection, task_id: str, id_order: lis
             "UPDATE subtasks SET position = $1 WHERE id = $2 AND task_id = $3",
             pos, subtask_id, task_id,
         )
+
+
+# ─── Event queries (tasks with start_time/end_time set) ───────────────────────
+
+def _row_to_event(row) -> dict:
+    """Map a task row that has event fields to CalendarEvent shape."""
+    r = dict(row)
+    st = r.get("start_time")
+    et = r.get("end_time")
+    uid = str(r["uuid"]) if r.get("uuid") else None
+    return {
+        "id": uid,
+        "title": r.get("text", ""),
+        "start_time": st.isoformat() if st else None,
+        "end_time": et.isoformat() if et else None,
+        "source": r.get("source") or "tether",
+        "external_id": r.get("external_id"),
+        "task_id": uid,
+        "anchor_id": str(r["anchor_id"]) if r.get("anchor_id") else None,
+        "color": None,
+    }
+
+
+async def promote_task_to_event(
+    conn: asyncpg.Connection,
+    task_uuid: str,
+    start_time: str,
+    end_time: str,
+) -> dict | None:
+    """Stamp an existing task with start/end time, making it a calendar event.
+
+    Returns CalendarEvent-shaped dict, or None if the task doesn't exist.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1::timestamptz,
+            end_time   = $2::timestamptz,
+            source     = COALESCE(source, 'tether'),
+            version    = version + 1
+        WHERE uuid = $3
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        """,
+        start_time, end_time, _uuid.UUID(task_uuid),
+    )
+    return _row_to_event(row) if row else None
+
+
+async def get_events_for_range(
+    conn: asyncpg.Connection,
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return all tasks that have been promoted to events within [start, end]."""
+    rows = await conn.fetch(
+        """
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id
+        FROM tasks
+        WHERE start_time IS NOT NULL
+          AND start_time >= $1::timestamptz
+          AND start_time <= $2::timestamptz
+        ORDER BY start_time
+        """,
+        start, end,
+    )
+    return [_row_to_event(r) for r in rows]
