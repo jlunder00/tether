@@ -4,6 +4,7 @@ import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
 import { usePlanStore } from '../stores/plan'
 import { useCalendarFocus } from '../composables/useCalendarFocus'
+import { useSlideOver } from '../composables/useSlideOver'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
@@ -11,6 +12,7 @@ const anchorStore = useAnchorStore()
 const eventStore = useEventStore()
 const planStore = usePlanStore()
 const { focusedDay, setFocusedDay } = useCalendarFocus()
+const { push: pushPanel } = useSlideOver()
 
 // ─── View state ───────────────────────────────────────────────
 const anchorPanelOpen = ref(true)
@@ -171,28 +173,48 @@ async function onDrop(e: DragEvent, day: Date) {
   const raw = e.dataTransfer?.getData('text/plain')
   if (!raw || !(e.currentTarget instanceof HTMLElement)) return
 
-  let taskId: string | undefined
-  try { taskId = JSON.parse(raw).taskId } catch { return }
-  if (!taskId) return
-
-  // Find task title in current plan; fall back to 'Task' for backlog/unknown.
-  let title = 'Task'
-  for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
-    const found = anchorPlan.tasks.find(t => t.id === taskId)
-    if (found) { title = found.text; break }
-  }
+  let payload: { taskId?: string; eventId?: string }
+  try { payload = JSON.parse(raw) } catch { return }
 
   // Map drop position to a quarter-hour slot.
   const rect = e.currentTarget.getBoundingClientRect()
   const relY = e.clientY - rect.top
   const hour = Math.floor(relY / HOUR_HEIGHT) + START_HOUR
   const minute = Math.round(((relY % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
-
   const startDate = new Date(day)
   startDate.setHours(hour, minute, 0, 0)
-  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000) // 1 hour default
 
-  await eventStore.promoteTask(taskId, startDate.toISOString(), endDate.toISOString(), title)
+  if (payload.eventId) {
+    // Repositioning an existing event — preserve its duration.
+    const existing = eventStore.events.find(ev => ev.id === payload.eventId)
+    if (!existing) return
+    const durationMs = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
+    const endDate = new Date(startDate.getTime() + durationMs)
+    await eventStore.moveEvent(payload.eventId, startDate.toISOString(), endDate.toISOString())
+    return
+  }
+
+  if (!payload.taskId) return
+
+  // Promoting a sidebar task to an event.
+  let title = 'Task'
+  for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
+    const found = anchorPlan.tasks.find(t => t.id === payload.taskId)
+    if (found) { title = found.text; break }
+  }
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000) // 1 hour default
+  await eventStore.promoteTask(payload.taskId, startDate.toISOString(), endDate.toISOString(), title)
+}
+
+// ─── Panel navigation ─────────────────────────────────────────
+function openEventPanel(event: CalendarEvent) {
+  // Promoted tasks: open the source task detail so the user can edit it.
+  // Standalone events: open via kind:'event' (wired to TaskDetailPanel by SlideOverStack).
+  if (event.task_id) {
+    pushPanel({ kind: 'task', entityId: event.task_id })
+  } else {
+    pushPanel({ kind: 'event', entityId: event.id })
+  }
 }
 
 // ─── Data loading ──────────────────────────────────────────────
@@ -254,6 +276,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               draggable="true"
               class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-white/5 text-white/60 hover:text-white/90 transition-colors truncate"
               :class="task.status === 'done' ? 'line-through opacity-40' : ''"
+              @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
               @dragstart="(e: DragEvent) => {
                 if (e.dataTransfer) {
                   e.dataTransfer.effectAllowed = 'copy'
@@ -374,15 +397,23 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             <div
               v-for="event in eventsByDay[dayKeys[i]]"
               :key="event.id"
-              class="absolute inset-x-1 rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-pointer shadow-md hover:brightness-110 transition-all z-10"
+              draggable="true"
+              class="absolute inset-x-1 rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
               :style="{
                 top: `${eventTopPx(event)}px`,
                 height: `${eventHeightPx(event)}px`,
                 backgroundColor: eventColor(event),
                 opacity: event.source !== 'tether' ? 0.75 : 1,
               }"
+              @click.stop="openEventPanel(event)"
+              @dragstart.stop="(e: DragEvent) => {
+                if (e.dataTransfer) {
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/plain', JSON.stringify({ eventId: event.id }))
+                }
+              }"
             >
-              <div class="flex items-center gap-1 truncate">
+              <div class="flex items-center gap-1 truncate pointer-events-none">
                 <!-- Provider badge for synced events -->
                 <span v-if="event.source !== 'tether'" class="text-[9px] bg-black/20 rounded px-0.5 flex-shrink-0" title="Synced from external calendar">
                   {{ event.source === 'google_calendar' ? 'G' : '↗' }}

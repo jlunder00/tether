@@ -1,11 +1,11 @@
 from __future__ import annotations
-import os
 from datetime import date as date_type, datetime
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
 import db.postgres as pg
+from tether_mcp.auth import get_user_id, TetherAPIKeyMiddleware
 
 mcp = FastMCP("tether", host="0.0.0.0", port=5001)
 
@@ -17,10 +17,6 @@ async def _get_pool() -> pg.asyncpg.Pool:
     if _pool is None:
         _pool = await pg.create_pool()
     return _pool
-
-
-def _get_user_id() -> str | None:
-    return os.environ.get("TETHER_USER_ID")
 
 
 def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict:
@@ -52,7 +48,7 @@ async def upsert_tasks(tasks: list[dict]) -> list[dict]:
     {mode:"patch",operations:[{find,replace}]} or {mode:"patch",operations:[{lines,replace}]}."""
     from tether_mcp.tools.upsert_tasks import execute_upsert_tasks
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_upsert_tasks(conn, tasks)
 
 
@@ -65,7 +61,7 @@ async def upsert_context(nodes: list[dict]) -> list[dict]:
     Section bodies and description support write modes."""
     from tether_mcp.tools.upsert_context import execute_upsert_context
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_upsert_context(conn, nodes)
 
 
@@ -77,7 +73,7 @@ async def delete_tasks(operations: list[dict]) -> list[dict]:
     clear_node_links?, clear_context?}. delete=True removes entire task."""
     from tether_mcp.tools.delete_tasks import execute_delete_tasks
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_delete_tasks(conn, operations)
 
 
@@ -89,7 +85,7 @@ async def delete_context(operations: list[dict]) -> list[dict]:
     clear_description?, clear_task_links?}. delete=True removes entire node+children."""
     from tether_mcp.tools.delete_context import execute_delete_context
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_delete_context(conn, operations)
 
 
@@ -105,7 +101,7 @@ async def read_context(
     Section bodies in cat-n format (1-indexed line numbers with tabs)."""
     from tether_mcp.tools.read_context import execute_read_context
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_read_context(conn, paths, node_ids, depth, include_sections, include_tasks)
 
 
@@ -124,7 +120,7 @@ async def read_tasks(
     """Read tasks with filters (AND'd). No filters=all tasks. include_deps/include_subtasks expand."""
     from tether_mcp.tools.read_tasks import execute_read_tasks
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await execute_read_tasks(conn, task_ids, status, context, milestone_id, date, anchor_id, unscheduled, include_deps, include_subtasks)
 
 
@@ -134,7 +130,7 @@ async def get_plan(date: str = "") -> dict:
     from db.pg_queries import get_plan as _get_plan
     d = date or str(date_type.today())
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await _get_plan(conn, d)
 
 
@@ -143,7 +139,7 @@ async def get_anchors() -> dict:
     """Get all anchor definitions + currently active anchor."""
     from db.pg_queries import get_anchors as _get_anchors_db
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         anchors = await _get_anchors_db(conn)
     current = _current_anchor(anchors) if anchors else None
     return {"anchors": anchors, "current": current}
@@ -156,7 +152,7 @@ async def search(query: str, type: str = "all") -> list[dict]:
     if not query.strip():
         return []
     pool = await _get_pool()
-    async with pg.get_conn(pool, _get_user_id()) as conn:
+    async with pg.get_conn(pool, get_user_id()) as conn:
         return await search_entities(conn, query.strip(), type)
 
 
@@ -174,4 +170,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--sse", action="store_true", help="Run as SSE server (for network access)")
     args = parser.parse_args()
-    mcp.run(transport="sse" if args.sse else "stdio")
+
+    if args.sse:
+        import uvicorn
+        starlette_app = mcp.sse_app()
+        authed_app = TetherAPIKeyMiddleware(starlette_app, _get_pool)
+        uvicorn.run(authed_app, host="0.0.0.0", port=5001)
+    else:
+        mcp.run(transport="stdio")
