@@ -38,6 +38,8 @@ COPY bot/ bot/
 COPY db/ db/
 COPY shared/ shared/
 COPY tether_mcp/ tether_mcp/
+COPY sync/ sync/
+COPY integrations/ integrations/
 COPY config/ config/
 COPY prompts/ prompts/
 COPY cron/ cron/

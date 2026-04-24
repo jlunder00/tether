@@ -311,6 +311,50 @@ async def test_calendars_list_returns_google_calendar_items(api_client, conn, mo
 
 
 @pytest.mark.asyncio
+async def test_calendars_list_google_401_returns_401(api_client, conn):
+    """GET /calendars returns 401 when Google says the token is expired."""
+    from db.pg_queries.integrations import upsert_integration
+
+    await upsert_integration(conn, TEST_USER_ID, "google_calendar", access_token="expired_tok")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 401
+    mock_resp.is_success = False
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch("api.routes.integrations.httpx.AsyncClient", return_value=mock_client):
+        resp = await api_client.get("/api/integrations/google/calendars")
+
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_calendars_list_google_502_on_error(api_client, conn):
+    """GET /calendars returns 502 when Google returns a non-401 error."""
+    from db.pg_queries.integrations import upsert_integration
+
+    await upsert_integration(conn, TEST_USER_ID, "google_calendar", access_token="tok")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 503
+    mock_resp.is_success = False
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+
+    with patch("api.routes.integrations.httpx.AsyncClient", return_value=mock_client):
+        resp = await api_client.get("/api/integrations/google/calendars")
+
+    assert resp.status_code == 502
+
+
+@pytest.mark.asyncio
 async def test_calendars_list_no_integration_returns_404(api_client):
     """GET /calendars when not connected returns 404."""
     resp = await api_client.get("/api/integrations/google/calendars")
