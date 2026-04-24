@@ -1,8 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { api } from '../lib/api'
-import DetailPanel from './DetailPanel.vue'
 import SearchAutocomplete from './SearchAutocomplete.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
@@ -13,11 +11,12 @@ import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
 import { useTaskContexts } from '../composables/useTaskContexts'
+import { useSlideOver } from '../composables/useSlideOver'
 import type { TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 
 const props = defineProps<{ taskId: string }>()
-const router = useRouter()
+const { push: pushPanel, pop: popPanel } = useSlideOver()
 const planStore = usePlanStore()
 const milestoneStore = useMilestoneStore()
 const anchorStore = useAnchorStore()
@@ -155,7 +154,7 @@ async function scheduleTask() {
   })
   await planStore.fetchPlan(scheduleDate.value)
   await backlogStore.fetchTasks()
-  router.push(`/plan/day/${scheduleDate.value}/task/${props.taskId}`)
+  // Panel stays open — the task has moved, stores refreshed above
 }
 
 async function moveToBacklog() {
@@ -166,7 +165,6 @@ async function moveToBacklog() {
   })
   await planStore.fetchPlan()
   await backlogStore.fetchTasks()
-  router.push(`/backlog/task/${props.taskId}`)
 }
 
 async function moveToAnchor(newAnchorId: string) {
@@ -183,7 +181,7 @@ async function moveToAnchor(newAnchorId: string) {
 async function deleteTask() {
   if (!confirm('Delete this task?')) return
   await api(`/api/tasks/${props.taskId}`, { method: 'DELETE' })
-  router.back()
+  popPanel()
   if (isBacklog.value) {
     await backlogStore.fetchTasks()
   } else {
@@ -191,9 +189,9 @@ async function deleteTask() {
   }
 }
 
-// Navigate to milestone panel
+// Navigate to milestone panel (push onto slide-over stack)
 function openMilestone(milestoneId: string) {
-  router.push(`/plan/day/${planStore.activeDate}/milestone/${milestoneId}`)
+  pushPanel({ kind: 'milestone', entityId: milestoneId })
 }
 
 // Search functions for dependency and milestone linking
@@ -240,12 +238,12 @@ async function linkContextFromSearch(item: SearchResult) {
   await linkContext(item.id)
 }
 
-// Navigate to dependency entity
+// Navigate to dependency entity (push onto slide-over stack)
 function openDep(type: string, id: string) {
   if (type === 'task') {
-    router.push(`/plan/day/${planStore.activeDate}/task/${id}`)
+    pushPanel({ kind: 'task', entityId: id })
   } else {
-    router.push(`/plan/day/${planStore.activeDate}/milestone/${id}`)
+    pushPanel({ kind: 'milestone', entityId: id })
   }
 }
 
@@ -297,10 +295,9 @@ onMounted(async () => {
 </script>
 
 <template>
-  <DetailPanel>
-    <div class="p-5 flex flex-col gap-5 text-white min-h-full">
+  <div class="p-5 flex flex-col gap-5 text-white min-h-full">
 
-      <!-- Header -->
+      <!-- Header context info (close button is in SlideOverStack) -->
       <div class="flex items-start justify-between gap-2">
         <div class="flex items-center gap-2 flex-wrap">
           <span v-if="anchorId" class="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60">
@@ -308,7 +305,6 @@ onMounted(async () => {
           </span>
           <span class="text-xs text-white/40">{{ planStore.activeDate }}</span>
         </div>
-        <button @click="router.back()" class="text-white/40 hover:text-white/80 text-xl leading-none flex-shrink-0">✕</button>
       </div>
 
       <!-- Not found -->
@@ -582,6 +578,5 @@ onMounted(async () => {
         </div>
 
       </template>
-    </div>
-  </DetailPanel>
+  </div>
 </template>

@@ -998,9 +998,11 @@ def _log_preview(text: str, n: int = 120) -> str:
 
 async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str) -> None:
     today = str(date_type.today())
+    logger.info("handle_message: entered, text_len=%d", len(text or ""))
     async with pg.get_conn(pool, user_id) as conn:
         await upsert_plan(conn, today)
         anchors = await get_anchors(conn)
+    logger.info("handle_message: DB init done")
     current_anchor = get_current_anchor(anchors)
 
     logger.info("msg received: len=%d preview=%r", len(text or ""), _log_preview(text))

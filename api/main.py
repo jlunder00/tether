@@ -1,6 +1,9 @@
 import asyncio
 import json
+import logging
 import asyncpg
+
+logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -25,6 +28,7 @@ from api.routes import settings as settings_routes
 from api.routes import connections as connections_routes
 from api.routes import meetings as meetings_routes
 from api.routes import api_keys as api_keys_routes
+from api.routes import events as events_routes
 from api.ws import manager
 from api.auth import decode_jwt
 from db.pool_middleware import lifespan as _pool_lifespan
@@ -116,6 +120,7 @@ def create_app(lifespan_override=None) -> FastAPI:
     app.include_router(connections_routes.router, prefix="/api")
     app.include_router(meetings_routes.router, prefix="/api")
     app.include_router(api_keys_routes.router, prefix="/api")
+    app.include_router(events_routes.router, prefix="/api")
 
     # --- Premium plugin hook ---
     try:

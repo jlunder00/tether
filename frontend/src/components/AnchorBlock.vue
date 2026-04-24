@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
 import { usePlanStore } from '../stores/plan'
@@ -8,8 +7,9 @@ import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { Milestone } from '../stores/milestones'
 import { api } from '../lib/api'
+import { useSlideOver } from '../composables/useSlideOver'
 
-const router = useRouter()
+const { push: pushPanel } = useSlideOver()
 
 const props = defineProps<{
   anchorId: string
@@ -185,7 +185,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
               :color="mg.milestone.color ?? undefined"
               :level="1"
               class="mb-1"
-              @header-click="router.push(`/plan/day/${effectiveDate}/milestone/${mg.milestone.id}`)">
+              @header-click="pushPanel({ kind: 'milestone', entityId: mg.milestone.id })">
               <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                    :data-task-id="task.id"
                    @dragstart="onDragStart($event, task)"
