@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, nextTick } from 'vue'
+import { resetFocusedDay } from '../../composables/useCalendarFocus'
 
 // Lightweight stub for router-link so we can test nav rendering
 vi.mock('vue-router', () => ({
@@ -24,6 +25,7 @@ vi.mock('../../lib/api', () => ({
 describe('CalendarView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    resetFocusedDay()
   })
 
   it('renders a top-level heading with "Calendar"', async () => {
@@ -54,5 +56,39 @@ describe('CalendarView', () => {
     expect(wrapper.find('[data-testid="anchor-panel-content"]').exists()).toBe(false)
     await toggle.trigger('click')
     expect(wrapper.find('[data-testid="anchor-panel-content"]').exists()).toBe(true)
+  })
+
+  it('clicking a day header sets that day as focused', async () => {
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    // Find all day header cells (there are 7)
+    const headers = wrapper.findAll('[data-testid^="day-header-"]')
+    expect(headers.length).toBe(7)
+    // Click the second day header
+    await headers[1].trigger('click')
+    await nextTick()
+    // That header should now carry the focused-day marker
+    expect(headers[1].attributes('data-focused')).toBe('true')
+    // Other headers should not be focused
+    expect(headers[0].attributes('data-focused')).not.toBe('true')
+  })
+
+  it('the focused day column receives the focused-day highlight', async () => {
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    const headers = wrapper.findAll('[data-testid^="day-header-"]')
+    await headers[2].trigger('click')
+    await nextTick()
+    const dayKey = headers[2].attributes('data-day')!
+    const col = wrapper.find(`[data-testid="day-col-${dayKey}"]`)
+    expect(col.exists()).toBe(true)
+    expect(col.classes()).toContain('ring-inset')
+  })
+
+  it('anchor panel content uses block layout (not flex-col) so tasks are not squished', async () => {
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    const content = wrapper.find('[data-testid="anchor-panel-content"]')
+    expect(content.classes()).not.toContain('flex')
   })
 })

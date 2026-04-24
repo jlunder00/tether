@@ -1,17 +1,61 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
 import { usePlanStore } from '../stores/plan'
+import { useCalendarFocus } from '../composables/useCalendarFocus'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
 const anchorStore = useAnchorStore()
 const eventStore = useEventStore()
 const planStore = usePlanStore()
+const { focusedDay, setFocusedDay } = useCalendarFocus()
 
 // ─── View state ───────────────────────────────────────────────
 const anchorPanelOpen = ref(true)
+const sidebarWidth = ref(224) // px; matches w-56 default
+const MIN_SIDEBAR = 160
+const MAX_SIDEBAR = 480
+
+// ─── Sidebar resize ───────────────────────────────────────────
+let resizing = false
+let resizeStartX = 0
+let resizeStartWidth = 0
+
+function onResizeHandleMousedown(e: MouseEvent) {
+  resizing = true
+  resizeStartX = e.clientX
+  resizeStartWidth = sidebarWidth.value
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+}
+
+function onWindowMousemove(e: MouseEvent) {
+  if (!resizing) return
+  const delta = e.clientX - resizeStartX
+  sidebarWidth.value = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, resizeStartWidth + delta))
+}
+
+function onWindowMouseup() {
+  if (!resizing) return
+  resizing = false
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+}
+
+onMounted(() => {
+  window.addEventListener('mousemove', onWindowMousemove)
+  window.addEventListener('mouseup', onWindowMouseup)
+  anchorStore.fetchAnchors()
+  planStore.fetchPlan(focusedDay.value)
+  loadEvents()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('mousemove', onWindowMousemove)
+  window.removeEventListener('mouseup', onWindowMouseup)
+})
 
 // ─── Week date range ──────────────────────────────────────────
 function localDateString(d: Date): string {
@@ -50,8 +94,11 @@ function goToday() {
   loadEvents()
 }
 
-// ─── Focused day for anchor panel ─────────────────────────────
-const focusedDay = ref(today)
+// ─── Day focus ────────────────────────────────────────────────
+function focusDay(dayKey: string) {
+  setFocusedDay(dayKey)
+  planStore.fetchPlan(dayKey)
+}
 
 // ─── Hours displayed in grid ──────────────────────────────────
 const HOUR_HEIGHT = 60 // px per hour
@@ -153,12 +200,6 @@ function loadEvents() {
   eventStore.fetchEvents(dayKeys.value[0], dayKeys.value[6])
 }
 
-onMounted(() => {
-  anchorStore.fetchAnchors()
-  planStore.fetchPlan(focusedDay.value)
-  loadEvents()
-})
-
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 </script>
 
@@ -168,8 +209,8 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     <!-- ── Anchor / Side Panel ── -->
     <aside
       data-testid="anchor-panel"
-      class="flex-shrink-0 border-r border-white/10 flex flex-col transition-all duration-200"
-      :class="anchorPanelOpen ? 'w-56' : 'w-10'"
+      class="flex-shrink-0 border-r border-white/10 flex flex-col transition-all duration-200 relative"
+      :style="anchorPanelOpen ? { width: sidebarWidth + 'px' } : { width: '40px' }"
     >
       <!-- Toggle button -->
       <button
@@ -183,8 +224,12 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         </svg>
       </button>
 
-      <!-- Panel content -->
-      <div v-if="anchorPanelOpen" data-testid="anchor-panel-content" class="flex-1 overflow-y-auto p-2 flex flex-col gap-2">
+      <!-- Panel content — block layout so anchor blocks size to content and the panel scrolls -->
+      <div
+        v-if="anchorPanelOpen"
+        data-testid="anchor-panel-content"
+        class="flex-1 overflow-y-auto p-2 space-y-2"
+      >
         <!-- Focused day label -->
         <div class="text-xs text-white/40 uppercase tracking-wide px-1 pt-1 select-none">
           {{ new Date(focusedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) }}
@@ -201,8 +246,8 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             <span class="text-xs font-medium text-white/80 truncate flex-1">{{ anchor.name }}</span>
             <span class="text-[10px] text-white/30">{{ anchor.time }}</span>
           </div>
-          <!-- Task list -->
-          <ul class="flex flex-col gap-0.5 px-1 pb-1">
+          <!-- Task list — max height + scroll so one long anchor doesn't consume the panel -->
+          <ul class="flex flex-col gap-0.5 px-1 pb-1 max-h-36 overflow-y-auto">
             <li
               v-for="task in tasks"
               :key="task.id"
@@ -228,6 +273,13 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
           Drag tasks into the calendar to schedule them
         </div>
       </div>
+
+      <!-- Resize handle — only visible when panel is open -->
+      <div
+        v-if="anchorPanelOpen"
+        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-500/40 transition-colors z-10"
+        @mousedown.prevent="onResizeHandleMousedown"
+      />
     </aside>
 
     <!-- ── Calendar Grid ── -->
@@ -252,9 +304,15 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         <div
           v-for="(day, i) in days"
           :key="dayKeys[i]"
-          class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors"
-          :class="dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50'"
-          @click="focusedDay = dayKeys[i]; planStore.fetchPlan(dayKeys[i])"
+          :data-testid="`day-header-${i}`"
+          :data-day="dayKeys[i]"
+          :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
+          class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
+          :class="[
+            dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
+            focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+          ]"
+          @click="focusDay(dayKeys[i])"
         >
           {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
         </div>
@@ -280,9 +338,14 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
           <div
             v-for="(day, i) in days"
             :key="dayKeys[i]"
-            class="flex-1 relative border-l border-white/5 min-w-0"
-            :class="dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : ''"
+            :data-testid="`day-col-${dayKeys[i]}`"
+            class="flex-1 relative border-l border-white/5 min-w-0 cursor-pointer"
+            :class="[
+              dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+              focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-indigo-400/30' : '',
+            ]"
             :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
+            @click.self="focusDay(dayKeys[i])"
             @dragover="(e: DragEvent) => onDragOver(e, day)"
             @dragleave="onDragLeave"
             @drop="(e: DragEvent) => onDrop(e, day)"
@@ -299,6 +362,12 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             <div
               v-if="dayKeys[i] === today"
               class="absolute inset-0 bg-indigo-500/5 pointer-events-none"
+            />
+
+            <!-- Focused day highlight (stronger than today) -->
+            <div
+              v-if="focusedDay === dayKeys[i]"
+              class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
             />
 
             <!-- Event blocks -->
