@@ -9,8 +9,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override sqlalchemy.url with DATABASE_URL env var if set
-db_url = os.environ.get("DATABASE_URL")
+# Migrations require DDL privileges (CREATE INDEX, ALTER TABLE, etc.) so they
+# must connect as the table owner, not as the app role (tether_app).
+# ADMIN_DATABASE_URL carries owner credentials; DATABASE_URL carries app
+# credentials. Prefer ADMIN_DATABASE_URL; fall back to DATABASE_URL if unset
+# (e.g. local dev without role separation).
+db_url = os.environ.get("ADMIN_DATABASE_URL") or os.environ.get("DATABASE_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 

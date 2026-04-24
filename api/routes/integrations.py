@@ -11,53 +11,33 @@ Endpoints (all under /api/integrations/google/):
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from datetime import datetime
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 import api.config as cfg
-import db.postgres as pg
 from api.auth import auth_dependency
 from db.pg_queries.integrations import (
     delete_integration,
     get_integration,
-    get_sync_state,
     upsert_integration,
-    upsert_sync_state,
 )
 from db.pool_middleware import get_db_conn
 from integrations.google_calendar.auth import (
     GoogleCalendarAuth,
-    make_oauth_state,
     verify_oauth_state,
 )
+from sync.dispatch import dispatch_sync  # re-exported so tests can monkeypatch at this name
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _PROVIDER = "google_calendar"
 _GCAL_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
-
-
-# ---------------------------------------------------------------------------
-# Dispatch helper — PG NOTIFY boundary (monkeypatched in tests)
-# ---------------------------------------------------------------------------
-
-async def dispatch_sync(
-    conn: asyncpg.Connection,
-    integration_id: str,
-    calendar_id: str,
-) -> None:
-    """Issue a PG NOTIFY on 'integration_sync' for the tether-sync worker."""
-    payload = json.dumps({"integration_id": integration_id, "calendar_id": calendar_id})
-    await conn.execute("SELECT pg_notify('integration_sync', $1)", payload)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +147,13 @@ async def google_sync(
     integration_id = row["id"]
 
     for cal_id in calendar_ids:
-        await dispatch_sync(conn, integration_id, cal_id)
+        await dispatch_sync(
+            request.app.state.pool,
+            str(integration_id),
+            cal_id,
+            provider=_PROVIDER,
+            notify_type="poll",
+        )
 
     return {"ok": True, "dispatched": len(calendar_ids)}
 
@@ -179,36 +165,28 @@ async def google_sync(
 @router.post("/integrations/google/webhook")
 async def google_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
-    conn: asyncpg.Connection = Depends(get_db_conn),
     x_goog_channel_id: str | None = Header(default=None, alias="X-Goog-Channel-Id"),
     x_goog_resource_id: str | None = Header(default=None, alias="X-Goog-Resource-Id"),
     x_goog_resource_state: str | None = Header(default=None, alias="X-Goog-Resource-State"),
 ):
     """Receive Google Calendar push notifications.
 
-    Must return 200 within Google's timeout. Actual processing is dispatched
-    to tether-sync via PG NOTIFY in a background task.
+    Must return 200 within Google's timeout. No DB lookup here — the endpoint
+    has no user context so RLS would block any integration_sync_state query.
+    Instead, channel_id is forwarded in the NOTIFY payload; the tether-sync
+    worker resolves it to an integration via its own unscoped DB access.
     """
     if x_goog_channel_id and x_goog_resource_state != "sync":
-        # Look up the sync state row to find which integration this belongs to
-        row = await conn.fetchrow(
-            """
-            SELECT s.integration_id, s.calendar_id
-            FROM integration_sync_state s
-            WHERE s.watch_channel_id = $1
-            """,
-            x_goog_channel_id,
+        await dispatch_sync(
+            request.app.state.pool,
+            integration_id="",   # unknown — worker resolves via channel_id
+            calendar_id="",      # unknown — worker resolves via channel_id
+            provider=_PROVIDER,
+            notify_type="webhook",
+            channel_id=x_goog_channel_id,
+            resource_id=x_goog_resource_id or "",
+            resource_state=x_goog_resource_state or "",
         )
-        if row:
-            async def _dispatch():
-                async with pg.get_conn(request.app.state.pool) as bg_conn:
-                    await dispatch_sync(
-                        bg_conn,
-                        str(row["integration_id"]),
-                        row["calendar_id"],
-                    )
-            background_tasks.add_task(_dispatch)
 
     return {"ok": True}
 

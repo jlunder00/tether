@@ -41,10 +41,16 @@ _REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 # State helpers (module-level so routes can import them without instantiating)
 # ---------------------------------------------------------------------------
 
+_STATE_TTL_SECONDS = 600  # 10 minutes — long enough for a slow consent screen
+
+
 def make_oauth_state(user_id: str) -> str:
-    """Return a signed, base64url-encoded state string carrying user_id."""
+    """Return a signed, base64url-encoded state string carrying user_id + expiry."""
     nonce = secrets.token_hex(16)
-    payload = json.dumps({"user_id": user_id, "nonce": nonce}, separators=(",", ":"))
+    exp = int(datetime.now(timezone.utc).timestamp()) + _STATE_TTL_SECONDS
+    payload = json.dumps(
+        {"user_id": user_id, "nonce": nonce, "exp": exp}, separators=(",", ":")
+    )
     sig = hmac.new(
         cfg.JWT_SECRET.encode(), payload.encode(), hashlib.sha256
     ).hexdigest()
@@ -53,7 +59,7 @@ def make_oauth_state(user_id: str) -> str:
 
 
 def verify_oauth_state(state: str) -> str:
-    """Verify and decode the state; return user_id or raise ValueError."""
+    """Verify signature and expiry; return user_id or raise ValueError."""
     try:
         raw = base64.urlsafe_b64decode(state.encode()).decode()
         payload_str, sig = raw.rsplit("|", 1)
@@ -64,7 +70,10 @@ def verify_oauth_state(state: str) -> str:
         raise ValueError("Malformed OAuth state")
     if not hmac.compare_digest(sig, expected):
         raise ValueError("Invalid OAuth state signature")
-    return json.loads(payload_str)["user_id"]
+    data = json.loads(payload_str)
+    if int(datetime.now(timezone.utc).timestamp()) > data.get("exp", 0):
+        raise ValueError("OAuth state expired")
+    return data["user_id"]
 
 
 # ---------------------------------------------------------------------------
