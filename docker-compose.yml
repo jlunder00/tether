@@ -39,6 +39,9 @@ services:
       - "8000:8000"
     volumes:
       - ${TETHER_DATA_DIR:-~/.tether-config}:/data
+      # Mount your Claude Code credentials so the bot can authenticate.
+      # Self-hosters: change the left side if your credentials aren't at ~/.claude.
+      - ${CLAUDE_CREDENTIALS_PATH:-~/.claude}:/root/.claude
     environment:
       - TETHER_CONFIG_DIR=/data
       - PYTHONUNBUFFERED=1
