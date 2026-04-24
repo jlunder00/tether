@@ -12,12 +12,16 @@ Usage:
         await conn.execute("INSERT INTO tasks ...")  # auto-commits on exit
 """
 
+import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 import asyncpg
+
+logger = logging.getLogger(__name__)
 
 
 async def register_jsonb_codec(conn: asyncpg.Connection) -> None:
@@ -76,13 +80,17 @@ async def get_conn(pool: asyncpg.Pool, user_id: str | None = None):
         yield existing
         return
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if user_id is not None:
-                await conn.execute(
-                    "SELECT set_config('app.current_user_id', $1, true)", str(user_id)
-                )
-            yield conn
+    try:
+        async with pool.acquire(timeout=30) as conn:
+            async with conn.transaction():
+                if user_id is not None:
+                    await conn.execute(
+                        "SELECT set_config('app.current_user_id', $1, true)", str(user_id)
+                    )
+                yield conn
+    except asyncio.TimeoutError:
+        logger.error("get_conn: pool.acquire timed out after 30s — pool exhausted")
+        raise
 
 
 @asynccontextmanager
@@ -97,14 +105,18 @@ async def transaction(pool: asyncpg.Pool, user_id: str | None = None):
         yield existing
         return
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            if user_id is not None:
-                await conn.execute(
-                    "SELECT set_config('app.current_user_id', $1, true)", str(user_id)
-                )
-            token = _current_conn.set(conn)
-            try:
-                yield conn
-            finally:
-                _current_conn.reset(token)
+    try:
+        async with pool.acquire(timeout=30) as conn:
+            async with conn.transaction():
+                if user_id is not None:
+                    await conn.execute(
+                        "SELECT set_config('app.current_user_id', $1, true)", str(user_id)
+                    )
+                token = _current_conn.set(conn)
+                try:
+                    yield conn
+                finally:
+                    _current_conn.reset(token)
+    except asyncio.TimeoutError:
+        logger.error("transaction: pool.acquire timed out after 30s — pool exhausted")
+        raise

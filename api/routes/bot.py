@@ -29,9 +29,9 @@ async def bot_health(_auth=Depends(auth_dependency),
 @router.websocket("/bot/chat")
 async def bot_chat(websocket: WebSocket,
                    _auth=Depends(ws_auth_dependency)):
+    await websocket.accept()
     pool = websocket.app.state.pool
     user_id = websocket.state.user_id
-    await websocket.accept()
     logger.info("bot_chat: connection accepted, user_id=%s", user_id)
 
     try:
@@ -56,10 +56,13 @@ async def bot_chat(websocket: WebSocket,
             await websocket.send_json({"type": "chunk", "content": full_response})
             await websocket.send_json({"type": "done"})
     except WebSocketDisconnect:
-        # cancel heartbeat, clean up
         return
     except Exception as e:
         logger.error("bot_chat: unhandled exception user_id=%s: %s: %s", user_id, type(e).__name__, e, exc_info=True)
+        try:
+            await websocket.send_json({"type": "error", "message": "Internal error"})
+        except Exception:
+            pass
         raise
 
 

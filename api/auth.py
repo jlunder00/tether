@@ -2,7 +2,7 @@ from __future__ import annotations
 import bcrypt
 import jwt
 from datetime import datetime, timedelta
-from fastapi import Request, HTTPException, WebSocket
+from fastapi import Request, HTTPException, WebSocket, WebSocketException, status
 import api.config as cfg
 
 
@@ -52,14 +52,11 @@ async def ws_auth_dependency(websocket: WebSocket):
     try:
         payload = _decode_token_from_cookies(websocket.cookies)
     except ValueError:
-        await websocket.close(code=1008)
-        return
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
     except jwt.ExpiredSignatureError:
-        await websocket.close(code=1008)
-        return
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
     except jwt.InvalidTokenError:
-        await websocket.close(code=1008)
-        return
+        raise WebSocketException(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
     websocket.state.user_id = payload["user_id"]
     websocket.state.username = payload["username"]
     websocket.state.is_admin = payload.get("is_admin", False)
