@@ -38,6 +38,18 @@ def _rows(rows) -> list[dict]:
     return [_row(r) for r in rows]
 
 
+async def count_active_keys(
+    conn: asyncpg.Connection,
+    user_id: str,
+) -> int:
+    """Return the number of active (non-revoked) keys for a user."""
+    row = await conn.fetchrow(
+        "SELECT COUNT(*) AS n FROM api_keys WHERE user_id = $1::uuid AND revoked_at IS NULL",
+        user_id,
+    )
+    return int(row["n"])
+
+
 async def create_key(
     conn: asyncpg.Connection,
     user_id: str,

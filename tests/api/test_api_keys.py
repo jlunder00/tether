@@ -72,3 +72,15 @@ async def test_revoke_key_wrong_owner_is_noop(api_client, api_client_b):
     match = next((k for k in list_resp.json() if k["id"] == key_id), None)
     assert match is not None
     assert match["revoked_at"] is None
+
+
+async def test_create_key_limit_enforced(api_client, conn):
+    """A user cannot have more than 20 active API keys; the 21st returns 422."""
+    # Create 20 keys
+    for i in range(20):
+        resp = await api_client.post("/api/keys", json={"name": f"limit-key-{i}"})
+        assert resp.status_code == 201, f"Expected 201 on key {i}, got {resp.status_code}"
+
+    # The 21st should be rejected with 422
+    resp = await api_client.post("/api/keys", json={"name": "one-too-many"})
+    assert resp.status_code == 422
