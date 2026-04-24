@@ -14,7 +14,7 @@ function panelStyle(index: number) {
   const isTop = depth === 0
   return {
     transform: isTop ? 'translateX(0)' : `translateX(-${depth * 16}px)`,
-    pointerEvents: isTop ? 'auto' : 'none',
+    pointerEvents: (isTop ? 'auto' : 'none') as 'auto' | 'none',
     filter: isTop ? 'none' : 'brightness(0.6)',
     zIndex: 50 + index,
   }

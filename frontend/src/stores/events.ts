@@ -45,7 +45,7 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* fall through */ }
     // Optimistic local insert until backend ships
     const optimistic: CalendarEvent = {
-      id: crypto.randomUUID(),
+      id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)),
       title,
       start_time: startTime,
       end_time: endTime,
