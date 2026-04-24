@@ -16,6 +16,7 @@ from db.pg_queries.tasks import (
     add_task_dependency, remove_task_dependency,
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
     resolve_blocked_status,
+    promote_task_to_event, get_events_for_range, update_event_time,
 )
 from db.pg_queries.context import (
     upsert_context_entry, get_context_entries, delete_context_entry, rename_context_subject,

@@ -568,3 +568,108 @@ async def reorder_subtasks(conn: asyncpg.Connection, task_id: str, id_order: lis
             "UPDATE subtasks SET position = $1 WHERE id = $2 AND task_id = $3",
             pos, subtask_id, task_id,
         )
+
+
+# ─── Event queries (tasks with start_time/end_time set) ───────────────────────
+
+from datetime import datetime as _datetime
+
+
+def _parse_ts(s: str) -> _datetime:
+    """Parse an ISO 8601 timestamp string to an aware datetime for asyncpg.
+
+    asyncpg requires datetime objects for TIMESTAMPTZ parameters — it does not
+    coerce strings even when the SQL uses a ::timestamptz cast. Python 3.10's
+    fromisoformat() also rejects the 'Z' suffix, so we normalise it first.
+    """
+    return _datetime.fromisoformat(s.replace("Z", "+00:00"))
+
+
+def _row_to_event(row) -> dict:
+    """Map a task row that has event fields to CalendarEvent shape."""
+    r = dict(row)
+    st = r.get("start_time")
+    et = r.get("end_time")
+    uid = str(r["uuid"]) if r.get("uuid") else None
+    return {
+        "id": uid,
+        "title": r.get("text", ""),
+        "start_time": st.isoformat() if st else None,
+        "end_time": et.isoformat() if et else None,
+        "source": r.get("source") or "tether",
+        "external_id": r.get("external_id"),
+        "task_id": uid,
+        "anchor_id": str(r["anchor_id"]) if r.get("anchor_id") else None,
+        "color": None,
+    }
+
+
+async def promote_task_to_event(
+    conn: asyncpg.Connection,
+    task_uuid: str,
+    start_time: str,
+    end_time: str,
+) -> dict | None:
+    """Stamp an existing task with start/end time, making it a calendar event.
+
+    Returns CalendarEvent-shaped dict, or None if the task doesn't exist.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1,
+            end_time   = $2,
+            source     = COALESCE(source, 'tether'),
+            version    = version + 1
+        WHERE uuid = $3
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        """,
+        _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(task_uuid),
+    )
+    return _row_to_event(row) if row else None
+
+
+async def get_events_for_range(
+    conn: asyncpg.Connection,
+    start: str,
+    end: str,
+) -> list[dict]:
+    """Return all tasks that have been promoted to events within [start, end]."""
+    rows = await conn.fetch(
+        """
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id
+        FROM tasks
+        WHERE start_time IS NOT NULL
+          AND start_time >= $1
+          AND start_time <= $2
+        ORDER BY start_time
+        """,
+        _parse_ts(start), _parse_ts(end),
+    )
+    return [_row_to_event(r) for r in rows]
+
+
+async def update_event_time(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    start_time: str,
+    end_time: str,
+) -> dict | None:
+    """Reposition a calendar event to a new time slot.
+
+    Only updates tasks that already have start_time set (i.e. are promoted events).
+    Returns CalendarEvent-shaped dict, or None if not found / not an event.
+    """
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1,
+            end_time   = $2,
+            version    = version + 1
+        WHERE uuid = $3
+          AND start_time IS NOT NULL
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        """,
+        _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(event_uuid),
+    )
+    return _row_to_event(row) if row else None
