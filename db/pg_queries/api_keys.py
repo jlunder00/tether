@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid as _uuid
-from datetime import datetime, timezone
 
 import asyncpg
 

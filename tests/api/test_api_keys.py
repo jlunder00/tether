@@ -74,7 +74,7 @@ async def test_revoke_key_wrong_owner_is_noop(api_client, api_client_b):
     assert match["revoked_at"] is None
 
 
-async def test_create_key_limit_enforced(api_client, conn):
+async def test_create_key_limit_enforced(api_client):
     """A user cannot have more than 20 active API keys; the 21st returns 422."""
     # Create 20 keys
     for i in range(20):

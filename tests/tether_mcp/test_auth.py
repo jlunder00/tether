@@ -10,6 +10,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+import db.postgres as pg
 from db.pg_queries.api_keys import create_key
 from tether_mcp.auth import TetherAPIKeyMiddleware, get_user_id, _user_id_var
 
@@ -30,17 +31,13 @@ def _make_test_app(pool_factory):
 
 async def _make_key(pool, user_id: str, name: str, username: str, email: str) -> str:
     """Helper: ensure user exists and create a key, returning the raw key."""
-    c = await pool.acquire()
-    tr = c.transaction()
-    await tr.start()
-    await c.execute(
-        "INSERT INTO users (id, username, email, password_hash, is_admin) "
-        "VALUES ($1::uuid, $2, $3, 'x', false) ON CONFLICT DO NOTHING",
-        user_id, username, email,
-    )
-    key, _ = await create_key(c, user_id, name)
-    await tr.commit()
-    await pool.release(c)
+    async with pg.get_conn(pool, user_id) as conn:
+        await conn.execute(
+            "INSERT INTO users (id, username, email, password_hash, is_admin) "
+            "VALUES ($1::uuid, $2, $3, 'x', false) ON CONFLICT DO NOTHING",
+            user_id, username, email,
+        )
+        key, _ = await create_key(conn, user_id, name)
     return key
 
 
@@ -68,7 +65,10 @@ async def raw_key_b(pg_pool):
 # ── Happy path ───────────────────────────────────────────────────────────────
 
 async def test_valid_key_via_header(pool, raw_key):
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -78,7 +78,10 @@ async def test_valid_key_via_header(pool, raw_key):
 
 
 async def test_valid_key_via_bearer(pool, raw_key):
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -90,7 +93,10 @@ async def test_valid_key_via_bearer(pool, raw_key):
 # ── Rejection cases ──────────────────────────────────────────────────────────
 
 async def test_missing_key_returns_401(pool):
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -137,7 +143,10 @@ async def test_missing_key_returns_www_authenticate_header():
 
 
 async def test_invalid_key_returns_401(pool):
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -147,14 +156,16 @@ async def test_invalid_key_returns_401(pool):
 
 async def test_revoked_key_returns_401(pool, raw_key):
     # Revoke the key directly in DB
-    c = await pool.acquire()
-    await c.execute(
-        "UPDATE api_keys SET revoked_at = now() WHERE key_hash = encode(sha256($1::bytea), 'hex')",
-        raw_key.encode(),
-    )
-    await pool.release(c)
+    async with pg.get_conn(pool) as conn:
+        await conn.execute(
+            "UPDATE api_keys SET revoked_at = now() WHERE key_hash = encode(sha256($1::bytea), 'hex')",
+            raw_key.encode(),
+        )
 
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -164,7 +175,10 @@ async def test_revoked_key_returns_401(pool, raw_key):
 
 async def test_query_param_returns_401(pool, raw_key):
     """Keys in query params are not supported — they appear in access logs."""
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -179,7 +193,10 @@ async def test_env_var_does_not_bypass_http_auth(pool):
     original = os.environ.get("TETHER_USER_ID")
     os.environ["TETHER_USER_ID"] = "00000000-0000-0000-0000-000000000099"
     try:
-        app = _make_test_app(lambda: pool)
+        async def _pool_factory():
+            return pool
+
+        app = _make_test_app(_pool_factory)
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -197,7 +214,10 @@ async def test_env_var_set_with_invalid_key_still_returns_401(pool):
     original = os.environ.get("TETHER_USER_ID")
     os.environ["TETHER_USER_ID"] = "00000000-0000-0000-0000-000000000099"
     try:
-        app = _make_test_app(lambda: pool)
+        async def _pool_factory():
+            return pool
+
+        app = _make_test_app(_pool_factory)
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -214,11 +234,11 @@ async def test_env_var_set_with_invalid_key_still_returns_401(pool):
 
 async def test_first_header_value_wins_on_duplicates(pool, raw_key):
     """First X-Tether-API-Key header wins; second (garbage) is ignored."""
-    app = _make_test_app(lambda: pool)
-    # httpx deduplicates headers — test via raw ASGI scope instead
-    from starlette.testclient import TestClient
-    import threading
+    async def _pool_factory():
+        return pool
 
+    app = _make_test_app(_pool_factory)
+    # httpx deduplicates headers — test via raw ASGI scope instead
     result = {}
 
     async def _run():
@@ -253,7 +273,10 @@ async def test_first_header_value_wins_on_duplicates(pool, raw_key):
 
 async def test_concurrent_requests_contextvar_isolated(pool, raw_key, raw_key_b):
     """Two concurrent requests with different keys must resolve to their respective users."""
-    app = _make_test_app(lambda: pool)
+    async def _pool_factory():
+        return pool
+
+    app = _make_test_app(_pool_factory)
 
     async def _get(key):
         async with AsyncClient(

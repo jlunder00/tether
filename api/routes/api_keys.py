@@ -27,13 +27,14 @@ async def create_key(
     conn: asyncpg.Connection = Depends(get_db_conn),
 ):
     """Create a new API key. Returns the raw key once — it cannot be retrieved again."""
-    active = await key_queries.count_active_keys(conn, request.state.user_id)
-    if active >= _MAX_ACTIVE_KEYS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Active key limit reached ({_MAX_ACTIVE_KEYS}). Revoke an existing key before creating a new one.",
-        )
-    raw_key, record = await key_queries.create_key(conn, request.state.user_id, body.name)
+    async with conn.transaction():
+        active = await key_queries.count_active_keys(conn, request.state.user_id)
+        if active >= _MAX_ACTIVE_KEYS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Active key limit reached ({_MAX_ACTIVE_KEYS}). Revoke an existing key before creating a new one.",
+            )
+        raw_key, record = await key_queries.create_key(conn, request.state.user_id, body.name)
     return {**record, "raw_key": raw_key}
 
 
