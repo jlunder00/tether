@@ -214,12 +214,16 @@ def create_app(lifespan_override=None) -> FastAPI:
         # so Vue Router can handle client-side routing
         from fastapi.responses import FileResponse
 
+        _dist_resolved = FRONTEND_DIST.resolve()
+
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
-            # If it's a real file in dist (e.g., favicon.ico), serve it
-            file_path = FRONTEND_DIST / full_path
-            if full_path and file_path.is_file():
-                return FileResponse(file_path)
+            # Resolve path and confirm it stays inside FRONTEND_DIST to
+            # prevent path-traversal via URL-encoded '..' sequences.
+            if full_path:
+                file_path = (FRONTEND_DIST / full_path).resolve()
+                if file_path.is_file() and file_path.is_relative_to(_dist_resolved):
+                    return FileResponse(file_path)
             return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
