@@ -18,6 +18,19 @@ def _get(key: str, default: str = "") -> str:
 
 JWT_SECRET = _get("TETHER_JWT_SECRET", "dev-secret-change-in-production")
 
+# CORS — restrict to explicit origins; wildcard + credentials is rejected by browsers
+ALLOWED_ORIGINS: list[str] = [
+    o.strip()
+    for o in _get(
+        "TETHER_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:8000",
+    ).split(",")
+    if o.strip()
+]
+
+# Cookie security — set False for local HTTP development via TETHER_COOKIE_SECURE=false
+COOKIE_SECURE: bool = _get("TETHER_COOKIE_SECURE", "true").lower() not in ("false", "0")
+
 # OAuth — GitHub
 GITHUB_CLIENT_ID = _get("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = _get("GITHUB_CLIENT_SECRET")
