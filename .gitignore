@@ -211,6 +211,10 @@ __marimo__/
 .worktrees/
 .serena/
 
+# AI tooling — local state, never committed
+.superpowers/
+.claude/
+
 # Internal dev specs (not user-facing docs)
 docs/superpowers/
 
