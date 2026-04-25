@@ -6,7 +6,7 @@ import asyncpg
 logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,11 +31,22 @@ from api.routes import integrations as integrations_routes
 from api.routes import api_keys as api_keys_routes
 from api.routes import events as events_routes
 from api.ws import manager
-from api.auth import decode_jwt
+from api.auth import auth_dependency, decode_jwt
+from api.limiter import limiter
 from db.pool_middleware import lifespan as _pool_lifespan
 from db.pg_queries.errors import StaleReadError
 import db.postgres as pg
 import api.config as cfg
+
+_DEFAULT_JWT_SECRET = "dev-secret-change-in-production"
+
+
+def _check_jwt_secret(secret: str) -> None:
+    """Raise RuntimeError if *secret* is the insecure default value."""
+    if secret == _DEFAULT_JWT_SECRET:
+        raise RuntimeError(
+            "TETHER_JWT_SECRET must be set to a secure value in production"
+        )
 
 FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 
@@ -59,6 +70,9 @@ async def _expiry_loop(app):
 
 @asynccontextmanager
 async def lifespan(app):
+    import os as _startup_os
+    if _startup_os.environ.get("ENVIRONMENT") == "production":
+        _check_jwt_secret(cfg.JWT_SECRET)
     async with _pool_lifespan(app):
         task = asyncio.create_task(_expiry_loop(app))
         yield
@@ -77,11 +91,24 @@ def create_app(lifespan_override=None) -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cfg.ALLOWED_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Rate limiting — attach limiter to app state so slowapi can find it.
+    # When TETHER_DISABLE_RATE_LIMITS=1 the limiter is a no-op; no exception
+    # handler is needed in that case.
+    import os as _os
+    if not _os.environ.get("TETHER_DISABLE_RATE_LIMITS"):
+        try:
+            from slowapi import _rate_limit_exceeded_handler
+            from slowapi.errors import RateLimitExceeded
+            app.state.limiter = limiter
+            app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+        except ImportError:
+            pass  # slowapi not installed — rate limiting skipped
 
     @app.exception_handler(ValueError)
     async def value_error_handler(request, exc):
@@ -132,7 +159,9 @@ def create_app(lifespan_override=None) -> FastAPI:
         pass
 
     @app.post("/api/notify")
-    async def notify():
+    async def notify(request: Request, _auth=Depends(auth_dependency)):
+        if not request.state.is_admin:
+            raise HTTPException(status_code=403, detail="Admin only")
         await manager.broadcast({"type": "plan_updated"})
         await manager.broadcast({"type": "context_updated"})
         return {"ok": True}
