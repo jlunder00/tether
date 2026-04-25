@@ -103,17 +103,31 @@ async def create_kanban_column(
 async def update_kanban_column(
     conn: asyncpg.Connection, column_id: str, fields: dict
 ) -> dict | None:
-    allowed = {"name", "position", "color", "match_rules", "entry_rules"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
+    # Build SET clause from static column-name literals only.
+    params: list = []
+    set_parts: list[str] = []
+
+    def _add(col: str, val) -> None:
+        params.append(val)
+        set_parts.append(f"{col} = ${len(params)}")
+
+    if "name" in fields:
+        _add("name", fields["name"])
+    if "position" in fields:
+        _add("position", fields["position"])
+    if "color" in fields:
+        _add("color", fields["color"])
+    if "match_rules" in fields:
+        _add("match_rules", fields["match_rules"])
+    if "entry_rules" in fields:
+        _add("entry_rules", fields["entry_rules"])
+
+    if not set_parts:
         return None
 
-    params = list(updates.values())
     params.append(column_id)
-    set_clause = ", ".join(f"{k} = ${i + 1}" for i, k in enumerate(updates))
-
     await conn.execute(
-        f"UPDATE kanban_columns SET {set_clause} WHERE id = ${len(params)}",
+        f"UPDATE kanban_columns SET {', '.join(set_parts)} WHERE id = ${len(params)}",
         *params,
     )
     row = await conn.fetchrow(

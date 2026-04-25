@@ -148,16 +148,29 @@ async def patch_milestone(
     fields: dict,
     expected_version: int | None = None,
 ) -> dict | None:
-    allowed = {"name", "description", "target_date", "color"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
+    # Build SET clause from static column-name literals only.
+    params: list = []
+    set_parts: list[str] = []
+
+    def _add(col: str, val) -> None:
+        params.append(val)
+        set_parts.append(f"{col} = ${len(params)}")
+
+    if "name" in fields:
+        _add("name", fields["name"])
+    if "description" in fields:
+        _add("description", fields["description"])
+    if "target_date" in fields:
+        _add("target_date", fields["target_date"])
+    if "color" in fields:
+        _add("color", fields["color"])
     if "status" in fields:
-        updates["status"] = fields["status"]
-        updates["status_override"] = True
-    if not updates:
+        _add("status", fields["status"])
+        _add("status_override", True)
+
+    if not set_parts:
         return None
 
-    params = list(updates.values())
-    set_parts = [f"{k} = ${i + 1}" for i, k in enumerate(updates)]
     set_parts.extend(["updated_at = now()", "version = version + 1"])
 
     if expected_version is not None:
