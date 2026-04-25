@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import os
 import time
+import uuid as _uuid
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,6 +97,49 @@ def _mock_google_client(google_user_id: str = "goog-999", email: str = "goog@sec
     return mock_client
 
 
+async def _insert_user(email: str, username: str, is_admin: bool = False) -> str:
+    """Insert a user directly and return their UUID string."""
+    user_id = str(_uuid.uuid4())
+    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
+    try:
+        await c.execute(
+            "INSERT INTO users (id, username, email, password_hash, is_admin) "
+            "VALUES ($1::uuid, $2, $3, 'x', $4)",
+            _uuid.UUID(user_id), username, email, is_admin,
+        )
+    finally:
+        await c.close()
+    return user_id
+
+
+async def _insert_invite_token(created_by: str) -> str:
+    """Insert an invite token for an admin user and return the token string."""
+    token = str(_uuid.uuid4())
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
+    try:
+        await c.execute(
+            "INSERT INTO invite_tokens (token, created_by, expires_at) VALUES ($1, $2::uuid, $3)",
+            token, _uuid.UUID(created_by), expires_at,
+        )
+    finally:
+        await c.close()
+    return token
+
+
+async def _insert_oauth_connection(user_id: str, provider: str, provider_user_id: str) -> None:
+    """Insert an oauth_connection row directly."""
+    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
+    try:
+        await c.execute(
+            "INSERT INTO oauth_connections (user_id, provider, provider_user_id) "
+            "VALUES ($1::uuid, $2, $3)",
+            _uuid.UUID(user_id), provider, provider_user_id,
+        )
+    finally:
+        await c.close()
+
+
 # ---------------------------------------------------------------------------
 # H-2: OAuth callbacks reject missing/invalid/expired state
 # ---------------------------------------------------------------------------
@@ -102,8 +147,8 @@ def _mock_google_client(google_user_id: str = "goog-999", email: str = "goog@sec
 @pytest.mark.asyncio
 async def test_github_callback_rejects_missing_state(auth_client, monkeypatch):
     """GitHub callback with no state param returns 400."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
     with patch("api.routes.auth.httpx.AsyncClient", return_value=_mock_github_client()):
         resp = await auth_client.get(
@@ -117,8 +162,8 @@ async def test_github_callback_rejects_missing_state(auth_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_github_callback_rejects_invalid_state(auth_client, monkeypatch):
     """GitHub callback with a bad-signature state returns 400."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
     with patch("api.routes.auth.httpx.AsyncClient", return_value=_mock_github_client()):
         resp = await auth_client.get(
@@ -132,8 +177,8 @@ async def test_github_callback_rejects_invalid_state(auth_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_github_callback_rejects_expired_state(auth_client, monkeypatch):
     """GitHub callback with an expired state returns 400."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
     expired_state = _make_expired_state({"mode": "login"})
 
@@ -149,8 +194,8 @@ async def test_github_callback_rejects_expired_state(auth_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_google_callback_rejects_missing_state(auth_client, monkeypatch):
     """Google callback with no state param returns 400."""
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_SECRET", "test-secret")
 
     with patch("api.routes.auth.httpx.AsyncClient", return_value=_mock_google_client()):
         resp = await auth_client.get(
@@ -164,8 +209,8 @@ async def test_google_callback_rejects_missing_state(auth_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_google_callback_rejects_expired_state(auth_client, monkeypatch):
     """Google callback with an expired state returns 400."""
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_SECRET", "test-secret")
 
     expired_state = _make_expired_state({"mode": "login"})
 
@@ -185,15 +230,11 @@ async def test_google_callback_rejects_expired_state(auth_client, monkeypatch):
 @pytest.mark.asyncio
 async def test_github_callback_new_user_requires_invite(auth_client, monkeypatch):
     """GitHub callback with mode=login and no existing account returns 400."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
     # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
-    await auth_client.post("/auth/register", json={
-        "username": "admin-sec-req",
-        "email": "admin-sec-req@sectest.example",
-        "password": "adminpass",
-    })
+    await _insert_user("admin-sec-req@sectest.example", "admin-sec-req", is_admin=True)
 
     state = _make_valid_state({"mode": "login"})
 
@@ -212,15 +253,11 @@ async def test_github_callback_new_user_requires_invite(auth_client, monkeypatch
 @pytest.mark.asyncio
 async def test_google_callback_new_user_requires_invite(auth_client, monkeypatch):
     """Google callback with mode=login and no existing account returns 400."""
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_SECRET", "test-secret")
 
     # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
-    await auth_client.post("/auth/register", json={
-        "username": "admin-sec-goog",
-        "email": "admin-sec-goog@sectest.example",
-        "password": "adminpass",
-    })
+    await _insert_user("admin-sec-goog@sectest.example", "admin-sec-goog", is_admin=True)
 
     state = _make_valid_state({"mode": "login"})
 
@@ -239,15 +276,11 @@ async def test_google_callback_new_user_requires_invite(auth_client, monkeypatch
 @pytest.mark.asyncio
 async def test_github_callback_new_user_invalid_invite_rejected(auth_client, monkeypatch):
     """GitHub callback with an invalid invite token in state returns 400."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
     # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
-    await auth_client.post("/auth/register", json={
-        "username": "admin-sec-inv",
-        "email": "admin-sec-inv@sectest.example",
-        "password": "adminpass",
-    })
+    await _insert_user("admin-sec-inv@sectest.example", "admin-sec-inv", is_admin=True)
 
     state = _make_valid_state({"invite_token": "not-a-real-token"})
 
@@ -263,20 +296,14 @@ async def test_github_callback_new_user_invalid_invite_rejected(auth_client, mon
 
 
 @pytest.mark.asyncio
-async def test_github_callback_new_user_valid_invite_creates_account(auth_client, pool, monkeypatch):
+async def test_github_callback_new_user_valid_invite_creates_account(auth_client, monkeypatch):
     """GitHub callback with a valid invite token creates an account and redirects."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
-    # Create admin + invite token via the auth API
-    await auth_client.post("/auth/register", json={
-        "username": "admin-sec",
-        "email": "admin-sec@sectest.example",
-        "password": "adminpass",
-    })
-    inv_resp = await auth_client.post("/auth/invite")
-    assert inv_resp.status_code == 200
-    invite_token = inv_resp.json()["token"]
+    # Create admin + invite token directly (bypassing register API which requires invite when users exist)
+    admin_id = await _insert_user("admin-sec@sectest.example", "admin-sec", is_admin=True)
+    invite_token = await _insert_invite_token(admin_id)
 
     state = _make_valid_state({"invite_token": invite_token})
 
@@ -297,30 +324,14 @@ async def test_github_callback_new_user_valid_invite_creates_account(auth_client
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_github_callback_existing_user_login_no_invite(auth_client, pool, monkeypatch):
+async def test_github_callback_existing_user_login_no_invite(auth_client, monkeypatch):
     """GitHub callback for an existing OAuth user logs in without invite token."""
-    monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GITHUB_CLIENT_SECRET", "test-secret")
 
-    # First: register admin + create oauth_connection manually
-    reg = await auth_client.post("/auth/register", json={
-        "username": "existing-gh",
-        "email": "existing-gh@sectest.example",
-        "password": "pass",
-    })
-    assert reg.status_code == 200
-    user_id = reg.json()["user_id"]
-
-    # Insert oauth_connection for this user
-    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
-    try:
-        import uuid
-        await c.execute(
-            "INSERT INTO oauth_connections (user_id, provider, provider_user_id) VALUES ($1, 'github', $2)",
-            uuid.UUID(user_id), "gh-existing-42",
-        )
-    finally:
-        await c.close()
+    # Create user + oauth_connection directly (bypassing register API)
+    user_id = await _insert_user("existing-gh@sectest.example", "existing-gh")
+    await _insert_oauth_connection(user_id, "github", "gh-existing-42")
 
     state = _make_valid_state({"mode": "login"})
 
@@ -337,28 +348,14 @@ async def test_github_callback_existing_user_login_no_invite(auth_client, pool, 
 
 
 @pytest.mark.asyncio
-async def test_google_callback_existing_user_login_no_invite(auth_client, pool, monkeypatch):
+async def test_google_callback_existing_user_login_no_invite(auth_client, monkeypatch):
     """Google callback for an existing OAuth user logs in without invite token."""
-    monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
-    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_ID", "test-id")
+    monkeypatch.setattr("api.config.GOOGLE_CLIENT_SECRET", "test-secret")
 
-    reg = await auth_client.post("/auth/register", json={
-        "username": "existing-goog",
-        "email": "existing-goog@sectest.example",
-        "password": "pass",
-    })
-    assert reg.status_code == 200
-    user_id = reg.json()["user_id"]
-
-    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
-    try:
-        import uuid
-        await c.execute(
-            "INSERT INTO oauth_connections (user_id, provider, provider_user_id) VALUES ($1, 'google', $2)",
-            uuid.UUID(user_id), "goog-existing-42",
-        )
-    finally:
-        await c.close()
+    # Create user + oauth_connection directly (bypassing register API)
+    user_id = await _insert_user("existing-goog@sectest.example", "existing-goog")
+    await _insert_oauth_connection(user_id, "google", "goog-existing-42")
 
     state = _make_valid_state({"mode": "login"})
 
