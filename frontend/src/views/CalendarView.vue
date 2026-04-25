@@ -51,15 +51,16 @@ interface DragState {
 }
 const draggingEvent = ref<DragState | null>(null)
 
-function onEventMousedown(e: MouseEvent, event: CalendarEvent, colEl: HTMLElement) {
+function onEventMousedown(e: MouseEvent, event: CalendarEvent) {
   e.stopPropagation()
+  const colEl = (e.target as HTMLElement).closest('[data-day-col]') as HTMLElement | null
   draggingEvent.value = {
     eventId: event.id,
     originalStart: event.start_time,
     originalEnd: event.end_time,
     currentTop: eventTopPx(event),
     currentDayIndex: dayKeys.value.indexOf(event.start_time.slice(0, 10)),
-    columnRect: colEl.getBoundingClientRect(),
+    columnRect: colEl?.getBoundingClientRect() ?? null,
   }
   document.body.style.userSelect = 'none'
 }
@@ -120,11 +121,8 @@ async function onWindowMouseup(e: MouseEvent) {
     // Find which day column the mouse is over
     const el = document.elementFromPoint(e.clientX, e.clientY)
     const colEl = el?.closest('[data-day-col]') as HTMLElement | null
-    const targetDay = colEl?.getAttribute('data-day-col') ?? state.eventId
-      ? days.value[state.currentDayIndex]
-      : null
 
-    if (!colEl || !targetDay) {
+    if (!colEl) {
       // Dropped outside grid — snap back (no-op, original is already in store)
       return
     }
@@ -777,10 +775,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
                 :style="draggingEvent?.eventId === event.id ? { opacity: 0.5 } : {}"
                 data-event-block
                 @click="openEventPanel(event)"
-                @mousedown="(e: MouseEvent) => {
-                  const colEl = ($el as HTMLElement | null)?.parentElement
-                  if (colEl) onEventMousedown(e, event, colEl)
-                }"
+                @mousedown="(e: MouseEvent) => onEventMousedown(e, event)"
               />
 
               <!-- Creation drag selection rectangle -->

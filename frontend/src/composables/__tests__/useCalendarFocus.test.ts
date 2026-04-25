@@ -7,7 +7,8 @@ describe('useCalendarFocus', () => {
   })
 
   it('initializes focusedDay to today', () => {
-    const today = new Date().toISOString().slice(0, 10)
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
     const { focusedDay } = useCalendarFocus()
     expect(focusedDay.value).toBe(today)
   })
@@ -29,6 +30,8 @@ describe('useCalendarFocus', () => {
     const { focusedDay, setFocusedDay } = useCalendarFocus()
     setFocusedDay('2020-01-01')
     resetFocusedDay()
-    expect(focusedDay.value).toBe(new Date().toISOString().slice(0, 10))
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    expect(focusedDay.value).toBe(today)
   })
 })
