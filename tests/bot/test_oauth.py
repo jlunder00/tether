@@ -98,7 +98,7 @@ class TestRefreshTokens:
             result = refresh_tokens(old)
 
         actual_url = mock_post.call_args[0][0]
-        assert actual_url == "https://platform.claude.com/v1/oauth/token"
+        assert actual_url == "https://platform.claude.com/v1/oauth/token"  # codeql[py/incomplete-url-substring-sanitization]
 
     def test_returns_new_tokens_on_success(self):
         from bot.oauth import OAuthTokens, refresh_tokens
