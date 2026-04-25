@@ -7,6 +7,7 @@ import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import { useAnchorStore } from '../stores/anchors'
 import { useBacklogStore } from '../stores/backlog'
+import { useEventStore } from '../stores/events'
 import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
@@ -21,6 +22,10 @@ const planStore = usePlanStore()
 const milestoneStore = useMilestoneStore()
 const anchorStore = useAnchorStore()
 const backlogStore = useBacklogStore()
+const eventStore = useEventStore()
+
+// Calendar event linked to this task (if it has been scheduled on the calendar)
+const taskEvent = computed(() => eventStore.events.find(e => e.task_id === props.taskId) ?? null)
 
 // Find the task from the plan OR from the backlog
 const taskAndAnchor = computed(() => {
@@ -275,6 +280,31 @@ function depLabel(type: string, entityId: string): string {
   return entityId.slice(0, 8) + '…'
 }
 
+// Calendar time helpers — convert ISO ↔ datetime-local input value (YYYY-MM-DDTHH:MM)
+function isoToDatetimeLocal(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function onCalendarStartChange(e: Event) {
+  if (!taskEvent.value) return
+  const val = (e.target as HTMLInputElement).value
+  if (!val) return
+  const newStart = new Date(val).toISOString()
+  // Preserve original duration
+  const dur = new Date(taskEvent.value.end_time).getTime() - new Date(taskEvent.value.start_time).getTime()
+  const newEnd = new Date(new Date(val).getTime() + dur).toISOString()
+  await eventStore.moveEvent(taskEvent.value.id, newStart, newEnd)
+}
+
+async function onCalendarEndChange(e: Event) {
+  if (!taskEvent.value) return
+  const val = (e.target as HTMLInputElement).value
+  if (!val) return
+  await eventStore.moveEvent(taskEvent.value.id, taskEvent.value.start_time, new Date(val).toISOString())
+}
+
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
@@ -332,6 +362,34 @@ onMounted(async () => {
             <option value="skipped">Skipped</option>
             <option value="blocked">Blocked</option>
           </select>
+        </div>
+
+        <!-- Calendar -->
+        <div class="flex flex-col gap-2">
+          <span class="text-xs text-white/50 uppercase tracking-wide">Calendar</span>
+          <template v-if="taskEvent">
+            <div class="flex flex-col gap-2">
+              <label class="flex flex-col gap-0.5">
+                <span class="text-xs text-white/40">Start</span>
+                <input
+                  type="datetime-local"
+                  :value="isoToDatetimeLocal(taskEvent.start_time)"
+                  @change="onCalendarStartChange"
+                  class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span class="text-xs text-white/40">End</span>
+                <input
+                  type="datetime-local"
+                  :value="isoToDatetimeLocal(taskEvent.end_time)"
+                  @change="onCalendarEndChange"
+                  class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+              </label>
+            </div>
+          </template>
+          <template v-else>
+            <div class="text-xs text-white/30 italic">Not on calendar — drag it onto the time grid to schedule</div>
+          </template>
         </div>
 
         <!-- Schedule / Location -->

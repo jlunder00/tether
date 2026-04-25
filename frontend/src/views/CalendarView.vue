@@ -171,7 +171,10 @@ async function onWindowMouseup(e: MouseEvent) {
     const endDate = new Date(state.dayKey + 'T00:00:00')
     endDate.setHours(endHour, endMin, 0, 0)
 
-    await eventStore.createEvent(startDate.toISOString(), endDate.toISOString(), 'New Event')
+    const taskId = await eventStore.createTaskAndPromote(startDate.toISOString(), endDate.toISOString())
+    if (taskId) {
+      pushPanel({ kind: 'task', entityId: taskId })
+    }
     return
   }
 }
