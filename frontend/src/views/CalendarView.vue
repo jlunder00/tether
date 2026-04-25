@@ -695,28 +695,31 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
       <!-- ── Week View ── -->
       <template v-if="viewMode === 'week'">
-        <!-- Day-of-week header -->
-        <div class="flex flex-shrink-0 border-b border-white/10" style="padding-left: 48px">
-          <div
-            v-for="(day, i) in days"
-            :key="dayKeys[i]"
-            :data-testid="`day-header-${i}`"
-            :data-day="dayKeys[i]"
-            :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
-            class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
-            :class="[
-              dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
-              focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-            ]"
-            @click="focusDay(dayKeys[i])"
-          >
-            {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
-          </div>
-        </div>
-
-        <!-- Scrollable time grid -->
+        <!-- Scrollable time grid — header lives inside so both share the same
+             container width even when the scrollbar is visible. -->
         <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
-          <div data-testid="week-view" class="flex" style="min-height: 100%">
+
+          <!-- Day-of-week header — sticky inside scroll container so it always
+               has the same width context as the day columns beneath it. -->
+          <div class="sticky top-0 z-10 flex border-b border-white/10 bg-gray-900 pl-12">
+            <div
+              v-for="(day, i) in days"
+              :key="dayKeys[i]"
+              :data-testid="`day-header-${i}`"
+              :data-day="dayKeys[i]"
+              :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
+              class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
+              :class="[
+                dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
+                focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+              ]"
+              @click="focusDay(dayKeys[i])"
+            >
+              {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+            </div>
+          </div>
+
+          <div data-testid="week-view" class="flex">
 
             <!-- Hour labels -->
             <div class="flex-shrink-0 w-12 select-none">

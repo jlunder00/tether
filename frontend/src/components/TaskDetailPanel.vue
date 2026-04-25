@@ -186,6 +186,9 @@ async function moveToAnchor(newAnchorId: string) {
 async function deleteTask() {
   if (!confirm('Delete this task?')) return
   await api(`/api/tasks/${props.taskId}`, { method: 'DELETE' })
+  // Remove any associated calendar event from local state immediately so the
+  // grid updates without waiting for a re-fetch.
+  eventStore.removeEventsForTask(props.taskId)
   popPanel()
   if (isBacklog.value) {
     await backlogStore.fetchTasks()
