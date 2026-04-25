@@ -126,5 +126,14 @@ export const useEventStore = defineStore('events', () => {
     events.value = events.value.filter(e => e.id !== eventId)
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent }
+  /**
+   * Remove all local event entries for a given task id.
+   * Called after task deletion so the calendar grid updates immediately
+   * without waiting for a full re-fetch.
+   */
+  function removeEventsForTask(taskId: string) {
+    events.value = events.value.filter(e => e.task_id !== taskId)
+  }
+
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask }
 })
