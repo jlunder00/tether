@@ -188,6 +188,13 @@ async def test_github_callback_new_user_requires_invite(auth_client, monkeypatch
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
 
+    # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
+    await auth_client.post("/auth/register", json={
+        "username": "admin-sec-req",
+        "email": "admin-sec-req@sectest.example",
+        "password": "adminpass",
+    })
+
     state = _make_valid_state({"mode": "login"})
 
     with patch("api.routes.auth.httpx.AsyncClient", return_value=_mock_github_client(
@@ -208,6 +215,13 @@ async def test_google_callback_new_user_requires_invite(auth_client, monkeypatch
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "test-id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
 
+    # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
+    await auth_client.post("/auth/register", json={
+        "username": "admin-sec-goog",
+        "email": "admin-sec-goog@sectest.example",
+        "password": "adminpass",
+    })
+
     state = _make_valid_state({"mode": "login"})
 
     with patch("api.routes.auth.httpx.AsyncClient", return_value=_mock_google_client(
@@ -227,6 +241,13 @@ async def test_github_callback_new_user_invalid_invite_rejected(auth_client, mon
     """GitHub callback with an invalid invite token in state returns 400."""
     monkeypatch.setenv("GITHUB_CLIENT_ID", "test-id")
     monkeypatch.setenv("GITHUB_CLIENT_SECRET", "test-secret")
+
+    # Ensure at least one user exists so the next OAuth user is NOT the first (admin)
+    await auth_client.post("/auth/register", json={
+        "username": "admin-sec-inv",
+        "email": "admin-sec-inv@sectest.example",
+        "password": "adminpass",
+    })
 
     state = _make_valid_state({"invite_token": "not-a-real-token"})
 
