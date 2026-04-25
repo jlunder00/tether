@@ -152,21 +152,23 @@ async def patch_milestone(
     params: list = []
     set_parts: list[str] = []
 
-    def _add(col: str, val) -> None:
-        params.append(val)
-        set_parts.append(f"{col} = ${len(params)}")
-
     if "name" in fields:
-        _add("name", fields["name"])
+        params.append(fields["name"])
+        set_parts.append(f"name = ${len(params)}")
     if "description" in fields:
-        _add("description", fields["description"])
+        params.append(fields["description"])
+        set_parts.append(f"description = ${len(params)}")
     if "target_date" in fields:
-        _add("target_date", fields["target_date"])
+        params.append(fields["target_date"])
+        set_parts.append(f"target_date = ${len(params)}")
     if "color" in fields:
-        _add("color", fields["color"])
+        params.append(fields["color"])
+        set_parts.append(f"color = ${len(params)}")
     if "status" in fields:
-        _add("status", fields["status"])
-        _add("status_override", True)
+        params.append(fields["status"])
+        set_parts.append(f"status = ${len(params)}")
+        params.append(True)
+        set_parts.append(f"status_override = ${len(params)}")
 
     if not set_parts:
         return None

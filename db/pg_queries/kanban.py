@@ -107,20 +107,21 @@ async def update_kanban_column(
     params: list = []
     set_parts: list[str] = []
 
-    def _add(col: str, val) -> None:
-        params.append(val)
-        set_parts.append(f"{col} = ${len(params)}")
-
     if "name" in fields:
-        _add("name", fields["name"])
+        params.append(fields["name"])
+        set_parts.append(f"name = ${len(params)}")
     if "position" in fields:
-        _add("position", fields["position"])
+        params.append(fields["position"])
+        set_parts.append(f"position = ${len(params)}")
     if "color" in fields:
-        _add("color", fields["color"])
+        params.append(fields["color"])
+        set_parts.append(f"color = ${len(params)}")
     if "match_rules" in fields:
-        _add("match_rules", fields["match_rules"])
+        params.append(fields["match_rules"])
+        set_parts.append(f"match_rules = ${len(params)}")
     if "entry_rules" in fields:
-        _add("entry_rules", fields["entry_rules"])
+        params.append(fields["entry_rules"])
+        set_parts.append(f"entry_rules = ${len(params)}")
 
     if not set_parts:
         return None

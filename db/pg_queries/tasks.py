@@ -122,30 +122,35 @@ async def patch_task_fields(
 ) -> dict | None:
     # Build SET clause from static column-name literals only — no user-supplied
     # string ever flows into the SQL text, satisfying static-analysis tools.
+    # Each column name is a hard-coded string literal; only values are params.
     params: list = []
     set_parts: list[str] = []
 
-    def _add(col: str, val) -> None:
-        params.append(val)
-        set_parts.append(f"{col} = ${len(params)}")
-
     if "text" in fields:
-        _add("text", fields["text"])
+        params.append(fields["text"])
+        set_parts.append(f"text = ${len(params)}")
     if "status" in fields:
-        _add("status", fields["status"])
+        params.append(fields["status"])
+        set_parts.append(f"status = ${len(params)}")
     if "position" in fields:
-        _add("position", fields["position"])
+        params.append(fields["position"])
+        set_parts.append(f"position = ${len(params)}")
     if "followup_config" in fields:
-        _add("followup_config", fields["followup_config"])
+        params.append(fields["followup_config"])
+        set_parts.append(f"followup_config = ${len(params)}")
     if "description" in fields:
-        _add("description", fields["description"])
+        params.append(fields["description"])
+        set_parts.append(f"description = ${len(params)}")
     if "context_subject" in fields:
-        _add("context_subject", fields["context_subject"])
+        params.append(fields["context_subject"])
+        set_parts.append(f"context_subject = ${len(params)}")
     if "plan_date" in fields:
-        _add("plan_date", fields["plan_date"])
+        params.append(fields["plan_date"])
+        set_parts.append(f"plan_date = ${len(params)}")
     if "anchor_id" in fields:
         val = fields["anchor_id"]
-        _add("anchor_id", _uuid.UUID(val) if val is not None else None)
+        params.append(_uuid.UUID(val) if val is not None else None)
+        set_parts.append(f"anchor_id = ${len(params)}")
 
     if not set_parts:
         return None
@@ -568,16 +573,15 @@ async def update_subtask(conn: asyncpg.Connection, subtask_id: int, **fields) ->
     params: list = []
     set_parts: list[str] = []
 
-    def _add(col: str, val) -> None:
-        params.append(val)
-        set_parts.append(f"{col} = ${len(params)}")
-
     if "text" in fields:
-        _add("text", fields["text"])
+        params.append(fields["text"])
+        set_parts.append(f"text = ${len(params)}")
     if "done" in fields:
-        _add("done", bool(fields["done"]))
+        params.append(bool(fields["done"]))
+        set_parts.append(f"done = ${len(params)}")
     if "position" in fields:
-        _add("position", fields["position"])
+        params.append(fields["position"])
+        set_parts.append(f"position = ${len(params)}")
 
     if not set_parts:
         return
