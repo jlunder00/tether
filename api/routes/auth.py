@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -15,6 +16,8 @@ from api.auth import (
     hash_password,
     verify_password,
 )
+from api.limiter import limiter
+from api.oauth_state import make_signed_state, verify_signed_state
 import api.config as cfg
 import db.postgres as pg
 import db.pg_auth_queries as auth_queries
@@ -28,10 +31,15 @@ _COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
+    # samesite="lax" (not "strict"): strict breaks OAuth login because the
+    # browser treats the post-callback redirect chain (google.com → tether) as
+    # cross-site and won't include the cookie.  Lax allows top-level navigation
+    # while still blocking CSRF from cross-origin sub-requests.
     response.set_cookie(
         key=_COOKIE_NAME,
         value=token,
         httponly=True,
+        secure=cfg.COOKIE_SECURE,
         samesite="lax",
         max_age=_COOKIE_MAX_AGE,
     )
@@ -58,6 +66,7 @@ class RegisterBody(BaseModel):
 
 
 @router.post("/auth/register")
+@limiter.limit("5/hour")
 async def register(body: RegisterBody, response: Response, request: Request):
     pool = request.app.state.pool
     async with pg.get_conn(pool) as conn:
@@ -112,6 +121,7 @@ class LoginBody(BaseModel):
 
 
 @router.post("/auth/login")
+@limiter.limit("10/minute")
 async def login(body: LoginBody, response: Response, request: Request):
     pool = request.app.state.pool
     async with pg.get_conn(pool) as conn:
@@ -159,23 +169,45 @@ async def me(request: Request, _auth=Depends(auth_dependency)):
 # ---------------------------------------------------------------------------
 
 @router.get("/auth/github")
-async def github_oauth():
+@limiter.limit("20/minute")
+async def github_oauth(
+    request: Request,
+    invite_token: Optional[str] = Query(default=None),
+):
     if not cfg.GITHUB_CLIENT_ID:
         raise HTTPException(status_code=404, detail="OAuth not configured")
+    # Build a signed CSRF state; include invite token if provided
+    payload: dict = {"invite_token": invite_token} if invite_token else {"mode": "login"}
+    state = make_signed_state(payload)
     callback_url = cfg.GITHUB_CALLBACK_URL
     url = (
         f"https://github.com/login/oauth/authorize"
         f"?client_id={cfg.GITHUB_CLIENT_ID}"
         f"&redirect_uri={callback_url}"
         f"&scope=user:email"
+        f"&state={state}"
     )
     return RedirectResponse(url)
 
 
 @router.get("/auth/github/callback")
-async def github_callback(code: str, request: Request):
+async def github_callback(
+    code: str,
+    request: Request,
+    state: Optional[str] = Query(default=None),
+):
     if not cfg.GITHUB_CLIENT_ID or not cfg.GITHUB_CLIENT_SECRET:
         raise HTTPException(status_code=404, detail="OAuth not configured")
+
+    # --- Validate CSRF state ---
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state parameter")
+    try:
+        state_data = verify_signed_state(state)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    invite_token: Optional[str] = state_data.get("invite_token")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
@@ -206,15 +238,31 @@ async def github_callback(code: str, request: Request):
     async with pg.get_conn(pool) as conn:
         user = await auth_queries.get_user_by_oauth(conn, "github", provider_user_id)
         if user is None:
+            # New account — require a valid invite token (unless first user)
+            count = await auth_queries.get_user_count(conn)
+            is_admin = count == 0
+            if not is_admin:
+                if not invite_token:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="An invite token is required to register. Ask an admin for an invite link.",
+                    )
+                valid = await auth_queries.check_invite_token(conn, invite_token)
+                if not valid:
+                    raise HTTPException(status_code=400, detail="Invalid or expired invite token")
+
             username = github_user.get("login", f"github_{provider_user_id}")
             email = github_user.get("email") or f"{provider_user_id}@github.invalid"
             if await auth_queries.get_user_by_username(conn, username):
                 username = f"{username}_{provider_user_id}"
             if await auth_queries.get_user_by_email(conn, email):
                 email = f"{provider_user_id}@github.invalid"
-            count = await auth_queries.get_user_count(conn)
-            user = await auth_queries.create_user(conn, username, email, password_hash=None, is_admin=(count == 0))
+            user = await auth_queries.create_user(
+                conn, username, email, password_hash=None, is_admin=is_admin
+            )
             await auth_queries.create_oauth_connection(conn, user["id"], "github", provider_user_id, access_token)
+            if invite_token:
+                await auth_queries.use_invite_token(conn, invite_token, user["id"])
             new_user = True
 
     if new_user:
@@ -240,23 +288,44 @@ async def github_callback(code: str, request: Request):
 # ---------------------------------------------------------------------------
 
 @router.get("/auth/google")
-async def google_oauth():
+@limiter.limit("20/minute")
+async def google_oauth(
+    request: Request,
+    invite_token: Optional[str] = Query(default=None),
+):
     if not cfg.GOOGLE_CLIENT_ID:
         raise HTTPException(status_code=404, detail="OAuth not configured")
+    payload: dict = {"invite_token": invite_token} if invite_token else {"mode": "login"}
+    state = make_signed_state(payload)
     url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         f"?client_id={cfg.GOOGLE_CLIENT_ID}"
         f"&redirect_uri={cfg.GOOGLE_CALLBACK_URL}"
         "&response_type=code"
         "&scope=openid%20email%20profile"
+        f"&state={state}"
     )
     return RedirectResponse(url)
 
 
 @router.get("/auth/google/callback")
-async def google_callback(code: str, request: Request):
+async def google_callback(
+    code: str,
+    request: Request,
+    state: Optional[str] = Query(default=None),
+):
     if not cfg.GOOGLE_CLIENT_ID or not cfg.GOOGLE_CLIENT_SECRET:
         raise HTTPException(status_code=404, detail="OAuth not configured")
+
+    # --- Validate CSRF state ---
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing OAuth state parameter")
+    try:
+        state_data = verify_signed_state(state)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    invite_token: Optional[str] = state_data.get("invite_token")
 
     async with httpx.AsyncClient() as client:
         token_resp = await client.post(
@@ -287,6 +356,19 @@ async def google_callback(code: str, request: Request):
     async with pg.get_conn(pool) as conn:
         user = await auth_queries.get_user_by_oauth(conn, "google", provider_user_id)
         if user is None:
+            # New account — require a valid invite token (unless first user)
+            count = await auth_queries.get_user_count(conn)
+            is_admin = count == 0
+            if not is_admin:
+                if not invite_token:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="An invite token is required to register. Ask an admin for an invite link.",
+                    )
+                valid = await auth_queries.check_invite_token(conn, invite_token)
+                if not valid:
+                    raise HTTPException(status_code=400, detail="Invalid or expired invite token")
+
             email = google_user.get("email", f"{provider_user_id}@google.invalid")
             username_base = email.split("@")[0]
             username = username_base
@@ -294,9 +376,12 @@ async def google_callback(code: str, request: Request):
                 username = f"{username_base}_{provider_user_id}"
             if await auth_queries.get_user_by_email(conn, email):
                 email = f"{provider_user_id}@google.invalid"
-            count = await auth_queries.get_user_count(conn)
-            user = await auth_queries.create_user(conn, username, email, password_hash=None, is_admin=(count == 0))
+            user = await auth_queries.create_user(
+                conn, username, email, password_hash=None, is_admin=is_admin
+            )
             await auth_queries.create_oauth_connection(conn, user["id"], "google", provider_user_id, access_token)
+            if invite_token:
+                await auth_queries.use_invite_token(conn, invite_token, user["id"])
             new_user = True
 
     if new_user:

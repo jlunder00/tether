@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 import os
+
+# Disable rate limiting and cookie Secure flag before any app imports so the
+# module-level checks in api.limiter and api.config pick up these values.
+os.environ.setdefault("TETHER_DISABLE_RATE_LIMITS", "1")
+os.environ.setdefault("TETHER_COOKIE_SECURE", "false")
+
 import pytest
 import asyncpg
 from httpx import AsyncClient, ASGITransport
