@@ -120,19 +120,42 @@ async def patch_task_fields(
     fields: dict,
     expected_version: int | None = None,
 ) -> dict | None:
-    allowed = {"text", "status", "position", "followup_config", "description",
-               "context_subject", "plan_date", "anchor_id"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
+    # Build SET clause from static column-name literals only — no user-supplied
+    # string ever flows into the SQL text, satisfying static-analysis tools.
+    # Each column name is a hard-coded string literal; only values are params.
+    params: list = []
+    set_parts: list[str] = []
+
+    if "text" in fields:
+        params.append(fields["text"])
+        set_parts.append(f"text = ${len(params)}")
+    if "status" in fields:
+        params.append(fields["status"])
+        set_parts.append(f"status = ${len(params)}")
+    if "position" in fields:
+        params.append(fields["position"])
+        set_parts.append(f"position = ${len(params)}")
+    if "followup_config" in fields:
+        params.append(fields["followup_config"])
+        set_parts.append(f"followup_config = ${len(params)}")
+    if "description" in fields:
+        params.append(fields["description"])
+        set_parts.append(f"description = ${len(params)}")
+    if "context_subject" in fields:
+        params.append(fields["context_subject"])
+        set_parts.append(f"context_subject = ${len(params)}")
+    if "plan_date" in fields:
+        params.append(fields["plan_date"])
+        set_parts.append(f"plan_date = ${len(params)}")
+    if "anchor_id" in fields:
+        val = fields["anchor_id"]
+        params.append(_uuid.UUID(val) if val is not None else None)
+        set_parts.append(f"anchor_id = ${len(params)}")
+
+    if not set_parts:
         return None
 
-    # anchor_id is stored as UUID
-    if "anchor_id" in updates and updates["anchor_id"] is not None:
-        updates["anchor_id"] = _uuid.UUID(updates["anchor_id"])
-
-    params = list(updates.values())
-    set_parts = [f"{k} = ${i + 1}" for i, k in enumerate(updates)]
-    set_parts.append(f"version = version + 1")
+    set_parts.append("version = version + 1")
 
     if expected_version is not None:
         params.append(expected_version)
@@ -546,16 +569,27 @@ async def create_subtask(conn: asyncpg.Connection, task_id: str, text: str, posi
 
 
 async def update_subtask(conn: asyncpg.Connection, subtask_id: int, **fields) -> None:
-    allowed = {"text", "done", "position"}
-    updates = {k: v for k, v in fields.items() if k in allowed}
-    if not updates:
+    # Build SET clause from static column-name literals only.
+    params: list = []
+    set_parts: list[str] = []
+
+    if "text" in fields:
+        params.append(fields["text"])
+        set_parts.append(f"text = ${len(params)}")
+    if "done" in fields:
+        params.append(bool(fields["done"]))
+        set_parts.append(f"done = ${len(params)}")
+    if "position" in fields:
+        params.append(fields["position"])
+        set_parts.append(f"position = ${len(params)}")
+
+    if not set_parts:
         return
-    if "done" in updates:
-        updates["done"] = bool(updates["done"])
-    params = list(updates.values())
+
     params.append(subtask_id)
-    set_clause = ", ".join(f"{k} = ${i + 1}" for i, k in enumerate(updates))
-    await conn.execute(f"UPDATE subtasks SET {set_clause} WHERE id = ${len(params)}", *params)
+    await conn.execute(
+        f"UPDATE subtasks SET {', '.join(set_parts)} WHERE id = ${len(params)}", *params
+    )
 
 
 async def delete_subtask(conn: asyncpg.Connection, subtask_id: int) -> None:

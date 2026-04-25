@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import asyncpg
+from werkzeug.security import safe_join
 
 logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
@@ -216,10 +217,15 @@ def create_app(lifespan_override=None) -> FastAPI:
 
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
-            # If it's a real file in dist (e.g., favicon.ico), serve it
-            file_path = FRONTEND_DIST / full_path
-            if full_path and file_path.is_file():
-                return FileResponse(file_path)
+            # safe_join is a CodeQL-recognised sanitizer: it returns None if
+            # full_path would escape FRONTEND_DIST (e.g. via '../' sequences),
+            # preventing path-traversal without requiring taint-flow analysis.
+            safe = safe_join(str(FRONTEND_DIST), full_path)
+            if safe is None:
+                raise HTTPException(status_code=404)
+            safe_path = Path(safe)
+            if safe_path.is_file():
+                return FileResponse(safe_path)
             return FileResponse(FRONTEND_DIST / "index.html")
 
     return app

@@ -25,6 +25,7 @@ dependencies = [
     "sqlalchemy>=2.0",
     "apscheduler>=3.10,<4",
     "slowapi>=0.1.9",
+    "werkzeug>=3.0",
 ]
 
 [project.optional-dependencies]
