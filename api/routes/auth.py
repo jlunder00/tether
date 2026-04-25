@@ -31,12 +31,16 @@ _COOKIE_MAX_AGE = 60 * 60 * 24 * 7  # 7 days
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
+    # samesite="lax" (not "strict"): strict breaks OAuth login because the
+    # browser treats the post-callback redirect chain (google.com → tether) as
+    # cross-site and won't include the cookie.  Lax allows top-level navigation
+    # while still blocking CSRF from cross-origin sub-requests.
     response.set_cookie(
         key=_COOKIE_NAME,
         value=token,
         httponly=True,
         secure=cfg.COOKIE_SECURE,
-        samesite="strict",
+        samesite="lax",
         max_age=_COOKIE_MAX_AGE,
     )
 
