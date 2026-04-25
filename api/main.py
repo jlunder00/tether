@@ -222,7 +222,7 @@ def create_app(lifespan_override=None) -> FastAPI:
             # preventing path-traversal without requiring taint-flow analysis.
             safe = safe_join(str(FRONTEND_DIST), full_path)
             if safe is None:
-                return FileResponse(FRONTEND_DIST / "index.html")
+                raise HTTPException(status_code=404)
             safe_path = Path(safe)
             if safe_path.is_file():
                 return FileResponse(safe_path)
