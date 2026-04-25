@@ -18,7 +18,10 @@ import asyncpg
 # ---------------------------------------------------------------------------
 
 async def _wipe_test_users() -> None:
-    c = await asyncpg.connect(dsn=os.environ.get("DATABASE_URL", ""))
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        return  # no DB configured — nothing to clean up
+    c = await asyncpg.connect(dsn=dsn)
     try:
         await c.execute("DELETE FROM users WHERE email LIKE '%@sectest.example'")
     except Exception:
