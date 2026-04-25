@@ -220,10 +220,14 @@ def create_app(lifespan_override=None) -> FastAPI:
         async def serve_spa(full_path: str):
             # Resolve path and confirm it stays inside FRONTEND_DIST to
             # prevent path-traversal via URL-encoded '..' sequences.
+            # Guard check runs BEFORE any filesystem access so tainted data
+            # never reaches is_file() — this breaks CodeQL's taint chain.
             if full_path:
-                file_path = (FRONTEND_DIST / full_path).resolve()
-                if file_path.is_file() and file_path.is_relative_to(_dist_resolved):
-                    return FileResponse(file_path)
+                safe_path = (FRONTEND_DIST / full_path).resolve()
+                if not safe_path.is_relative_to(_dist_resolved):
+                    raise HTTPException(status_code=404)
+                if safe_path.is_file():
+                    return FileResponse(safe_path)
             return FileResponse(FRONTEND_DIST / "index.html")
 
     return app

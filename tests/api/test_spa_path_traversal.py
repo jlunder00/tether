@@ -78,6 +78,35 @@ async def test_serve_spa_path_traversal_blocked(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_serve_spa_traversal_returns_404(tmp_path):
+    """Path traversal must return HTTP 404, not fall through to index.html.
+
+    Before the guard-first fix:  handler falls through to index.html → 200
+    After the guard-first fix:   handler raises HTTPException(404)   → 404
+    """
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>index</html>")
+    sensitive = tmp_path / "secret.txt"
+    sensitive.write_text("TOP_SECRET")
+    (dist / "assets").mkdir()
+
+    import api.main as main_mod
+    with patch.object(main_mod, "FRONTEND_DIST", dist):
+        app = main_mod.create_app(lifespan_override=_noop_lifespan)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            # %2e%2e is URL-encoded '..' that Starlette decodes before
+            # the route handler — httpx does NOT normalize this form.
+            resp = await client.get("/%2e%2e/secret.txt")
+            assert resp.status_code == 404, (
+                f"Expected 404 for path traversal, got {resp.status_code}. "
+                "The guard must raise HTTPException(404) before returning any response."
+            )
+
+
+@pytest.mark.asyncio
 async def test_serve_spa_path_resolution_guard(tmp_path):
     """Python-level guard: resolved path must be relative to FRONTEND_DIST.
 
