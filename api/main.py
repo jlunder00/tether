@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import asyncpg
+from werkzeug.security import safe_join
 
 logging.basicConfig(level=logging.INFO)
 from contextlib import asynccontextmanager
@@ -214,20 +215,17 @@ def create_app(lifespan_override=None) -> FastAPI:
         # so Vue Router can handle client-side routing
         from fastapi.responses import FileResponse
 
-        _dist_resolved = FRONTEND_DIST.resolve()
-
         @app.get("/{full_path:path}")
         async def serve_spa(full_path: str):
-            # Resolve path and confirm it stays inside FRONTEND_DIST to
-            # prevent path-traversal via URL-encoded '..' sequences.
-            # Guard check runs BEFORE any filesystem access so tainted data
-            # never reaches is_file() — this breaks CodeQL's taint chain.
-            if full_path:
-                safe_path = (FRONTEND_DIST / full_path).resolve()
-                if not safe_path.is_relative_to(_dist_resolved):
-                    raise HTTPException(status_code=404)
-                if safe_path.is_file():
-                    return FileResponse(safe_path)
+            # safe_join is a CodeQL-recognised sanitizer: it returns None if
+            # full_path would escape FRONTEND_DIST (e.g. via '../' sequences),
+            # preventing path-traversal without requiring taint-flow analysis.
+            safe = safe_join(str(FRONTEND_DIST), full_path)
+            if safe is None:
+                return FileResponse(FRONTEND_DIST / "index.html")
+            safe_path = Path(safe)
+            if safe_path.is_file():
+                return FileResponse(safe_path)
             return FileResponse(FRONTEND_DIST / "index.html")
 
     return app
