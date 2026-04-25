@@ -1,0 +1,80 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import type { CalendarEvent } from '../../types/events'
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({ push: vi.fn() }),
+  useRoute: () => ({ path: '/calendar' }),
+}))
+
+vi.mock('../../lib/api', () => ({
+  api: vi.fn(() => Promise.resolve({ ok: true, json: async () => [] })),
+}))
+
+const baseEvent: CalendarEvent = {
+  id: 'ev-1',
+  title: 'Team standup',
+  start_time: '2024-06-10T09:00:00Z',
+  end_time: '2024-06-10T09:30:00Z',
+  source: 'tether',
+  external_id: null,
+  task_id: null,
+  anchor_id: null,
+  color: null,
+}
+
+describe('CalendarEventBlock', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('renders the event title', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 60, heightPx: 30 },
+    })
+    expect(wrapper.text()).toContain('Team standup')
+  })
+
+  it('applies topPx and heightPx as inline style', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 120, heightPx: 60 },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('top: 120px')
+    expect(style).toContain('height: 60px')
+  })
+
+  it('shows G badge for google_calendar source', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: { ...baseEvent, source: 'google_calendar' },
+        topPx: 0,
+        heightPx: 30,
+      },
+    })
+    expect(wrapper.text()).toContain('G')
+  })
+
+  it('does not show G badge for tether source', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 0, heightPx: 30 },
+    })
+    // The text 'G' should not appear as a standalone badge
+    const badge = wrapper.find('[data-testid="gcal-badge"]')
+    expect(badge.exists()).toBe(false)
+  })
+
+  it('emits click when clicked', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 0, heightPx: 30 },
+    })
+    await wrapper.trigger('click')
+    expect(wrapper.emitted('click')).toBeTruthy()
+  })
+})

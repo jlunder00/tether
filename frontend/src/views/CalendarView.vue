@@ -3,14 +3,17 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
 import { usePlanStore } from '../stores/plan'
+import { useMilestoneStore } from '../stores/milestones'
 import { useCalendarFocus } from '../composables/useCalendarFocus'
 import { useSlideOver } from '../composables/useSlideOver'
+import CalendarEventBlock from '../components/CalendarEventBlock.vue'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
 const anchorStore = useAnchorStore()
 const eventStore = useEventStore()
 const planStore = usePlanStore()
+const milestoneStore = useMilestoneStore()
 const { focusedDay, setFocusedDay } = useCalendarFocus()
 const { push: pushPanel } = useSlideOver()
 
@@ -19,6 +22,10 @@ const anchorPanelOpen = ref(true)
 const sidebarWidth = ref(224) // px; matches w-56 default
 const MIN_SIDEBAR = 160
 const MAX_SIDEBAR = 480
+
+// ─── View mode ────────────────────────────────────────────────
+type ViewMode = 'week' | 'month'
+const viewMode = ref<ViewMode>('week')
 
 // ─── Sidebar resize ───────────────────────────────────────────
 let resizing = false
@@ -33,17 +40,147 @@ function onResizeHandleMousedown(e: MouseEvent) {
   document.body.style.userSelect = 'none'
 }
 
-function onWindowMousemove(e: MouseEvent) {
-  if (!resizing) return
-  const delta = e.clientX - resizeStartX
-  sidebarWidth.value = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, resizeStartWidth + delta))
+// ─── Event drag-to-reposition (mouse) ─────────────────────────
+interface DragState {
+  eventId: string
+  originalStart: string
+  originalEnd: string
+  currentTop: number
+  currentDayIndex: number
+  columnRect: DOMRect | null
+}
+const draggingEvent = ref<DragState | null>(null)
+
+function onEventMousedown(e: MouseEvent, event: CalendarEvent) {
+  e.stopPropagation()
+  const colEl = (e.target as HTMLElement).closest('[data-day-col]') as HTMLElement | null
+  draggingEvent.value = {
+    eventId: event.id,
+    originalStart: event.start_time,
+    originalEnd: event.end_time,
+    currentTop: eventTopPx(event),
+    currentDayIndex: dayKeys.value.indexOf(event.start_time.slice(0, 10)),
+    columnRect: colEl?.getBoundingClientRect() ?? null,
+  }
+  document.body.style.userSelect = 'none'
 }
 
-function onWindowMouseup() {
-  if (!resizing) return
-  resizing = false
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
+// ─── Drag-to-create on time grid (mouse) ──────────────────────
+interface CreateState {
+  dayKey: string
+  startY: number
+  currentY: number
+  columnRect: DOMRect
+}
+const creatingEvent = ref<CreateState | null>(null)
+
+function onDayColumnMousedown(e: MouseEvent, dayKey: string) {
+  // Only start creation if click is directly on the column (not on an event block)
+  if ((e.target as HTMLElement).closest('[data-event-block]')) return
+  const col = e.currentTarget as HTMLElement
+  const rect = col.getBoundingClientRect()
+  const relY = e.clientY - rect.top
+  creatingEvent.value = { dayKey, startY: relY, currentY: relY, columnRect: rect }
+  document.body.style.userSelect = 'none'
+}
+
+// ─── Unified window mouse handlers ────────────────────────────
+function onWindowMousemove(e: MouseEvent) {
+  if (resizing) {
+    const delta = e.clientX - resizeStartX
+    sidebarWidth.value = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, resizeStartWidth + delta))
+    return
+  }
+  if (draggingEvent.value) {
+    // Update ghost position — track cursor Y relative to column
+    if (draggingEvent.value.columnRect) {
+      draggingEvent.value.currentTop = e.clientY - draggingEvent.value.columnRect.top
+    }
+    return
+  }
+  if (creatingEvent.value) {
+    const relY = e.clientY - creatingEvent.value.columnRect.top
+    creatingEvent.value.currentY = relY
+    return
+  }
+}
+
+async function onWindowMouseup(e: MouseEvent) {
+  if (resizing) {
+    resizing = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    return
+  }
+
+  if (draggingEvent.value) {
+    const state = draggingEvent.value
+    draggingEvent.value = null
+    document.body.style.userSelect = ''
+
+    // Find which day column the mouse is over
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const colEl = el?.closest('[data-day-col]') as HTMLElement | null
+
+    if (!colEl) {
+      // Dropped outside grid — snap back (no-op, original is already in store)
+      return
+    }
+
+    const rect = colEl.getBoundingClientRect()
+    const relY = Math.max(0, e.clientY - rect.top)
+    const snapY = snapToMinutes(relY, 15)
+    const hour = Math.floor(snapY / HOUR_HEIGHT) + START_HOUR
+    const minute = Math.round(((snapY % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
+
+    const dayStr = colEl.getAttribute('data-day-col')!
+    const existing = eventStore.events.find(ev => ev.id === state.eventId)
+    if (!existing) return
+
+    const durationMs = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
+    const newStart = new Date(dayStr + 'T00:00:00')
+    newStart.setHours(hour, minute, 0, 0)
+    const newEnd = new Date(newStart.getTime() + durationMs)
+    await eventStore.moveEvent(state.eventId, newStart.toISOString(), newEnd.toISOString())
+    return
+  }
+
+  if (creatingEvent.value) {
+    const state = creatingEvent.value
+    creatingEvent.value = null
+    document.body.style.userSelect = ''
+
+    const minY = Math.min(state.startY, state.currentY)
+    const maxY = Math.max(state.startY, state.currentY)
+    const heightY = maxY - minY
+
+    // Minimum 15 minutes drag
+    const MIN_HEIGHT = (15 / 60) * HOUR_HEIGHT
+    if (heightY < MIN_HEIGHT) return
+
+    const startSnapped = snapToMinutes(minY, 15)
+    const endSnapped = snapToMinutes(maxY, 15)
+
+    const startHour = Math.floor(startSnapped / HOUR_HEIGHT) + START_HOUR
+    const startMin = Math.round(((startSnapped % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
+    const endHour = Math.floor(endSnapped / HOUR_HEIGHT) + START_HOUR
+    const endMin = Math.round(((endSnapped % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
+
+    const startDate = new Date(state.dayKey + 'T00:00:00')
+    startDate.setHours(startHour, startMin, 0, 0)
+    const endDate = new Date(state.dayKey + 'T00:00:00')
+    endDate.setHours(endHour, endMin, 0, 0)
+
+    await eventStore.createEvent(startDate.toISOString(), endDate.toISOString(), 'New Event')
+    return
+  }
+}
+
+function snapToMinutes(y: number, intervalMin: number): number {
+  const minutesPerPx = 60 / HOUR_HEIGHT
+  const totalMinutes = y * minutesPerPx
+  const snapped = Math.round(totalMinutes / intervalMin) * intervalMin
+  return (snapped / 60) * HOUR_HEIGHT
 }
 
 onMounted(() => {
@@ -51,6 +188,7 @@ onMounted(() => {
   window.addEventListener('mouseup', onWindowMouseup)
   anchorStore.fetchAnchors()
   planStore.fetchPlan(focusedDay.value)
+  milestoneStore.fetchAll()
   loadEvents()
 })
 
@@ -73,6 +211,9 @@ function getWeekStart(d: Date): Date {
 const today = localDateString(new Date())
 const weekStart = ref(getWeekStart(new Date()))
 
+// Month view navigation
+const monthViewDate = ref(new Date())
+
 const days = computed<Date[]>(() =>
   Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart.value)
@@ -84,6 +225,26 @@ const days = computed<Date[]>(() =>
 // Cached keys so we don't recompute localDateString for every cell on every render.
 const dayKeys = computed(() => days.value.map(localDateString))
 
+function navigatePrev() {
+  if (viewMode.value === 'month') {
+    const d = new Date(monthViewDate.value)
+    d.setMonth(d.getMonth() - 1)
+    monthViewDate.value = d
+  } else {
+    shiftWeek(-7)
+  }
+}
+
+function navigateNext() {
+  if (viewMode.value === 'month') {
+    const d = new Date(monthViewDate.value)
+    d.setMonth(d.getMonth() + 1)
+    monthViewDate.value = d
+  } else {
+    shiftWeek(7)
+  }
+}
+
 function shiftWeek(deltaDays: number) {
   const d = new Date(weekStart.value)
   d.setDate(d.getDate() + deltaDays)
@@ -93,6 +254,46 @@ function shiftWeek(deltaDays: number) {
 
 function goToday() {
   weekStart.value = getWeekStart(new Date())
+  if (viewMode.value === 'month') monthViewDate.value = new Date()
+  loadEvents()
+}
+
+// ─── Month grid ───────────────────────────────────────────────
+const monthLabel = computed(() =>
+  monthViewDate.value.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+)
+
+const weekLabel = computed(() => {
+  return `${days.value[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${days.value[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+})
+
+const monthCalendarDates = computed<string[]>(() => {
+  const y = monthViewDate.value.getFullYear()
+  const m = monthViewDate.value.getMonth()
+  const first = new Date(y, m, 1)
+  // Sunday start: offset is first.getDay() (0=Sun, 1=Mon, ...)
+  const startOffset = first.getDay()
+  return Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(y, m, 1 - startOffset + i)
+    return localDateString(d)
+  })
+})
+
+const currentMonthIndex = computed(() => monthViewDate.value.getMonth())
+
+function isCurrentMonth(date: string) {
+  return new Date(date + 'T12:00:00').getMonth() === currentMonthIndex.value
+}
+
+function eventsForDay(dayKey: string): CalendarEvent[] {
+  return filteredEventsByDay.value[dayKey] ?? []
+}
+
+function clickMonthDay(dayKey: string) {
+  focusDay(dayKey)
+  // Set weekStart so that the week view lands on the week containing this day
+  weekStart.value = getWeekStart(new Date(dayKey + 'T12:00:00'))
+  viewMode.value = 'week'
   loadEvents()
 }
 
@@ -109,13 +310,70 @@ const END_HOUR = 24
 
 const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i)
 
-// ─── Events mapped per day ────────────────────────────────────
+// ─── Milestone filtering ──────────────────────────────────────
+const filterOpen = ref(false)
+const selectedMilestoneIds = ref<Set<string>>(new Set())
+
+function toggleMilestoneFilter(id: string) {
+  const s = new Set(selectedMilestoneIds.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  selectedMilestoneIds.value = s
+}
+
+function clearFilters() {
+  selectedMilestoneIds.value = new Set()
+}
+
+const activeFilterCount = computed(() => selectedMilestoneIds.value.size)
+
+// Tasks allowed by the filter (or all tasks if no filter active)
+const allowedTaskIds = computed<Set<string> | null>(() => {
+  if (selectedMilestoneIds.value.size === 0) return null
+  const ids = new Set<string>()
+  for (const m of milestoneStore.all) {
+    if (selectedMilestoneIds.value.has(m.id)) {
+      for (const tid of m.task_ids) ids.add(tid)
+    }
+  }
+  return ids
+})
+
+// ─── Events mapped per day (with filter) ─────────────────────
+const filteredEventsByDay = computed(() => {
+  const allowed = allowedTaskIds.value
+  const map: Record<string, CalendarEvent[]> = {}
+  for (const ev of eventStore.events) {
+    const dayKey = ev.start_time.slice(0, 10)
+    if (!map[dayKey]) map[dayKey] = []
+    if (allowed !== null) {
+      // Only include events linked to an allowed task; exclude unlinked standalone events when filter active
+      if (ev.task_id === null || !allowed.has(ev.task_id)) continue
+    }
+    map[dayKey].push(ev)
+  }
+  return map
+})
+
+// For the week view: only build the map over the visible 7 days
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = eventStore.events.filter(e => e.start_time.startsWith(key))
+    map[key] = filteredEventsByDay.value[key] ?? []
   }
   return map
+})
+
+// Sidebar tasks filtered by selected milestones
+const filteredAnchorsWithTasks = computed(() => {
+  const allowed = allowedTaskIds.value
+  const plan = planStore.plans[focusedDay.value] ?? planStore.plan
+  if (!plan) return []
+  return anchorStore.anchors.map((a: Anchor) => {
+    const tasks = plan.anchors[a.id]?.tasks ?? []
+    const filtered = allowed === null ? tasks : tasks.filter(t => allowed.has(t.id))
+    return { anchor: a, tasks: filtered }
+  })
 })
 
 function eventTopPx(event: CalendarEvent): number {
@@ -135,7 +393,15 @@ function eventColor(event: CalendarEvent): string {
   return event.color ?? '#6366f1' // indigo default
 }
 
-// ─── Anchor panel: tasks for focused day ──────────────────────
+// Creation drag selection rect (in px relative to day column)
+const createSelectionStyle = computed(() => {
+  if (!creatingEvent.value) return null
+  const minY = Math.min(creatingEvent.value.startY, creatingEvent.value.currentY)
+  const maxY = Math.max(creatingEvent.value.startY, creatingEvent.value.currentY)
+  return { top: `${minY}px`, height: `${maxY - minY}px` }
+})
+
+// ─── Anchor panel: tasks for focused day (unfiltered, sidebar uses its own filter) ──
 const anchorsWithTasks = computed(() => {
   const plan = planStore.plans[focusedDay.value] ?? planStore.plan
   if (!plan) return []
@@ -145,7 +411,7 @@ const anchorsWithTasks = computed(() => {
   }))
 })
 
-// ─── Drag-to-promote: task → event ────────────────────────────
+// ─── Drag-to-promote: task → event (HTML5 DnD — sidebar to calendar) ────────────
 const dragOverDay = ref<string | null>(null)
 const dragOverHour = ref<number | null>(null)
 
@@ -173,8 +439,11 @@ async function onDrop(e: DragEvent, day: Date) {
   const raw = e.dataTransfer?.getData('text/plain')
   if (!raw || !(e.currentTarget instanceof HTMLElement)) return
 
-  let payload: { taskId?: string; eventId?: string }
+  let payload: { taskId?: string }
   try { payload = JSON.parse(raw) } catch { return }
+
+  // Only handle task→event promotions here (eventId moves handled by mouse drag)
+  if (!payload.taskId) return
 
   // Map drop position to a quarter-hour slot.
   const rect = e.currentTarget.getBoundingClientRect()
@@ -184,18 +453,6 @@ async function onDrop(e: DragEvent, day: Date) {
   const startDate = new Date(day)
   startDate.setHours(hour, minute, 0, 0)
 
-  if (payload.eventId) {
-    // Repositioning an existing event — preserve its duration.
-    const existing = eventStore.events.find(ev => ev.id === payload.eventId)
-    if (!existing) return
-    const durationMs = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
-    const endDate = new Date(startDate.getTime() + durationMs)
-    await eventStore.moveEvent(payload.eventId, startDate.toISOString(), endDate.toISOString())
-    return
-  }
-
-  if (!payload.taskId) return
-
   // Promoting a sidebar task to an event.
   let title = 'Task'
   for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
@@ -203,7 +460,7 @@ async function onDrop(e: DragEvent, day: Date) {
     if (found) { title = found.text; break }
   }
   const endDate = new Date(startDate.getTime() + 60 * 60 * 1000) // 1 hour default
-  await eventStore.promoteTask(payload.taskId, startDate.toISOString(), endDate.toISOString(), title)
+  await eventStore.promoteTask(payload.taskId!, startDate.toISOString(), endDate.toISOString(), title)
 }
 
 // ─── Panel navigation ─────────────────────────────────────────
@@ -259,7 +516,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
         <!-- Anchor blocks with task lists -->
         <div
-          v-for="{ anchor, tasks } in anchorsWithTasks"
+          v-for="{ anchor, tasks } in (activeFilterCount > 0 ? filteredAnchorsWithTasks : anchorsWithTasks)"
           :key="anchor.id"
           class="rounded-lg border border-white/5 overflow-hidden"
         >
@@ -312,125 +569,232 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
       <header class="flex items-center gap-3 px-4 py-2 border-b border-white/10 flex-shrink-0">
         <h1 class="text-lg font-bold">Calendar</h1>
         <div class="flex items-center gap-1 ml-2">
-          <button @click="shiftWeek(-7)" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">‹</button>
+          <button @click="navigatePrev" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">‹</button>
           <button @click="goToday" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-xs transition-colors">Today</button>
-          <button @click="shiftWeek(7)" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">›</button>
+          <button @click="navigateNext" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">›</button>
         </div>
         <span class="text-sm text-white/50">
-          {{ days[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }}
-          – {{ days[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }}
+          {{ viewMode === 'month' ? monthLabel : weekLabel }}
         </span>
+        <!-- View mode toggle -->
+        <button
+          data-testid="view-mode-toggle"
+          class="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs text-white/50 hover:text-white hover:bg-white/10 transition-colors border border-white/10"
+          @click="viewMode = viewMode === 'week' ? 'month' : 'week'"
+        >
+          {{ viewMode === 'week' ? 'Month' : 'Week' }}
+        </button>
+        <!-- Filter button -->
+        <div class="relative">
+          <button
+            data-testid="filter-button"
+            class="flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors"
+            :class="activeFilterCount > 0
+              ? 'text-indigo-300 border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20'
+              : 'text-white/50 border-white/10 hover:text-white hover:bg-white/10'"
+            @click="filterOpen = !filterOpen"
+          >
+            Filter
+            <span v-if="activeFilterCount > 0" class="bg-indigo-500 text-white rounded-full text-[10px] px-1 leading-none py-0.5 font-bold">
+              {{ activeFilterCount }}
+            </span>
+          </button>
+          <!-- Filter dropdown -->
+          <Teleport to="body">
+            <div
+              v-if="filterOpen"
+              class="fixed z-50 bg-gray-800 border border-white/20 rounded-xl shadow-xl p-3 min-w-[200px] space-y-1"
+              style="top: 56px; right: 16px"
+              @click.stop
+            >
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs text-white/50 font-medium uppercase tracking-wide">Milestones</span>
+                <button v-if="activeFilterCount > 0" @click="clearFilters" class="text-[10px] text-indigo-400 hover:text-indigo-300">
+                  Clear all
+                </button>
+              </div>
+              <div v-if="!milestoneStore.all.length" class="text-xs text-white/30 py-1">No milestones</div>
+              <button
+                v-for="m in milestoneStore.all"
+                :key="m.id"
+                class="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
+                :class="selectedMilestoneIds.has(m.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
+                @click="toggleMilestoneFilter(m.id)"
+              >
+                <span
+                  class="w-2 h-2 rounded-full flex-shrink-0"
+                  :style="m.color ? { backgroundColor: m.color } : { backgroundColor: '#6366f1' }"
+                />
+                {{ m.name }}
+              </button>
+              <button
+                class="mt-2 text-[10px] text-white/30 hover:text-white/60 w-full text-right"
+                @click="filterOpen = false"
+              >
+                Done
+              </button>
+            </div>
+          </Teleport>
+        </div>
       </header>
 
-      <!-- Day-of-week header -->
-      <div class="flex flex-shrink-0 border-b border-white/10" style="padding-left: 48px">
-        <div
-          v-for="(day, i) in days"
-          :key="dayKeys[i]"
-          :data-testid="`day-header-${i}`"
-          :data-day="dayKeys[i]"
-          :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
-          class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
-          :class="[
-            dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
-            focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-          ]"
-          @click="focusDay(dayKeys[i])"
-        >
-          {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+      <!-- ── Month View ── -->
+      <div v-if="viewMode === 'month'" data-testid="month-view" class="flex-1 overflow-y-auto p-3">
+        <!-- Day-of-week headers (Sun start, matching week view) -->
+        <div class="grid grid-cols-7 mb-1">
+          <div
+            v-for="label in DAY_LABELS"
+            :key="label"
+            class="text-center text-xs text-white/30 py-1"
+          >
+            {{ label }}
+          </div>
+        </div>
+        <!-- Day cells -->
+        <div class="grid grid-cols-7 gap-1">
+          <div
+            v-for="date in monthCalendarDates"
+            :key="date"
+            :data-testid="`month-day-${date}`"
+            :data-day="date"
+            class="min-h-[72px] rounded-lg p-1.5 cursor-pointer transition-colors"
+            :class="[
+              isCurrentMonth(date) ? 'bg-white/5 hover:bg-white/10' : 'bg-white/[0.02] opacity-40',
+              date === today ? 'ring-1 ring-indigo-400/50' : '',
+              date === focusedDay ? 'ring-1 ring-indigo-400' : '',
+            ]"
+            @click="clickMonthDay(date)"
+          >
+            <div class="text-xs font-medium mb-1"
+                 :class="date === today ? 'text-indigo-400' : 'text-white/50'">
+              {{ new Date(date + 'T12:00:00').getDate() }}
+            </div>
+            <!-- Event pills -->
+            <div class="flex flex-col gap-0.5">
+              <div
+                v-for="ev in eventsForDay(date).slice(0, 3)"
+                :key="ev.id"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none"
+                :style="{ backgroundColor: eventColor(ev) }"
+              >
+                {{ ev.title }}
+              </div>
+              <div
+                v-if="eventsForDay(date).length > 3"
+                class="text-[10px] text-white/40 px-1"
+              >
+                +{{ eventsForDay(date).length - 3 }} more
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- Scrollable time grid -->
-      <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
-        <div class="flex" style="min-height: 100%">
-
-          <!-- Hour labels -->
-          <div class="flex-shrink-0 w-12 select-none">
-            <div
-              v-for="h in hours"
-              :key="h"
-              class="border-b border-white/5 text-right pr-1 text-[10px] text-white/30"
-              :style="{ height: `${HOUR_HEIGHT}px`, lineHeight: `${HOUR_HEIGHT}px` }"
-            >
-              {{ h === 0 ? '' : `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}` }}
-            </div>
-          </div>
-
-          <!-- Day columns -->
+      <!-- ── Week View ── -->
+      <template v-if="viewMode === 'week'">
+        <!-- Day-of-week header -->
+        <div class="flex flex-shrink-0 border-b border-white/10" style="padding-left: 48px">
           <div
             v-for="(day, i) in days"
             :key="dayKeys[i]"
-            :data-testid="`day-col-${dayKeys[i]}`"
-            class="flex-1 relative border-l border-white/5 min-w-0 cursor-pointer"
+            :data-testid="`day-header-${i}`"
+            :data-day="dayKeys[i]"
+            :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
+            class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
             :class="[
-              dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-              focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-indigo-400/30' : '',
+              dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
+              focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
             ]"
-            :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
-            @click.self="focusDay(dayKeys[i])"
-            @dragover="(e: DragEvent) => onDragOver(e, day)"
-            @dragleave="onDragLeave"
-            @drop="(e: DragEvent) => onDrop(e, day)"
+            @click="focusDay(dayKeys[i])"
           >
-            <!-- Hour grid lines -->
-            <div
-              v-for="h in hours"
-              :key="h"
-              class="absolute inset-x-0 border-b border-white/5"
-              :style="{ top: `${(h - START_HOUR) * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }"
-            />
+            {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+          </div>
+        </div>
 
-            <!-- Today highlight -->
-            <div
-              v-if="dayKeys[i] === today"
-              class="absolute inset-0 bg-indigo-500/5 pointer-events-none"
-            />
+        <!-- Scrollable time grid -->
+        <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
+          <div data-testid="week-view" class="flex" style="min-height: 100%">
 
-            <!-- Focused day highlight (stronger than today) -->
-            <div
-              v-if="focusedDay === dayKeys[i]"
-              class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
-            />
-
-            <!-- Event blocks -->
-            <div
-              v-for="event in eventsByDay[dayKeys[i]]"
-              :key="event.id"
-              draggable="true"
-              class="absolute inset-x-1 rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
-              :style="{
-                top: `${eventTopPx(event)}px`,
-                height: `${eventHeightPx(event)}px`,
-                backgroundColor: eventColor(event),
-                opacity: event.source !== 'tether' ? 0.75 : 1,
-              }"
-              @click.stop="openEventPanel(event)"
-              @dragstart.stop="(e: DragEvent) => {
-                if (e.dataTransfer) {
-                  e.dataTransfer.effectAllowed = 'move'
-                  e.dataTransfer.setData('text/plain', JSON.stringify({ eventId: event.id }))
-                }
-              }"
-            >
-              <div class="flex items-center gap-1 truncate pointer-events-none">
-                <!-- Provider badge for synced events -->
-                <span v-if="event.source !== 'tether'" class="text-[9px] bg-black/20 rounded px-0.5 flex-shrink-0" title="Synced from external calendar">
-                  {{ event.source === 'google_calendar' ? 'G' : '↗' }}
-                </span>
-                <span class="truncate font-medium text-white">{{ event.title }}</span>
+            <!-- Hour labels -->
+            <div class="flex-shrink-0 w-12 select-none">
+              <div
+                v-for="h in hours"
+                :key="h"
+                class="border-b border-white/5 text-right pr-1 text-[10px] text-white/30"
+                :style="{ height: `${HOUR_HEIGHT}px`, lineHeight: `${HOUR_HEIGHT}px` }"
+              >
+                {{ h === 0 ? '' : `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}` }}
               </div>
             </div>
 
-            <!-- Drop indicator -->
+            <!-- Day columns -->
             <div
-              v-if="dragOverDay === dayKeys[i] && dragOverHour !== null"
-              class="absolute inset-x-1 h-0.5 bg-indigo-400 rounded pointer-events-none z-20"
-              :style="{ top: `${(dragOverHour! - START_HOUR) * HOUR_HEIGHT}px` }"
-            />
+              v-for="(day, i) in days"
+              :key="dayKeys[i]"
+              :data-testid="`day-col-${dayKeys[i]}`"
+              :data-day-col="dayKeys[i]"
+              class="flex-1 relative border-l border-white/5 min-w-0"
+              :class="[
+                dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+                focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-indigo-400/30' : '',
+              ]"
+              :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
+              @click.self="focusDay(dayKeys[i])"
+              @mousedown="(e: MouseEvent) => onDayColumnMousedown(e, dayKeys[i])"
+              @dragover="(e: DragEvent) => onDragOver(e, day)"
+              @dragleave="onDragLeave"
+              @drop="(e: DragEvent) => onDrop(e, day)"
+            >
+              <!-- Hour grid lines -->
+              <div
+                v-for="h in hours"
+                :key="h"
+                class="absolute inset-x-0 border-b border-white/5"
+                :style="{ top: `${(h - START_HOUR) * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }"
+              />
+
+              <!-- Today highlight -->
+              <div
+                v-if="dayKeys[i] === today"
+                class="absolute inset-0 bg-indigo-500/5 pointer-events-none"
+              />
+
+              <!-- Focused day highlight (stronger than today) -->
+              <div
+                v-if="focusedDay === dayKeys[i]"
+                class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
+              />
+
+              <!-- Event blocks — using CalendarEventBlock component -->
+              <CalendarEventBlock
+                v-for="event in eventsByDay[dayKeys[i]]"
+                :key="event.id"
+                :event="event"
+                :top-px="eventTopPx(event)"
+                :height-px="eventHeightPx(event)"
+                :style="draggingEvent?.eventId === event.id ? { opacity: 0.5 } : {}"
+                data-event-block
+                @click="openEventPanel(event)"
+                @mousedown="(e: MouseEvent) => onEventMousedown(e, event)"
+              />
+
+              <!-- Creation drag selection rectangle -->
+              <div
+                v-if="creatingEvent?.dayKey === dayKeys[i] && createSelectionStyle"
+                class="absolute inset-x-1 bg-blue-500/30 border border-blue-400 rounded pointer-events-none z-20"
+                :style="createSelectionStyle"
+              />
+
+              <!-- Drop indicator (sidebar DnD) -->
+              <div
+                v-if="dragOverDay === dayKeys[i] && dragOverHour !== null"
+                class="absolute inset-x-1 h-0.5 bg-indigo-400 rounded pointer-events-none z-20"
+                :style="{ top: `${(dragOverHour! - START_HOUR) * HOUR_HEIGHT}px` }"
+              />
+            </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
 
     <router-view />
