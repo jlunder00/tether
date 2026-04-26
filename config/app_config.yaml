@@ -1,0 +1,23 @@
+# Application behavior — safe to commit, no secrets.
+# Self-hosters: place overrides at TETHER_CONFIG_DIR/app_config.yaml
+
+models:
+  orchestrator: claude-sonnet-4-5
+  meta_eval: claude-haiku-4-5
+  quick_classifier: claude-haiku-4-5
+  response_builder: claude-sonnet-4-5
+  satisfaction_eval: claude-haiku-4-5
+
+pipeline:
+  history_exchanges: 5
+  max_planning_rounds: 4
+  max_repair_attempts: 3
+  max_satisfaction_retries: 2
+
+server:
+  api_port: 8000
+  mcp_port: 5001
+
+telegram:
+  bot_token: ""
+  chat_id: ""

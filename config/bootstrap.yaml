@@ -1,0 +1,9 @@
+# Remote config source. Set TETHER_REMOTE_PROVIDER=tigris or s3 in cloud deployments.
+# Leave unset or 'none' for Pi and self-hoster (volume mount path).
+remote:
+  provider: "${TETHER_REMOTE_PROVIDER:-none}"   # none | tigris | s3
+  bucket: "${TETHER_CONFIG_BUCKET:-}"
+  env: "${TETHER_ENV:-local}"
+  prefix: "tether/config/${TETHER_ENV}/"
+  endpoint_url: "${TETHER_CONFIG_ENDPOINT_URL:-}"   # Tigris: https://fly.storage.tigris.dev
+  region: "${TETHER_CONFIG_REGION:-auto}"

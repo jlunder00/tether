@@ -1,0 +1,53 @@
+name: Publish community edition
+
+# Triggered only on version tags — publishes the open-source image to ghcr.io.
+# Pi deploys are handled by per-service deploy-*.yml workflows.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write   # needed to push to ghcr.io
+
+jobs:
+  publish-community:
+    name: Publish community edition to ghcr.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            SEMVER="${GITHUB_REF#refs/tags/}"
+            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+            echo "extra_tag=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+            echo "extra_tag=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log in to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "${GITHUB_TOKEN}" | docker login ghcr.io -u "${ACTOR}" --password-stdin
+
+      - name: Build and push community image
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          EXTRA_TAG: ${{ steps.version.outputs.extra_tag }}
+        run: |
+          make build-community TAG=${TAG}
+          IMAGE=ghcr.io/jlunder00/tether
+          docker push ${IMAGE}:${TAG}
+          docker tag ${IMAGE}:${TAG} ${IMAGE}:latest
+          docker push ${IMAGE}:latest
+          if [ -n "${EXTRA_TAG}" ]; then
+            docker tag ${IMAGE}:${TAG} ${IMAGE}:${EXTRA_TAG}
+            docker push ${IMAGE}:${EXTRA_TAG}
+          fi

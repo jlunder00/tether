@@ -1,0 +1,26 @@
+# Authentication parameters.
+# DO NOT put literal secret values here — use make configure-* or volume override.
+# ${VAR} placeholders are resolved from env vars at startup.
+
+jwt:
+  secret: "${TETHER_JWT_SECRET}"      # required — no default
+
+cookie:
+  secure: "${TETHER_COOKIE_SECURE:-true}"
+
+cors:
+  # Comma-separated list parsed by loader
+  allowed_origins: "${TETHER_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8000}"
+
+oauth:
+  github:
+    enabled: false
+    client_id: "${GITHUB_CLIENT_ID:-}"
+    client_secret: "${GITHUB_CLIENT_SECRET:-}"
+    callback_url: "${GITHUB_CALLBACK_URL:-http://localhost:8000/auth/github/callback}"
+  google:
+    enabled: false
+    client_id: "${GOOGLE_CLIENT_ID:-}"
+    client_secret: "${GOOGLE_CLIENT_SECRET:-}"
+    callback_url: "${GOOGLE_CALLBACK_URL:-http://localhost:8000/auth/google/callback}"
+    integration_callback_url: "${GOOGLE_INTEGRATION_CALLBACK_URL:-http://localhost:8000/api/integrations/google/callback}"
