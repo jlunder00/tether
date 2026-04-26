@@ -31,7 +31,9 @@ COMPOSE_ENV = PREMIUM_GIT_TOKEN=$(PREMIUM_GIT_TOKEN) \
         build-no-cache build-premium-no-cache build-community-no-cache \
         up down restart \
         deploy deploy-no-cache deploy-community \
-        tag-latest
+        tag-latest \
+        install \
+        configure-auth configure-google configure-github configure-db configure-telegram
 
 # ── Build targets ─────────────────────────────────────────
 
@@ -74,3 +76,44 @@ deploy-community: build-community
 
 tag-latest:
 	docker tag $(IMAGE):$(TAG) $(IMAGE):latest
+
+# ── Configuration targets ─────────────────────────────────
+#
+# Run interactively (self-hoster): make install
+# Run from CI/GHA (pass values as make args): make configure-auth TETHER_JWT_SECRET=...
+#
+# Env overrides:
+#   TETHER_CONFIG_DIR    Where YAML config files are written (default: ~/.tether-config)
+#   TETHER_COMPOSE_DIR   Where the Docker Compose .env is written (default: ~/tether)
+
+install:
+	python3 scripts/configure.py install
+
+configure-auth:
+	python3 scripts/configure.py auth \
+	    TETHER_JWT_SECRET="$(TETHER_JWT_SECRET)" \
+	    TETHER_COOKIE_SECURE="$(TETHER_COOKIE_SECURE)" \
+	    TETHER_ALLOWED_ORIGINS="$(TETHER_ALLOWED_ORIGINS)"
+
+configure-google:
+	python3 scripts/configure.py google \
+	    GOOGLE_CLIENT_ID="$(GOOGLE_CLIENT_ID)" \
+	    GOOGLE_CLIENT_SECRET="$(GOOGLE_CLIENT_SECRET)" \
+	    GOOGLE_CALLBACK_URL="$(GOOGLE_CALLBACK_URL)" \
+	    GOOGLE_INTEGRATION_CALLBACK_URL="$(GOOGLE_INTEGRATION_CALLBACK_URL)"
+
+configure-github:
+	python3 scripts/configure.py github \
+	    GITHUB_CLIENT_ID="$(GITHUB_CLIENT_ID)" \
+	    GITHUB_CLIENT_SECRET="$(GITHUB_CLIENT_SECRET)" \
+	    GITHUB_CALLBACK_URL="$(GITHUB_CALLBACK_URL)"
+
+configure-db:
+	python3 scripts/configure.py db \
+	    POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
+	    TETHER_APP_PASSWORD="$(TETHER_APP_PASSWORD)"
+
+configure-telegram:
+	python3 scripts/configure.py telegram \
+	    TELEGRAM_BOT_TOKEN="$(TELEGRAM_BOT_TOKEN)" \
+	    TELEGRAM_CHAT_ID="$(TELEGRAM_CHAT_ID)"
