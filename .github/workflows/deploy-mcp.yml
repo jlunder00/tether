@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy
+  group: pi-deploy-mcp
   cancel-in-progress: false
 
 jobs:
