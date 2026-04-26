@@ -23,7 +23,6 @@ Generate an API key from the Tether web interface under Settings → API Keys.
 
 ## Tools
 
-<!-- TODO: Document all tools with parameters, return shapes, and write modes.
-     Source: tether/tether_mcp/server.py + cc-context-store/tether/docs/mcp/mcp-consolidation-spec.md -->
+<!-- TODO: Document all tools with parameters, return shapes, and write modes. Source: tether/tether_mcp/server.py -->
 
 *Full tool reference coming soon.*

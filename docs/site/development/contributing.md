@@ -51,7 +51,6 @@ No automated tooling enforces a specific format — just be descriptive and keep
 - [ ] Tests pass: `pytest -v`
 - [ ] Frontend typechecks: `cd frontend && npm run typecheck`
 - [ ] New behavior is covered by tests
-- [ ] ACCOUNTING.md updated if a feature status changed
 - [ ] No hardcoded secrets or credentials
 
 ## CI

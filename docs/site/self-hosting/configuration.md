@@ -26,7 +26,7 @@ Tether's AI agent requires access to an LLM. Several backends are supported — 
 
 The active backend is selected via `preferred_backend` in the LLM settings, configurable from the web dashboard under Settings → LLM. If the preferred backend is unavailable, Tether falls back automatically.
 
-Model assignments per pipeline role (orchestrator, classifier, response builder, etc.) are set in `app_config.yaml` under `models:`.
+Model assignments are configured in `app_config.yaml` under `models:`.
 
 ## app_config.yaml
 
