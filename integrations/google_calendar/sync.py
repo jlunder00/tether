@@ -12,16 +12,24 @@ normalize_event: delegates to mapping.py.
 """
 from __future__ import annotations
 
+import logging
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import httpx
 
-import api.config as cfg
-from db.pg_queries.integrations import upsert_sync_state
+from db.pg_queries.integrations import (
+    get_sync_state,
+    soft_delete_task_by_external_id,
+    upsert_sync_state,
+)
+from db.pg_queries.tasks import upsert_task_from_draft
 from integrations.base import SyncProvider
 from integrations.google_calendar.mapping import map_event
 from integrations.models import TaskDraft, WebhookPayload
+
+logger = logging.getLogger(__name__)
 
 _CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events"
 _CALENDAR_WATCH_URL = "https://www.googleapis.com/calendar/v3/calendars/{calendar_id}/events/watch"
@@ -37,17 +45,22 @@ class GoogleCalendarSync(SyncProvider):
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
-    async def _get_access_token(self, integration_id: str) -> str:
-        """Fetch current access token for an integration."""
+    async def _get_integration_row(self, integration_id: str) -> dict:
+        """Fetch user_id and access_token for an integration in one query."""
         import db.postgres as pg
         async with pg.get_conn(self._pool) as conn:
             row = await conn.fetchrow(
-                "SELECT access_token FROM user_integrations WHERE id = $1",
-                integration_id,
+                "SELECT user_id, access_token FROM user_integrations WHERE id = $1",
+                _uuid.UUID(integration_id),
             )
         if not row:
             raise ValueError(f"Integration {integration_id} not found")
-        return row["access_token"]
+        return {"user_id": str(row["user_id"]), "access_token": row["access_token"]}
+
+    async def _get_access_token(self, integration_id: str) -> str:
+        """Fetch current access token for an integration."""
+        info = await self._get_integration_row(integration_id)
+        return info["access_token"]
 
     async def register_webhook(
         self, integration_id: str, calendar_id: str
@@ -58,6 +71,7 @@ class GoogleCalendarSync(SyncProvider):
         knows how to handle incoming notifications.
         """
         import uuid
+        import api.config as cfg
         access_token = await self._get_access_token(integration_id)
         channel_id = str(uuid.uuid4())
         # Watch channels expire after ~1 week (Google maximum)
@@ -113,9 +127,38 @@ class GoogleCalendarSync(SyncProvider):
     async def handle_webhook(
         self, integration_id: str, payload: WebhookPayload
     ) -> None:
-        """Process an inbound push notification. Called by tether-sync."""
-        # Actual sync logic lives in tether-sync; this is the interface stub.
-        pass
+        """Process an inbound push notification. Called by tether-sync.
+
+        Looks up the integration_sync_state row by (integration_id, channel_id)
+        to recover calendar_id and the stored sync cursor, then delegates to
+        poll() which persists the updated cursor.
+
+        Note: the task brief mentions get_integration() but that helper takes
+        (user_id, provider) — not integration_id. We go directly to
+        integration_sync_state instead, which is the canonical lookup by
+        channel ID.
+        """
+        import db.postgres as pg
+        async with pg.get_conn(self._pool) as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT calendar_id, sync_cursor
+                FROM integration_sync_state
+                WHERE integration_id = $1 AND watch_channel_id = $2
+                """,
+                _uuid.UUID(integration_id),
+                payload.channel_id,
+            )
+
+        if not row:
+            logger.warning(
+                "handle_webhook: no sync state found for integration=%s channel=%s; skipping",
+                integration_id,
+                payload.channel_id,
+            )
+            return
+
+        await self.poll(integration_id, row["calendar_id"], row["sync_cursor"])
 
     async def poll(
         self,
@@ -125,17 +168,25 @@ class GoogleCalendarSync(SyncProvider):
     ) -> str:
         """Fetch incremental changes via Google's syncToken mechanism.
 
-        Returns the new syncToken to store as the next cursor.
+        Iterates all returned items:
+          - cancelled items  → soft_delete_task_by_external_id
+          - active items     → normalize_event() → upsert_task_from_draft()
+
+        Persists the new syncToken via upsert_sync_state and returns it.
         On 410 Gone (invalidated token), raises ValueError to trigger a full resync.
         """
-        access_token = await self._get_access_token(integration_id)
+        import db.postgres as pg
+
+        info = await self._get_integration_row(integration_id)
+        access_token = info["access_token"]
+        user_id = info["user_id"]
+
         url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
         params: dict = {"singleEvents": "true"}
         if since_cursor:
             params["syncToken"] = since_cursor
         else:
             # Initial import: 30 days back, no end limit
-            from datetime import date
             thirty_days_ago = (
                 datetime.now(timezone.utc) - timedelta(days=30)
             ).isoformat()
@@ -152,7 +203,32 @@ class GoogleCalendarSync(SyncProvider):
             raise ValueError("Sync token invalidated (410) — full resync needed")
         resp.raise_for_status()
         data = resp.json()
-        return data.get("nextSyncToken", "")
+
+        if data.get("nextPageToken"):
+            logger.warning(
+                "poll: nextPageToken present for integration=%s calendar=%s — "
+                "pagination is not yet implemented; some items may be truncated",
+                integration_id,
+                calendar_id,
+            )
+
+        async with pg.get_conn(self._pool, user_id=user_id) as conn:
+            for item in data.get("items", []):
+                if item.get("status") == "cancelled":
+                    await soft_delete_task_by_external_id(
+                        conn, user_id, "google_calendar", item["id"]
+                    )
+                else:
+                    draft = await self.normalize_event(item)
+                    await upsert_task_from_draft(conn, user_id, draft)
+
+            new_token = data.get("nextSyncToken", "")
+            if new_token:
+                await upsert_sync_state(
+                    conn, integration_id, calendar_id, sync_cursor=new_token
+                )
+
+        return new_token
 
     async def normalize_event(self, raw: dict) -> TaskDraft:
         return map_event(raw)

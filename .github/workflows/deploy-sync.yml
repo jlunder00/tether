@@ -1,18 +1,16 @@
-name: Deploy Bot
+name: Deploy Sync
 
 on:
   push:
     branches: [main]
     paths:
-      - 'bot/**'
+      - 'sync/**'
+      - 'integrations/**'
+      - 'db/**'
       - 'config/**'
-      - 'prompts/**'
       - 'Dockerfile'
       - 'requirements.txt'
       - 'pyproject.toml'
-  # Triggered by tether-premium when it merges to main.
-  repository_dispatch:
-    types: [premium-updated]
   workflow_dispatch:
     inputs:
       no_cache:
@@ -26,12 +24,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy-bot
+  group: pi-deploy
   cancel-in-progress: false
 
 jobs:
-  deploy-bot:
-    name: Build and deploy bot service
+  deploy-sync:
+    name: Build and deploy sync service
     runs-on: self-hosted
     steps:
       - name: Pull latest code
@@ -53,24 +51,18 @@ jobs:
       - name: Resolve premium ref
         id: premium
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          PREMIUM_REF_PAYLOAD: ${{ github.event.client_payload.premium_ref }}
           TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
         run: |
-          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
-            REF="$PREMIUM_REF_PAYLOAD"
-          else
-            REF=$(git ls-remote \
-              "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
-              HEAD | cut -f1 | cut -c1-7)
-          fi
+          REF=$(git ls-remote \
+            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+            HEAD | cut -f1 | cut -c1-7)
           if [ -z "$REF" ]; then
             echo "ERROR: Failed to resolve tether-premium HEAD ref" >&2
             exit 1
           fi
           echo "ref=${REF}" >> $GITHUB_OUTPUT
 
-      - name: Build bot image
+      - name: Build image
         env:
           TAG: ${{ steps.version.outputs.tag }}
           PREMIUM_REF: ${{ steps.premium.outputs.ref }}
@@ -89,23 +81,13 @@ jobs:
             && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
             || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
 
-      - name: Write production config
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          cd /home/toast/tether
-          make configure-telegram \
-            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN} \
-            TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-
-      - name: Restart bot service
+      - name: Restart sync service
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-            docker compose up -d --no-deps bot
+            docker compose up -d --no-deps sync
 
       - name: Prune old images (keep 3)
         run: |

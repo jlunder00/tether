@@ -61,7 +61,7 @@ ARG PREMIUM_GIT_TOKEN=
 ARG PREMIUM_REF=unknown
 RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
       echo "Installing tether-premium @ ${PREMIUM_REF}" && \
-      pip install --no-cache-dir \
+      pip install --no-cache-dir --timeout 120 --retries 3 \
         "git+https://${PREMIUM_GIT_TOKEN}@github.com/jlunder00/tether-premium.git" && \
       python -c "from tether_premium.register import get_premium_handler; print('[ok] premium loaded')" ; \
     else \

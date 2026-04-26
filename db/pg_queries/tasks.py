@@ -1,11 +1,15 @@
 """Async Postgres queries — tasks, subtasks, and dependencies."""
 from __future__ import annotations
 import uuid as _uuid
+from typing import TYPE_CHECKING
 
 import asyncpg
 
 from db.pg_queries.errors import StaleReadError
 from db.pg_queries.plans import _row_to_task
+
+if TYPE_CHECKING:
+    from integrations.models import TaskDraft
 
 
 async def upsert_tasks(
@@ -602,6 +606,59 @@ async def reorder_subtasks(conn: asyncpg.Connection, task_id: str, id_order: lis
             "UPDATE subtasks SET position = $1 WHERE id = $2 AND task_id = $3",
             pos, subtask_id, task_id,
         )
+
+
+async def upsert_task_from_draft(
+    conn: asyncpg.Connection,
+    user_id: str,
+    draft: "TaskDraft",
+) -> dict:
+    """Upsert an external-sourced task from a TaskDraft.
+
+    Conflict key: (user_id, source, external_id) — the partial unique index
+    on tasks WHERE source IS NOT NULL.
+
+    On conflict: updates presentation fields (title, times, description,
+    external_url, source_status) and bumps version.
+    Does NOT overwrite user-owned fields (plan_date, anchor_id, position,
+    status, notes) on conflict — those belong to the user.
+
+    On insert: task lands as unscheduled (plan_date=NULL, anchor_id=NULL,
+    position=0, status='pending').
+    """
+    new_uuid = _uuid.uuid4()
+    row = await conn.fetchrow(
+        """
+        INSERT INTO tasks
+            (uuid, user_id, text, source, external_id,
+             start_time, end_time, description, external_url, source_status,
+             status, position)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 0)
+        ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
+        DO UPDATE SET
+            text         = EXCLUDED.text,
+            start_time   = EXCLUDED.start_time,
+            end_time     = EXCLUDED.end_time,
+            description  = EXCLUDED.description,
+            external_url = EXCLUDED.external_url,
+            source_status = EXCLUDED.source_status,
+            version      = tasks.version + 1
+        RETURNING
+            uuid, text, status, position, followup_config,
+            description, context_subject, context_node_id, version
+        """,
+        new_uuid,
+        user_id,
+        draft.title,
+        draft.source,
+        draft.external_id,
+        draft.start_time,
+        draft.end_time,
+        draft.description,
+        draft.external_url,
+        draft.source_status,
+    )
+    return _row_to_task(row)
 
 
 # ─── Event queries (tasks with start_time/end_time set) ───────────────────────
