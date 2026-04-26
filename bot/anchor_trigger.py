@@ -15,7 +15,8 @@ import yaml
 from bot.plan_reader import load_context, load_plan
 from bot.prompt_builder import build_anchor_prompt
 
-CONFIG_DIR = Path.home() / ".tether-config"
+import os as _os
+CONFIG_DIR = Path(_os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 

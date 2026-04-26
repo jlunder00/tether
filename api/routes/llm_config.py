@@ -7,7 +7,8 @@ from api.auth import auth_dependency
 
 router = APIRouter(prefix="/llm-config", tags=["llm-config"])
 
-_CONFIG_PATH = Path.home() / ".tether-config" / "config.yaml"
+from api.config import CONFIG_DIR as _CONFIG_DIR
+_CONFIG_PATH = _CONFIG_DIR / "config.yaml"
 
 # All configurable model roles in the pipeline (v2)
 _MODEL_ROLES = [
