@@ -29,14 +29,15 @@ jobs:
       - name: Write production config
         env:
           TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
           TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL }}
           GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL }}
-          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-          GITHUB_CALLBACK_URL: ${{ secrets.GITHUB_CALLBACK_URL }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
@@ -44,24 +45,24 @@ jobs:
         run: |
           cd /home/toast/tether
           make configure-auth \
-            TETHER_JWT_SECRET=${TETHER_JWT_SECRET} \
-            TETHER_COOKIE_SECURE=true \
-            TETHER_ALLOWED_ORIGINS=${TETHER_ALLOWED_ORIGINS}
+            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
+            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
+            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
           make configure-google \
-            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID} \
-            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET} \
-            GOOGLE_CALLBACK_URL=${GOOGLE_CALLBACK_URL} \
-            GOOGLE_INTEGRATION_CALLBACK_URL=${GOOGLE_INTEGRATION_CALLBACK_URL}
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
+            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
           make configure-github \
-            GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID} \
-            GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET} \
-            GITHUB_CALLBACK_URL=${GITHUB_CALLBACK_URL}
+            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
+            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
+            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
           make configure-telegram \
-            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN} \
-            TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+            TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
           make configure-db \
-            POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
-            TETHER_APP_PASSWORD=${TETHER_APP_PASSWORD}
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
 
       - name: Restart all services (no rebuild)
         run: |
