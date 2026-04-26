@@ -143,7 +143,6 @@ jobs:
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
             docker compose up -d --no-deps api bot mcp
-          docker compose up -d --no-deps frontend
 
       - name: Prune old images (keep 3)
         run: |
