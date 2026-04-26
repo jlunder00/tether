@@ -6,7 +6,7 @@ Tether's configuration lives in YAML files under `~/.tether-config/`. Each file 
 
 | File | What it controls | Contains secrets? |
 |------|-----------------|-------------------|
-| `app_config.yaml` | AI model assignments, pipeline constants, server ports, Telegram credentials | Bot token (sensitive) |
+| `app_config.yaml` | AI model assignments, pipeline constants, server ports, Telegram credentials | Yes — bot token added by `make configure-telegram` |
 | `auth_config.yaml` | JWT secret, cookie settings, CORS origins, OAuth credentials | Yes |
 | `integrations.yaml` | Third-party integration flags | No |
 
@@ -14,7 +14,9 @@ These files are created by `make install` and updated by `make configure-*` targ
 
 ## app_config.yaml
 
-Controls AI model routing, pipeline behavior, and the Telegram bot credentials.
+Controls AI model routing, pipeline behavior, and server ports. After running `make configure-telegram`, your Telegram credentials are also written here.
+
+Default baked-in values:
 
 ```yaml
 models:
@@ -33,13 +35,17 @@ pipeline:
 server:
   api_port: 8000
   mcp_port: 5001
+```
 
+After `make configure-telegram`, `~/.tether-config/app_config.yaml` gains:
+
+```yaml
 telegram:
   bot_token: "your-bot-token"
   chat_id: "your-chat-id"
 ```
 
-To update Telegram credentials:
+To set or update Telegram credentials:
 ```bash
 make configure-telegram
 ```

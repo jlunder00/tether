@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 
-# Disable rate limiting and cookie Secure flag before any app imports so the
-# module-level checks in api.limiter and api.config pick up these values.
+# Set required config values before any app imports so that the config loader
+# singleton resolves successfully in test environments.
 os.environ.setdefault("TETHER_DISABLE_RATE_LIMITS", "1")
 os.environ.setdefault("TETHER_COOKIE_SECURE", "false")
+os.environ.setdefault("TETHER_JWT_SECRET", "dev-secret-change-in-production")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
 
 import pytest
 import asyncpg
