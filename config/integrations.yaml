@@ -1,0 +1,6 @@
+# Third-party integration parameters.
+# Secret values (API keys, tokens) use ${PLACEHOLDER} — resolved from env at startup.
+
+google_calendar:
+  enabled: false
+  # Shares OAuth client with google auth above — no additional secrets here
