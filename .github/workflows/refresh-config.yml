@@ -1,0 +1,69 @@
+name: Refresh config (no rebuild)
+
+# Triggered when only config/envs/prod/ changes.
+# Writes updated YAML to the Pi and restarts containers — no image rebuild needed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'config/envs/prod/**'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-deploy
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Write updated config and restart services
+    runs-on: self-hosted
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /home/toast/tether
+          git pull origin main
+
+      - name: Write production config
+        env:
+          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL }}
+          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL }}
+          GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+          GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+          GITHUB_CALLBACK_URL: ${{ secrets.GITHUB_CALLBACK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TETHER_APP_PASSWORD: ${{ secrets.TETHER_APP_PASSWORD }}
+        run: |
+          cd /home/toast/tether
+          make configure-auth \
+            TETHER_JWT_SECRET=${TETHER_JWT_SECRET} \
+            TETHER_COOKIE_SECURE=true \
+            TETHER_ALLOWED_ORIGINS=${TETHER_ALLOWED_ORIGINS}
+          make configure-google \
+            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID} \
+            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET} \
+            GOOGLE_CALLBACK_URL=${GOOGLE_CALLBACK_URL} \
+            GOOGLE_INTEGRATION_CALLBACK_URL=${GOOGLE_INTEGRATION_CALLBACK_URL}
+          make configure-github \
+            GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID} \
+            GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET} \
+            GITHUB_CALLBACK_URL=${GITHUB_CALLBACK_URL}
+          make configure-telegram \
+            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN} \
+            TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+          make configure-db \
+            POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+            TETHER_APP_PASSWORD=${TETHER_APP_PASSWORD}
+
+      - name: Restart all services (no rebuild)
+        run: |
+          cd /home/toast/tether
+          docker compose restart api bot mcp
