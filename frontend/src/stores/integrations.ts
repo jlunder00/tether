@@ -1,0 +1,57 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+import { api } from '../lib/api'
+
+export const useIntegrationsStore = defineStore('integrations', () => {
+  const gcalConnected = ref(false)
+  const loading = ref(false)
+  const error = ref<string | null>(null)
+
+  /**
+   * Check Google Calendar connection status.
+   * Uses GET /api/integrations/google/calendars as a proxy:
+   * - 200 → connected
+   * - 404 / 401 / network error → not connected
+   */
+  async function fetchGCalStatus() {
+    loading.value = true
+    error.value = null
+    try {
+      const resp = await api('/api/integrations/google/calendars')
+      gcalConnected.value = resp.ok
+    } catch {
+      gcalConnected.value = false
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Initiate Google Calendar OAuth flow.
+   * Navigates the page to the backend OAuth redirect endpoint.
+   */
+  function connectGCal() {
+    window.location.href = '/api/integrations/google/connect'
+  }
+
+  /**
+   * Disconnect Google Calendar integration.
+   * POST /api/integrations/google/disconnect — revokes tokens and deletes the row.
+   */
+  async function disconnectGCal() {
+    loading.value = true
+    error.value = null
+    try {
+      const resp = await api('/api/integrations/google/disconnect', { method: 'POST' })
+      if (resp.ok) {
+        gcalConnected.value = false
+      }
+    } catch {
+      // Leave connected state unchanged on network error
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { gcalConnected, loading, error, fetchGCalStatus, connectGCal, disconnectGCal }
+})
