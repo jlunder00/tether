@@ -25,5 +25,5 @@ features:
     details: Connect Claude Code directly to your Tether data via the Model Context Protocol. Read and update your tasks and projects from any Claude session.
   - icon: 🏠
     title: Self-Hosted
-    details: Run Tether on your own hardware — Raspberry Pi, home server, or cloud VM. Your data stays yours.
+    details: Run Tether on any Linux machine with Docker — home server, cloud VM, or local workstation. Your data stays yours.
 ---
