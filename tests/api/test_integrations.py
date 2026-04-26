@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import urllib.parse
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -442,3 +443,196 @@ async def test_calendars_patch_no_integration_returns_404(api_client):
         json={"calendar_ids": ["primary"]},
     )
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 8. Callback fires initial sync + webhook registration as background task
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_callback_schedules_initial_sync_background_task(api_client, monkeypatch):
+    """After successful callback, the helper that runs initial sync +
+    webhook registration is dispatched as a FastAPI BackgroundTask."""
+    state = _make_state(TEST_USER_ID)
+
+    # Stub the OAuth token exchange so the callback succeeds without HTTP.
+    async def fake_handle_callback(self, user_id, code):
+        return None
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarAuth.handle_callback",
+        fake_handle_callback,
+    )
+
+    called: dict = {}
+
+    async def fake_helper(pool, user_id):
+        called["pool"] = pool
+        called["user_id"] = user_id
+
+    monkeypatch.setattr(
+        "api.routes.integrations._initial_sync_and_register",
+        fake_helper,
+    )
+
+    resp = await api_client.get(
+        f"/api/integrations/google/callback?code=auth_code&state={state}",
+        follow_redirects=False,
+    )
+
+    assert resp.status_code in (302, 307)
+    # Background task must have been dispatched with the user_id from state.
+    assert called.get("user_id") == TEST_USER_ID
+    assert called.get("pool") is not None
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_dispatches_for_each_selected_calendar(monkeypatch):
+    """_initial_sync_and_register dispatches a poll sync per selected calendar
+    and registers a webhook per selected calendar."""
+    from api.routes import integrations as routes
+
+    fake_row = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "metadata": {"selected_calendar_ids": ["primary", "cal2@group.calendar.google.com"]},
+    }
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        yield None
+
+    async def fake_get_integration(conn, user_id, provider):
+        return fake_row
+
+    dispatched: list[dict] = []
+
+    async def fake_dispatch(pool, integration_id, calendar_id, *, provider, notify_type="poll", **extra):
+        dispatched.append({
+            "integration_id": integration_id,
+            "calendar_id": calendar_id,
+            "provider": provider,
+            "notify_type": notify_type,
+        })
+
+    registered: list[tuple] = []
+
+    async def fake_register(self, integration_id, calendar_id):
+        registered.append((integration_id, calendar_id))
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+    monkeypatch.setattr("api.routes.integrations.get_integration", fake_get_integration)
+    monkeypatch.setattr("api.routes.integrations.dispatch_sync", fake_dispatch)
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.register_webhook",
+        fake_register,
+    )
+
+    await routes._initial_sync_and_register(pool=None, user_id=TEST_USER_ID)
+
+    cal_ids = {d["calendar_id"] for d in dispatched}
+    assert cal_ids == {"primary", "cal2@group.calendar.google.com"}
+    assert all(d["provider"] == "google_calendar" for d in dispatched)
+    assert all(d["notify_type"] == "poll" for d in dispatched)
+    reg_ids = {r[1] for r in registered}
+    assert reg_ids == {"primary", "cal2@group.calendar.google.com"}
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_tolerates_webhook_failure(monkeypatch):
+    """register_webhook is best-effort: dispatch still happens and the
+    helper does not raise even if webhook registration blows up."""
+    from api.routes import integrations as routes
+
+    fake_row = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "metadata": {"selected_calendar_ids": ["primary"]},
+    }
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        yield None
+
+    async def fake_get_integration(conn, user_id, provider):
+        return fake_row
+
+    dispatched: list[str] = []
+
+    async def fake_dispatch(pool, integration_id, calendar_id, *, provider, notify_type="poll", **extra):
+        dispatched.append(calendar_id)
+
+    async def fake_register_fail(self, integration_id, calendar_id):
+        raise RuntimeError("tunnel down")
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+    monkeypatch.setattr("api.routes.integrations.get_integration", fake_get_integration)
+    monkeypatch.setattr("api.routes.integrations.dispatch_sync", fake_dispatch)
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.register_webhook",
+        fake_register_fail,
+    )
+
+    # Must not raise.
+    await routes._initial_sync_and_register(pool=None, user_id=TEST_USER_ID)
+    assert dispatched == ["primary"]
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_no_integration_returns_silently(monkeypatch):
+    """If the integration row is missing, helper logs and returns without
+    dispatching or raising."""
+    from api.routes import integrations as routes
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        yield None
+
+    async def fake_get_integration(conn, user_id, provider):
+        return None
+
+    dispatched: list = []
+
+    async def fake_dispatch(*args, **kwargs):
+        dispatched.append(1)
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+    monkeypatch.setattr("api.routes.integrations.get_integration", fake_get_integration)
+    monkeypatch.setattr("api.routes.integrations.dispatch_sync", fake_dispatch)
+
+    await routes._initial_sync_and_register(pool=None, user_id=TEST_USER_ID)
+    assert dispatched == []
+
+
+@pytest.mark.asyncio
+async def test_initial_sync_defaults_to_primary_when_no_metadata(monkeypatch):
+    """If the integration has no selected_calendar_ids, defaults to ['primary']."""
+    from api.routes import integrations as routes
+
+    fake_row = {
+        "id": "11111111-1111-1111-1111-111111111111",
+        "metadata": None,
+    }
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        yield None
+
+    async def fake_get_integration(conn, user_id, provider):
+        return fake_row
+
+    dispatched: list[str] = []
+
+    async def fake_dispatch(pool, integration_id, calendar_id, *, provider, notify_type="poll", **extra):
+        dispatched.append(calendar_id)
+
+    async def fake_register(self, integration_id, calendar_id):
+        pass
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+    monkeypatch.setattr("api.routes.integrations.get_integration", fake_get_integration)
+    monkeypatch.setattr("api.routes.integrations.dispatch_sync", fake_dispatch)
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.register_webhook",
+        fake_register,
+    )
+
+    await routes._initial_sync_and_register(pool=None, user_id=TEST_USER_ID)
+    assert dispatched == ["primary"]
