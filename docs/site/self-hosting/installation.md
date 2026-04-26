@@ -5,8 +5,9 @@
 - **Linux** — Raspberry Pi 4+ or any x86-64 machine
 - **Docker and Docker Compose** — [install Docker](https://docs.docker.com/get-docker/)
 - **Python 3.11+** — for running the configure script
-- **Claude Code** — install and log in: `npm install -g @anthropic-ai/claude-code && claude login`
-- **A Telegram bot token** — create one via [@BotFather](https://t.me/BotFather) on Telegram
+- **LLM access** — at least one of: Anthropic API key, OpenAI API key, OpenRouter API key, AWS Bedrock credentials, or Claude Code CLI logged in. See [LLM Backends](./configuration#llm-backends).
+
+Everything else (Telegram, OAuth providers) is optional.
 
 ## 1. Clone the repo
 
@@ -17,7 +18,7 @@ cd tether
 
 ## 2. Run the setup script
 
-`make install` walks you through configuration interactively. It auto-generates a secure JWT secret and prompts for each credential category. Press Enter to skip anything you don't have yet.
+`make install` walks you through configuration interactively. It auto-generates a secure JWT secret and prompts for each credential category. Press Enter to skip anything you don't need.
 
 ```bash
 make install
@@ -25,18 +26,18 @@ make install
 
 You'll be prompted for:
 
-| Category | What it sets |
-|----------|-------------|
-| Google OAuth | Client ID, secret, callback URLs (skip if not using Google login) |
-| GitHub OAuth | Client ID, secret, callback URL (skip if not using GitHub login) |
-| DB passwords | PostgreSQL superuser + app role passwords |
-| Telegram | Bot token and chat ID |
+| Category | Required? | What it enables |
+|----------|-----------|-----------------|
+| Google OAuth | Optional | Google login for the web dashboard |
+| GitHub OAuth | Optional | GitHub login for the web dashboard |
+| DB passwords | Yes | PostgreSQL access |
+| Telegram | Optional | Telegram as a chat channel for the AI agent |
 
-Config is written to `~/.tether-config/` as YAML files. The JWT secret is generated automatically — you don't need to supply one.
+Config is written to `~/.tether-config/` as YAML files. The JWT secret is generated automatically.
 
 ## 3. Create the database app role
 
-Tether uses a non-superuser PostgreSQL role (`tether_app`) for all application queries. This is required for per-user data isolation to work correctly. Create it once after the database container first starts:
+Tether uses a non-superuser PostgreSQL role (`tether_app`) for all application queries. This is required for per-user data isolation. Create it once after the database container first starts:
 
 ```bash
 # Start just the database
@@ -80,14 +81,14 @@ This starts four containers: `postgres`, `api`, `bot`, and `mcp`.
 docker compose ps
 ```
 
-All four services should show as running. Send your Telegram bot a message — it should respond. Open `http://localhost:8000` in a browser to access the web dashboard.
+All four services should show as running. Open `http://localhost:8000` in a browser to access the web dashboard. If you configured Telegram, send your bot a message — it should respond.
 
 ## Updating config after setup
 
 Run any `configure-*` target to update a specific category without re-running the full install:
 
 ```bash
-make configure-telegram   # update Telegram credentials
+make configure-telegram   # add or update Telegram credentials
 make configure-auth       # update JWT secret or CORS origins
 make configure-google     # update Google OAuth credentials
 make configure-github     # update GitHub OAuth credentials

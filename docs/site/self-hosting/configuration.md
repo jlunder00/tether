@@ -6,25 +6,41 @@ Tether's configuration lives in YAML files under `~/.tether-config/`. Each file 
 
 | File | What it controls | Contains secrets? |
 |------|-----------------|-------------------|
-| `app_config.yaml` | AI model assignments, pipeline constants, server ports, Telegram credentials | Yes — bot token added by `make configure-telegram` |
+| `app_config.yaml` | AI model assignments, pipeline constants, server ports, optional chat channel credentials | Yes — if Telegram configured |
 | `auth_config.yaml` | JWT secret, cookie settings, CORS origins, OAuth credentials | Yes |
 | `integrations.yaml` | Third-party integration flags | No |
 
 These files are created by `make install` and updated by `make configure-*` targets. You can also edit them directly — they are standard YAML.
 
+## LLM backends {#llm-backends}
+
+Tether's AI agent requires access to an LLM. Several backends are supported — use whichever fits your setup:
+
+| Backend | How to enable | Models |
+|---------|--------------|--------|
+| **Anthropic API** | Set `ANTHROPIC_API_KEY` env var | Claude Sonnet, Haiku, etc. |
+| **Claude Code CLI** | Run `claude login` on the host | Claude models via your Anthropic subscription |
+| **OpenAI-compatible** | Set `OPENAI_API_KEY` env var | GPT-4o, or any OpenAI-compatible endpoint |
+| **OpenRouter** | Set `OPENROUTER_API_KEY` env var | 100s of models via a single API key |
+| **AWS Bedrock** | Configure ambient AWS credentials | Claude, Llama, and other Bedrock models |
+
+The active backend is selected via `preferred_backend` in the LLM settings, configurable from the web dashboard under Settings → LLM. If the preferred backend is unavailable, Tether falls back automatically.
+
+Model assignments per pipeline role (orchestrator, classifier, response builder, etc.) are set in `app_config.yaml` under `models:`.
+
 ## app_config.yaml
 
-Controls AI model routing, pipeline behavior, and server ports. After running `make configure-telegram`, your Telegram credentials are also written here.
+Controls AI model routing, pipeline behavior, and server ports.
 
 Default baked-in values:
 
 ```yaml
 models:
-  orchestrator: claude-sonnet-4-5       # reasoning — sets intent
-  meta_eval: claude-haiku-4-5           # structured interpretation
-  quick_classifier: claude-haiku-4-5    # fast routing
-  response_builder: claude-sonnet-4-5   # user-facing replies
-  satisfaction_eval: claude-haiku-4-5   # post-mutation check
+  orchestrator: claude-sonnet-4-6
+  meta_eval: claude-haiku-4-5-20251001
+  quick_classifier: claude-haiku-4-5-20251001
+  response_builder: claude-sonnet-4-6
+  satisfaction_eval: claude-haiku-4-5-20251001
 
 pipeline:
   history_exchanges: 5          # conversation turns fed to the agent
@@ -37,6 +53,12 @@ server:
   mcp_port: 5001
 ```
 
+## Chat channels (optional)
+
+The AI agent can be accessed via the **web dashboard** without any additional configuration. Chat channels are optional integrations that let you reach the agent from other platforms.
+
+### Telegram
+
 After `make configure-telegram`, `~/.tether-config/app_config.yaml` gains:
 
 ```yaml
@@ -45,10 +67,15 @@ telegram:
   chat_id: "your-chat-id"
 ```
 
-To set or update Telegram credentials:
+Get a bot token from [@BotFather](https://t.me/BotFather) on Telegram.
+
 ```bash
 make configure-telegram
 ```
+
+::: info More channels coming
+Discord, Slack, and email are planned as additional chat channels. The agent's web UI is available regardless of which channels are configured.
+:::
 
 ## auth_config.yaml
 
@@ -78,7 +105,7 @@ oauth:
     integration_callback_url: "http://localhost:8000/api/integrations/google/callback"
 ```
 
-To enable GitHub or Google login, set `enabled: true` and fill in the credentials:
+OAuth providers are optional — email/password login works without them. To enable GitHub or Google login:
 
 ```bash
 make configure-github   # prompts for client ID, secret, callback URL
@@ -116,7 +143,7 @@ At startup, Tether loads config in layers — later layers override earlier ones
 2. **Local override** — `~/.tether-config/*.yaml` (your values from `make install`)
 3. **Placeholder resolution** — `${VAR:-default}` strings replaced from environment variables
 
-This means you can override any value either by editing `~/.tether-config/*.yaml` directly or by setting the corresponding environment variable. The `make configure-*` targets are the recommended way for most values.
+You can override any value by editing `~/.tether-config/*.yaml` directly or by setting the corresponding environment variable. The `make configure-*` targets are the recommended approach for most values.
 
 ## Changing config without restarting
 
@@ -124,7 +151,7 @@ Config is read at startup. After editing any config file, restart the affected s
 
 ```bash
 docker compose restart api     # for auth, CORS, OAuth changes
-docker compose restart bot     # for model, pipeline, Telegram changes
+docker compose restart bot     # for model, pipeline, channel changes
 docker compose restart mcp     # for MCP-related config
 ```
 
