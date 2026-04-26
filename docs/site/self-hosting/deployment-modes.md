@@ -6,10 +6,10 @@ Docker Compose is the recommended and supported deployment path. It handles all 
 
 Runs `api`, `bot`, `mcp`, and `postgres` as containers on a shared network. Works on any Linux machine with Docker installed.
 
-<!-- TODO: Fill in after config-loader-redesign lands. -->
+<!-- TODO: Fill in with full compose reference. -->
 
 ## systemd (without Docker)
 
-Running services directly on the host as systemd units is possible but not the primary supported path. It may be deprecated in a future release. If you need it, the unit files are in `systemd/` in the repo.
+Running services directly on the host as systemd units is possible but not the primary supported path. Unit files are in `systemd/` in the repo.
 
 <!-- TODO: Decide whether to document or deprecate. -->

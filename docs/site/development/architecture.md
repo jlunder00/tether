@@ -12,7 +12,7 @@ tether/
   frontend/         Vue 3 web dashboard (Vite, TypeScript, Pinia)
   tether_mcp/       MCP server — tools exposed over SSE
   prompts/          Jinja2 prompt templates for every pipeline stage
-  scripts/          Setup and maintenance scripts (configure.py, migrate_sqlite_to_postgres.py)
+  scripts/          Setup and maintenance scripts
   tests/            pytest test suite mirroring source layout
 ```
 
@@ -40,7 +40,7 @@ User message (Telegram or web chat)
 | `bot/prompt_builder.py` | `build_anchor_prompt()` | Jinja2 prompt assembly for anchor triggers |
 | `bot/handler_utils.py` | — | Slash command parsing, anchor time logic |
 | `bot/anchor_trigger.py` | — | Cron-triggered anchor transition messages |
-| `db/schema.py` | `init_db()` | SQLite DDL (legacy), auto-migration |
+| `db/schema.py` | `init_db()` | SQLite schema |
 | `db/pg_queries/` | — | Async PostgreSQL query functions |
 | `api/main.py` | FastAPI `app` | REST API + static file serving |
 | `api/ws.py` | — | WebSocket broadcast for real-time updates |

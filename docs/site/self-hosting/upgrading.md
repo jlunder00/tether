@@ -38,4 +38,4 @@ Look at the release notes or the commit log to see whether any manual steps are 
 git log --oneline HEAD~10..HEAD
 ```
 
-<!-- TODO: Add notes about the CI/CD path (IMAGE_TAG written by deploy.yml) and the make restart workflow once config-loader-redesign lands. -->
+<!-- TODO: Add notes about the CI/CD path and make restart workflow. -->

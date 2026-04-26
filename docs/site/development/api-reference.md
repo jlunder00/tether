@@ -26,4 +26,4 @@ The `/ws` endpoint supports real-time event delivery to the frontend.
 
 If no auth message is received within 10 seconds, the server closes with code `1008`.
 
-<!-- TODO: Document all REST endpoints by resource group once the API stabilizes post-config-redesign. -->
+<!-- TODO: Document all REST endpoints by resource group. -->
