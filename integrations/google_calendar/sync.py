@@ -19,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 import asyncpg
 import httpx
 
-import api.config as cfg
 from db.pg_queries.integrations import (
     get_sync_state,
     soft_delete_task_by_external_id,
@@ -72,6 +71,7 @@ class GoogleCalendarSync(SyncProvider):
         knows how to handle incoming notifications.
         """
         import uuid
+        import api.config as cfg
         access_token = await self._get_access_token(integration_id)
         channel_id = str(uuid.uuid4())
         # Watch channels expire after ~1 week (Google maximum)
