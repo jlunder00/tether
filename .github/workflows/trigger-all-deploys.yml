@@ -1,0 +1,47 @@
+name: Trigger all per-service deploys
+
+# Fan-out dispatcher: kicks off every per-service deploy workflow.
+# Each runs as its own independent run with its own concurrency group
+# (pi-deploy-<service>) and queues at the runner level. Use this when
+# you want each service redeployed via its normal path-aware workflow.
+#
+# For a single-log, fully-inline rebuild of all services, use
+# force-deploy-all.yml instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Force --no-cache build"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  trigger-all:
+    name: Dispatch every service deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger each service deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NO_CACHE: ${{ inputs.no_cache }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          for wf in deploy-api deploy-bot deploy-mcp deploy-frontend deploy-sync deploy-db; do
+            echo "Dispatching $wf.yml (no_cache=$NO_CACHE, ref=$REF)"
+            gh workflow run "$wf.yml" \
+              --repo "$REPO" \
+              --ref "$REF" \
+              -f no_cache="$NO_CACHE"
+          done
+          echo
+          echo "Dispatched. Each workflow will queue independently and run"
+          echo "sequentially through the single self-hosted runner."
