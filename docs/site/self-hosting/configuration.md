@@ -21,7 +21,7 @@ Tether's AI agent requires access to an LLM. Several backends are supported — 
 | **Anthropic API** | Set `ANTHROPIC_API_KEY` env var | Claude Sonnet, Haiku, etc. |
 | **Claude Code CLI** | Run `claude login` on the host | Claude models via your Anthropic subscription |
 | **OpenAI-compatible** | Set `OPENAI_API_KEY` env var | GPT-4o, or any OpenAI-compatible endpoint |
-| **OpenRouter** | Set `OPENROUTER_API_KEY` env var | 100s of models via a single API key |
+| **OpenRouter** | Set `OPENROUTER_API_KEY` env var | Wide model selection via a single API key |
 | **AWS Bedrock** | Configure ambient AWS credentials | Claude, Llama, and other Bedrock models |
 
 The active backend is selected via `preferred_backend` in the LLM settings, configurable from the web dashboard under Settings → LLM. If the preferred backend is unavailable, Tether falls back automatically.

@@ -4,7 +4,7 @@ Docker Compose is the recommended and supported deployment path. It handles all 
 
 ## Docker Compose (recommended)
 
-Manages four services — `api`, `bot`, `mcp`, and `postgres` — as containers with a shared network. Works on any Linux machine with Docker installed.
+Runs `api`, `bot`, `mcp`, and `postgres` as containers on a shared network. Works on any Linux machine with Docker installed.
 
 <!-- TODO: Fill in after config-loader-redesign lands. -->
 

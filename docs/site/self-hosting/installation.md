@@ -73,7 +73,7 @@ docker compose run --rm api alembic upgrade head
 docker compose up -d
 ```
 
-This starts four containers: `postgres`, `api`, `bot`, and `mcp`.
+This starts `postgres`, `api`, `bot`, and `mcp`.
 
 ## 6. Verify
 
@@ -81,7 +81,7 @@ This starts four containers: `postgres`, `api`, `bot`, and `mcp`.
 docker compose ps
 ```
 
-All four services should show as running. Open `http://localhost:8000` in a browser to access the web dashboard. If you configured Telegram, send your bot a message — it should respond.
+All services should show as running. Open `http://localhost:8000` in a browser to access the web dashboard. If you configured Telegram, send your bot a message — it should respond.
 
 ## Updating config after setup
 

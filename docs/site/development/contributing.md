@@ -5,7 +5,7 @@
 - Python 3.11+
 - Node.js 20+ (for frontend)
 - Docker and Docker Compose (for running PostgreSQL locally)
-- A Claude Code login (`claude login`)
+- LLM access — any supported backend (Anthropic API key, Claude Code CLI, OpenRouter, etc.). See [LLM Backends](../self-hosting/configuration#llm-backends).
 
 ## Local setup
 

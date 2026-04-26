@@ -52,7 +52,6 @@ export default defineConfig({
           items: [
             { text: 'Overview', link: '/development/' },
             { text: 'Architecture', link: '/development/architecture' },
-            { text: 'Bot Pipeline', link: '/development/bot-pipeline' },
             { text: 'API Reference', link: '/development/api-reference' },
             { text: 'MCP Tools', link: '/development/mcp-tools' },
             { text: 'Contributing', link: '/development/contributing' },
