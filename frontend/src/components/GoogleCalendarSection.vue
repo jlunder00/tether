@@ -1,11 +1,41 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useIntegrationsStore } from '../stores/integrations'
 
 const store = useIntegrationsStore()
 
+// Tick every 30s so the "Last synced X ago" caption stays fresh.
+const now = ref(Date.now())
+let tickHandle: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   store.fetchGCalStatus()
+  tickHandle = setInterval(() => {
+    now.value = Date.now()
+  }, 30_000)
+})
+
+onUnmounted(() => {
+  if (tickHandle !== null) clearInterval(tickHandle)
+})
+
+function formatRelative(iso: string, currentMs: number): string {
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return iso
+  const diffSec = Math.max(0, Math.round((currentMs - then) / 1000))
+  if (diffSec < 5) return 'just now'
+  if (diffSec < 60) return `${diffSec}s ago`
+  const diffMin = Math.round(diffSec / 60)
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHr = Math.round(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h ago`
+  const diffDay = Math.round(diffHr / 24)
+  return `${diffDay}d ago`
+}
+
+const lastSyncedLabel = computed(() => {
+  if (!store.lastSyncedAt) return null
+  return formatRelative(store.lastSyncedAt, now.value)
 })
 </script>
 
@@ -33,16 +63,25 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Action button -->
-        <button
-          v-if="store.gcalConnected"
-          data-testid="gcal-disconnect"
-          :disabled="store.loading"
-          @click="store.disconnectGCal()"
-          class="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-3 py-1.5 transition-colors"
-        >
-          {{ store.loading ? '…' : 'Disconnect' }}
-        </button>
+        <!-- Action buttons -->
+        <div v-if="store.gcalConnected" class="flex items-center gap-2">
+          <button
+            data-testid="gcal-sync-now"
+            :disabled="store.loading"
+            @click="store.syncNow()"
+            class="text-xs text-white/70 hover:text-white disabled:opacity-50 border border-white/20 hover:border-white/40 rounded-lg px-2.5 py-1.5 transition-colors"
+          >
+            {{ store.loading ? '…' : 'Sync now' }}
+          </button>
+          <button
+            data-testid="gcal-disconnect"
+            :disabled="store.loading"
+            @click="store.disconnectGCal()"
+            class="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-3 py-1.5 transition-colors"
+          >
+            {{ store.loading ? '…' : 'Disconnect' }}
+          </button>
+        </div>
         <button
           v-else
           data-testid="gcal-connect"
@@ -53,6 +92,15 @@ onMounted(() => {
           {{ store.loading ? '…' : 'Connect' }}
         </button>
       </div>
+
+      <!-- Last synced caption -->
+      <p
+        v-if="store.gcalConnected && lastSyncedLabel"
+        data-testid="gcal-last-synced"
+        class="text-xs text-white/40 -mt-2 mb-2"
+      >
+        Last synced {{ lastSyncedLabel }}
+      </p>
 
       <!-- Info text when not connected -->
       <p v-if="!store.gcalConnected" class="text-xs text-white/40">
