@@ -21,6 +21,7 @@ export const useIntegrationsStore = defineStore('integrations', () => {
       gcalConnected.value = resp.ok
     } catch {
       gcalConnected.value = false
+      error.value = 'Could not reach server. Check your connection.'
     } finally {
       loading.value = false
     }
@@ -47,7 +48,7 @@ export const useIntegrationsStore = defineStore('integrations', () => {
         gcalConnected.value = false
       }
     } catch {
-      // Leave connected state unchanged on network error
+      error.value = 'Failed to disconnect. Please try again.'
     } finally {
       loading.value = false
     }
