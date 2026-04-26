@@ -112,6 +112,14 @@ configure-db:
 	python3 scripts/configure.py db \
 	    POSTGRES_PASSWORD="$(POSTGRES_PASSWORD)" \
 	    TETHER_APP_PASSWORD="$(TETHER_APP_PASSWORD)"
+	@if [ -n "$(TETHER_APP_PASSWORD)" ]; then \
+	    docker compose exec -T postgres psql -U postgres \
+	        -c "ALTER ROLE tether_app PASSWORD '$(TETHER_APP_PASSWORD)';" 2>/dev/null || true; \
+	fi
+	@if [ -n "$(POSTGRES_PASSWORD)" ]; then \
+	    docker compose exec -T postgres psql -U postgres \
+	        -c "ALTER ROLE postgres PASSWORD '$(POSTGRES_PASSWORD)';" 2>/dev/null || true; \
+	fi
 
 configure-telegram:
 	python3 scripts/configure.py telegram \
