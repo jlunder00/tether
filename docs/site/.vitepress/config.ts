@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Tether',
   description: 'Documentation for Tether — an AI-powered personal task management system',
+  base: '/tether/',
 
   themeConfig: {
     logo: '/logo.svg',
