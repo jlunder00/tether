@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { api } from '../lib/api'
+import GoogleCalendarSection from '../components/GoogleCalendarSection.vue'
 
 const auth = useAuthStore()
 
@@ -257,6 +258,9 @@ async function linkTelegram() {
           </template>
         </div>
       </section>
+
+      <!-- Google Calendar Integration -->
+      <GoogleCalendarSection />
 
       <!-- OAuth Connections -->
       <section class="mb-8">
