@@ -1,24 +1,15 @@
 # Deployment Modes
 
-Tether supports two deployment modes. The right choice depends on your setup:
-
-| Mode | Best for | Config file |
-|------|----------|-------------|
-| **Docker Compose** | Most users, easiest to manage | `tether/.env` + `~/.tether-config/` |
-| **systemd (direct)** | Advanced Pi setups, no Docker | `~/.tether-config/env` |
+Docker Compose is the recommended and supported deployment path. It handles all services and their dependencies with a single command.
 
 ## Docker Compose (recommended)
 
-Docker Compose is the standard deployment path. It manages all four services — `api`, `bot`, `mcp`, and `postgres` — as containers with a shared network.
+Manages four services — `api`, `bot`, `mcp`, and `postgres` — as containers with a shared network. Works on any Linux machine with Docker installed.
 
-<!-- TODO: Fill in after config-loader-redesign lands. The new `make install` flow simplifies this significantly. -->
+<!-- TODO: Fill in after config-loader-redesign lands. -->
 
-## systemd (direct on Pi)
+## systemd (without Docker)
 
-Running services directly on the Pi without Docker. Each service (`tether-api`, `tether-bot`, `tether-mcp`) runs as a systemd unit with an `EnvironmentFile` pointing to `~/.tether-config/env`.
+Running services directly on the host as systemd units is possible but not the primary supported path. It may be deprecated in a future release. If you need it, the unit files are in `systemd/` in the repo.
 
-<!-- TODO: Fill in after config-loader-redesign lands. Document the updated systemd unit files and env var sourcing. -->
-
-::: warning Config file split
-The Docker Compose path and the systemd path use **different config files** — they don't share the same env file. See [Secrets Reference](./secrets-reference) for the full mapping.
-:::
+<!-- TODO: Decide whether to document or deprecate. -->

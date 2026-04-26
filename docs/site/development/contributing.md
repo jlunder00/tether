@@ -34,7 +34,7 @@ cd frontend && npm install && npm run dev
 
 | Branch | Purpose |
 |--------|---------|
-| `main` | Production — deploys automatically to Pi |
+| `main` | Production — auto-deploys via GitHub Actions |
 | `feature/*` | New features — branch from main, PR back to main |
 | `fix/*` | Bug fixes — same flow |
 
@@ -56,4 +56,4 @@ No automated tooling enforces a specific format — just be descriptive and keep
 
 ## CI
 
-GitHub Actions runs tests and the frontend build on every PR. Self-hosted runner on Pi handles deployment to `main`.
+GitHub Actions runs tests and the frontend build on every PR and deploys to `main` on merge.

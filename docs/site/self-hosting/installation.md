@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Linux** — Raspberry Pi 4+ or any x86-64 machine
+- **Linux** — any machine that can run Docker
 - **Docker and Docker Compose** — [install Docker](https://docs.docker.com/get-docker/)
 - **Python 3.11+** — for running the configure script
 - **LLM access** — at least one of: Anthropic API key, OpenAI API key, OpenRouter API key, AWS Bedrock credentials, or Claude Code CLI logged in. See [LLM Backends](./configuration#llm-backends).
