@@ -9,6 +9,7 @@ os.environ.setdefault("TETHER_DISABLE_RATE_LIMITS", "1")
 os.environ.setdefault("TETHER_COOKIE_SECURE", "false")
 os.environ.setdefault("TETHER_JWT_SECRET", "test-secret-for-ws-tests")
 
+from contextlib import asynccontextmanager
 from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
@@ -24,11 +25,15 @@ class _FakePool:
     pass
 
 
+@asynccontextmanager
+async def _noop_lifespan(app):
+    app.state.pool = _FakePool()
+    yield
+
+
 def _make_app():
     from api.main import create_app
-    app = create_app(lifespan_override=None)
-    app.state.pool = _FakePool()
-    return app
+    return create_app(lifespan_override=_noop_lifespan)
 
 
 def test_bot_ws_no_cookie_rejected_1008():
