@@ -223,5 +223,29 @@ describe('useConnectionsStore', () => {
       expect(store.accepted).toHaveLength(1)
       expect(store.accepted[0].id).toBe(1)
     })
+
+    it('pending_incoming returns [] when user_id is undefined', async () => {
+      const { useAuthStore } = await import('../auth')
+      vi.mocked(useAuthStore).mockReturnValueOnce({ user: null } as any)
+
+      const { useConnectionsStore } = await import('../connections')
+      const store = useConnectionsStore()
+      store.connections = [
+        makeConnection({ id: 1, status: 'pending', initiated_by: 'user-other-uuid' }),
+      ]
+      expect(store.pending_incoming).toHaveLength(0)
+    })
+
+    it('pending_outgoing returns [] when user_id is undefined', async () => {
+      const { useAuthStore } = await import('../auth')
+      vi.mocked(useAuthStore).mockReturnValueOnce({ user: null } as any)
+
+      const { useConnectionsStore } = await import('../connections')
+      const store = useConnectionsStore()
+      store.connections = [
+        makeConnection({ id: 1, status: 'pending', initiated_by: 'user-me-uuid' }),
+      ]
+      expect(store.pending_outgoing).toHaveLength(0)
+    })
   })
 })

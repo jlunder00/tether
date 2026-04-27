@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../lib/api'
 import { useAuthStore } from './auth'
-import type { Connection } from '../types/connections'
+import type { Connection, ConnectionStatusPatch, DeclineResponse } from '../types/connections'
+import { isDeclineDeleted, assertConnectionStatus } from '../types/connections'
 
 export const useConnectionsStore = defineStore('connections', () => {
   const connections = ref<Connection[]>([])
@@ -15,6 +16,7 @@ export const useConnectionsStore = defineStore('connections', () => {
 
   const pending_incoming = computed(() => {
     const me = myUserId()
+    if (!me) return []
     return connections.value.filter(
       c => c.status === 'pending' && c.initiated_by !== me,
     )
@@ -22,6 +24,7 @@ export const useConnectionsStore = defineStore('connections', () => {
 
   const pending_outgoing = computed(() => {
     const me = myUserId()
+    if (!me) return []
     return connections.value.filter(
       c => c.status === 'pending' && c.initiated_by === me,
     )
@@ -62,7 +65,7 @@ export const useConnectionsStore = defineStore('connections', () => {
         connections.value = [...connections.value, conn]
       } else {
         const data = await resp.json().catch(() => ({}))
-        error.value = (data as any).detail || 'Failed to send request.'
+        error.value = (data as { detail?: string }).detail || 'Failed to send request.'
       }
     } catch {
       error.value = 'Could not reach server.'
@@ -77,9 +80,10 @@ export const useConnectionsStore = defineStore('connections', () => {
     try {
       const resp = await api(`/api/connections/${id}/accept`, { method: 'POST' })
       if (resp.ok) {
-        const patch: { id: number; status: string } = await resp.json()
+        const patch: ConnectionStatusPatch = await resp.json()
+        const status = assertConnectionStatus(patch.status)
         connections.value = connections.value.map(c =>
-          c.id === id ? { ...c, status: patch.status as Connection['status'] } : c,
+          c.id === id ? { ...c, status } : c,
         )
       } else {
         error.value = 'Failed to accept connection.'
@@ -101,12 +105,13 @@ export const useConnectionsStore = defineStore('connections', () => {
         body: JSON.stringify({ block }),
       })
       if (resp.ok) {
-        const data: any = await resp.json()
-        if (data.deleted) {
+        const data: DeclineResponse = await resp.json()
+        if (isDeclineDeleted(data)) {
           connections.value = connections.value.filter(c => c.id !== id)
-        } else if (data.status) {
+        } else {
+          const status = assertConnectionStatus(data.status)
           connections.value = connections.value.map(c =>
-            c.id === id ? { ...c, status: data.status as Connection['status'] } : c,
+            c.id === id ? { ...c, status } : c,
           )
         }
       } else {

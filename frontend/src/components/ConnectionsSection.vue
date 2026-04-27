@@ -155,27 +155,20 @@ function truncateUuid(uuid: string): string {
         </button>
       </div>
 
-      <!-- Pending outgoing -->
+      <!-- Pending outgoing (cancel not yet supported by backend) -->
       <div v-if="store.pending_outgoing.length > 0">
         <p class="text-xs text-white/30 mb-2">Sent — waiting for response</p>
         <ul class="space-y-1.5">
           <li
             v-for="conn in store.pending_outgoing"
             :key="conn.id"
-            class="flex items-center justify-between gap-2"
+            class="flex items-center gap-2"
             :data-testid="`outgoing-${conn.id}`"
           >
             <span class="text-sm text-white/60 font-mono" :title="conn.other_user_id">
               {{ truncateUuid(conn.other_user_id) }}
             </span>
-            <button
-              :disabled="store.loading"
-              @click="store.declineConnection(conn.id, false)"
-              class="text-xs text-white/40 hover:text-white/70 disabled:opacity-50 border border-white/10 hover:border-white/30 rounded-lg px-2.5 py-1 transition-colors"
-              :data-testid="`cancel-${conn.id}`"
-            >
-              Cancel
-            </button>
+            <span class="text-[10px] text-white/20">pending</span>
           </li>
         </ul>
       </div>
