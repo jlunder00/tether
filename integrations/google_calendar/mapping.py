@@ -97,7 +97,9 @@ def map_event(raw: dict) -> TaskDraft:
     - Exception instances: extracts recurringEventId → recurrence_id
     """
     title = raw.get("summary") or "(No title)"
-    external_id = raw.get("id", "")
+    external_id = raw.get("id")
+    if not external_id:
+        raise ValueError(f"Google Calendar event missing 'id' field: {raw!r}")
     description = _strip_html(raw.get("description"))
 
     start_time = _parse_dt(raw.get("start"))

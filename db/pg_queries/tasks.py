@@ -709,24 +709,36 @@ def _row_to_event(row, *, is_recurring: bool = False, is_occurrence: bool = Fals
 def _parse_exdate_value(value: str) -> _datetime | None:
     """Parse a single EXDATE datetime token into a UTC-aware datetime.
 
-    Handles iCalendar compact form without hyphens/colons, e.g. 20260511T090000Z.
-    Returns None if parsing fails.
+    Handles iCalendar compact form without hyphens/colons, e.g. 20260511T090000Z,
+    and all-day date tokens without a time component, e.g. 20260511 or 2026-05-11.
+    Returns None (with a warning) if parsing fails.
     """
+    import logging
+    _logger = logging.getLogger(__name__)
     try:
         value = value.strip().replace("Z", "+00:00")
-        if "T" in value and len(value) >= 15:
-            # Insert separators if missing: YYYYMMDDTHHMMSS → YYYY-MM-DDTHH:MM:SS
-            if "-" not in value[:8]:
+        if "T" in value:
+            if len(value) >= 15 and "-" not in value[:8]:
+                # Insert separators: YYYYMMDDTHHMMSS → YYYY-MM-DDTHH:MM:SS
                 value = (
                     f"{value[:4]}-{value[4:6]}-{value[6:8]}"
                     f"T{value[9:11]}:{value[11:13]}:{value[13:15]}{value[15:]}"
                 )
+        else:
+            # All-day date token (VALUE=DATE format): "20260511" or "2026-05-11"
+            from datetime import date as _date, timezone as _tz
+            bare = value.replace("+00:00", "").strip()
+            if len(bare) == 8 and "-" not in bare:
+                bare = f"{bare[:4]}-{bare[4:6]}-{bare[6:8]}"
+            d = _date.fromisoformat(bare)
+            return _datetime(d.year, d.month, d.day, tzinfo=_tz.utc)
         dt = _datetime.fromisoformat(value)
         if dt.tzinfo is None:
             from datetime import timezone as _tz
             dt = dt.replace(tzinfo=_tz.utc)
         return dt
-    except Exception:
+    except ValueError:
+        _logger.warning("EXDATE token could not be parsed, occurrence will NOT be suppressed: %r", value)
         return None
 
 
@@ -890,6 +902,7 @@ async def get_events_for_range(
                    rrule, recurrence_id, exdates, original_start_time
             FROM tasks
             WHERE recurrence_id = ANY($1::text[])
+              AND (source_status IS NULL OR source_status != 'cancelled')
             """,
             master_external_ids,
         )

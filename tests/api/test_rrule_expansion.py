@@ -5,7 +5,7 @@ query function. No live DB needed — all mocked.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
 import pytest
 
@@ -154,3 +154,26 @@ def test_expand_recurring_comma_separated_exdates():
     assert date(2026, 5, 25) in occurrence_dates
     assert date(2026, 5, 11) not in occurrence_dates
     assert date(2026, 5, 18) not in occurrence_dates
+
+
+def test_expand_recurring_all_day_exdate_suppresses_occurrence():
+    """EXDATE with bare date token (all-day, no time) suppresses the matching occurrence.
+
+    Google Calendar sends all-day EXDATEs as VALUE=DATE tokens:
+      EXDATE;VALUE=DATE:20260511
+    These must be parsed and the occurrence for that date must be excluded.
+    """
+    start = datetime(2026, 5, 4, 0, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 23, 59, 59, tzinfo=timezone.utc)
+    exdate = "EXDATE;VALUE=DATE:20260511"
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end, exdates=[exdate])
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+
+    # 4 weekly occurrences (May 4, 11, 18, 25); May 11 excluded → 3 remain
+    assert len(occurrences) == 3
+    occurrence_dates = {datetime.fromisoformat(occ["start_time"]).date() for occ in occurrences}
+    assert date(2026, 5, 11) not in occurrence_dates, "May 11 all-day EXDATE should be excluded"

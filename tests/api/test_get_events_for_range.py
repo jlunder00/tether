@@ -189,3 +189,60 @@ async def test_exception_moved_outside_window_suppresses_ghost_emits_nothing():
 
     june1 = datetime(2026, 6, 1, 9, 0, tzinfo=tz).isoformat()
     assert june1 not in start_times, "June-1 exception is outside window — must not appear"
+
+
+async def test_cancelled_exception_instance_not_returned():
+    """Soft-deleted (cancelled) exception instances must not appear in event results.
+
+    GCal sync marks cancelled instances with source_status='cancelled' via
+    soft_delete_task_by_external_id. The exception query must filter these out
+    so they don't land in results as visible events.
+    """
+    tz = timezone.utc
+    series_id = "gcal-series-cancelled-exc"
+
+    master = _master_row(
+        external_id=series_id,
+        start=datetime(2026, 5, 4, 9, 0, tzinfo=tz),
+        end=datetime(2026, 5, 4, 9, 30, tzinfo=tz),
+    )
+    # Cancelled exception for the May 11 slot
+    cancelled_exc = {
+        "uuid": uuid.UUID("cccccccc-0000-0000-0000-000000000003"),
+        "text": "Weekly standup (cancelled instance)",
+        "start_time": datetime(2026, 5, 11, 9, 0, tzinfo=tz),   # within window
+        "end_time": datetime(2026, 5, 11, 9, 30, tzinfo=tz),
+        "source": "google_calendar",
+        "external_id": "gcal-exception-cancelled",
+        "anchor_id": None,
+        "rrule": None,
+        "recurrence_id": series_id,
+        "exdates": [],
+        "original_start_time": datetime(2026, 5, 11, 9, 0, tzinfo=tz),
+        "source_status": "cancelled",
+    }
+
+    # The exception query should filter source_status='cancelled' — so we simulate
+    # the DB returning an empty list for exceptions (as it should after the fix).
+    conn = _conn_with_fetch(
+        [],       # single events — none
+        [master], # recurring masters — one weekly series
+        [],       # exception instances — empty (cancelled row filtered by SQL)
+    )
+
+    events = await get_events_for_range(
+        conn,
+        "2026-05-01T00:00:00+00:00",
+        "2026-05-31T23:59:59+00:00",
+    )
+
+    start_times = [e["start_time"] for e in events]
+
+    # Should have 4 computed occurrences (no exception substitution)
+    assert len(events) == 4, (
+        f"Expected 4 computed occurrences, got {len(events)}: {start_times}"
+    )
+    # Cancelled exception must NOT appear
+    assert all(e.get("source_status") != "cancelled" for e in events), (
+        "No cancelled events should appear in results"
+    )

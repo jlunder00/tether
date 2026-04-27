@@ -189,3 +189,19 @@ def test_map_event_original_start_time_none_for_non_exception():
     }
     draft = map_event(raw)
     assert draft.original_start_time is None
+
+
+def test_map_event_raises_on_missing_id():
+    """map_event must raise ValueError when the event has no 'id' field.
+
+    A missing id would cause silent data collision on the (user_id, source, external_id)
+    unique index — multiple events would map to external_id='' and overwrite each other.
+    """
+    raw = {
+        "summary": "No ID event",
+        # 'id' deliberately absent
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    with pytest.raises(ValueError, match="missing 'id'"):
+        map_event(raw)

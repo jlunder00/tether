@@ -107,9 +107,9 @@ async def upsert_sync_state(
         VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (integration_id, calendar_id) DO UPDATE SET
             sync_cursor       = EXCLUDED.sync_cursor,
-            watch_channel_id  = EXCLUDED.watch_channel_id,
-            watch_expiry      = EXCLUDED.watch_expiry,
-            watch_resource_id = EXCLUDED.watch_resource_id,
+            watch_channel_id  = COALESCE(EXCLUDED.watch_channel_id,  integration_sync_state.watch_channel_id),
+            watch_expiry      = COALESCE(EXCLUDED.watch_expiry,       integration_sync_state.watch_expiry),
+            watch_resource_id = COALESCE(EXCLUDED.watch_resource_id,  integration_sync_state.watch_resource_id),
             updated_at        = now()
         RETURNING *
         """,

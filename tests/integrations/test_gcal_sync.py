@@ -500,3 +500,51 @@ async def test_handle_webhook_unknown_channel_skips():
             await sync.handle_webhook(_INTEGRATION_ID, payload)
 
     mock_poll.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# upsert_sync_state — COALESCE preserves watch fields when syncing cursor only
+# ---------------------------------------------------------------------------
+
+async def test_upsert_sync_state_preserves_watch_fields_on_cursor_update():
+    """Updating only sync_cursor must not overwrite existing watch channel fields with NULL.
+
+    poll() calls upsert_sync_state with only sync_cursor set. On conflict, the SQL
+    must COALESCE incoming NULLs against the existing watch_channel_id / watch_expiry /
+    watch_resource_id values — not blindly replace them.
+
+    This test verifies the SQL sent to the DB contains COALESCE for watch fields.
+    """
+    from db.pg_queries.integrations import upsert_sync_state
+
+    captured_sql: list[str] = []
+    captured_args: list[tuple] = []
+
+    mock_conn = AsyncMock()
+
+    async def fake_fetchrow(sql, *args):
+        captured_sql.append(sql)
+        captured_args.append(args)
+        # Return a minimal row so _row() doesn't blow up
+        return {
+            "integration_id": uuid.UUID(_INTEGRATION_ID),
+            "calendar_id": _CALENDAR_ID,
+            "sync_cursor": _NEW_SYNC_TOKEN,
+            "watch_channel_id": "existing-ch",
+            "watch_expiry": None,
+            "watch_resource_id": "existing-res",
+            "updated_at": None,
+        }
+
+    mock_conn.fetchrow = fake_fetchrow
+
+    await upsert_sync_state(mock_conn, _INTEGRATION_ID, _CALENDAR_ID, sync_cursor=_NEW_SYNC_TOKEN)
+
+    assert len(captured_sql) == 1, "upsert_sync_state should execute exactly one query"
+    sql = captured_sql[0].upper()
+
+    # The ON CONFLICT clause must use COALESCE for the three watch fields
+    assert "COALESCE" in sql, (
+        "upsert_sync_state ON CONFLICT must use COALESCE to preserve existing "
+        "watch_channel_id / watch_expiry / watch_resource_id when called with only sync_cursor"
+    )
