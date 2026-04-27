@@ -35,6 +35,14 @@ jobs:
             POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
             TETHER_APP_PASSWORD=${TETHER_APP_PASSWORD}
 
+      - name: Run Alembic migrations
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        run: |
+          cd /home/toast/tether
+          DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD}@localhost:5432/tether \
+            alembic upgrade head
+
       - name: Run DB migrations
         run: |
           cd /home/toast/tether
