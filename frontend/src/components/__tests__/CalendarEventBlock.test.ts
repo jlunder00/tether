@@ -22,6 +22,9 @@ const baseEvent: CalendarEvent = {
   task_id: null,
   anchor_id: null,
   color: null,
+  is_recurring: false,
+  is_occurrence: false,
+  rrule: null,
 }
 
 describe('CalendarEventBlock', () => {

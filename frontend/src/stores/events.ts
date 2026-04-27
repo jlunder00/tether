@@ -54,6 +54,9 @@ export const useEventStore = defineStore('events', () => {
       task_id: taskId,
       anchor_id: null,
       color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      rrule: null,
     }
     events.value.push(optimistic)
     return optimistic
@@ -143,6 +146,8 @@ export const useEventStore = defineStore('events', () => {
   async function setRecurrence(eventId: string, rrule: string | null): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
     if (!ev) return
+    // Occurrences cannot carry their own rrule — only the master can.
+    if (ev.is_occurrence) return
     // Optimistic update
     ev.rrule = rrule
     ev.is_recurring = rrule !== null

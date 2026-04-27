@@ -14,9 +14,12 @@ type Preset = 'none' | 'daily' | 'weekly' | 'weekdays' | 'monthly' | 'custom'
 
 const DOW_NAMES: readonly string[] = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA']
 
-/** Derive BYDAY abbreviation from an ISO start_time string. */
+/** Derive BYDAY abbreviation from an ISO start_time string.
+ *  Falls back to 'MO' if the date is unparseable. */
 function dowFromISO(iso: string): string {
-  return DOW_NAMES[new Date(iso).getDay()]
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return 'MO'
+  return DOW_NAMES[d.getDay()]
 }
 
 /** Map a known rrule string to its preset key, or 'custom' if unrecognised. */

@@ -22,10 +22,10 @@ export interface CalendarEvent {
   task_id: string | null  // FK to task if promoted; null for standalone/synced
   anchor_id: string | null
   color: string | null
-  /** True when this event is the master of a recurring series. */
-  is_recurring?: boolean
-  /** True when this event is a synthesized occurrence from an rrule expansion. */
-  is_occurrence?: boolean
-  /** RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO"). Present only on master events. */
-  rrule?: string | null
+  /** True when this event is the master of a recurring series. Mutually exclusive with is_occurrence. */
+  is_recurring: boolean
+  /** True when this event is a synthesized occurrence from an rrule expansion. Mutually exclusive with is_recurring. */
+  is_occurrence: boolean
+  /** RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO"). Non-null only on master events (is_recurring === true). */
+  rrule: string | null
 }

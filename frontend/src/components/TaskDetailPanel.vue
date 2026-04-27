@@ -396,7 +396,7 @@ onMounted(async () => {
               </label>
               <!-- Recurrence picker — shown only when event exists -->
               <RecurrencePicker
-                :model-value="taskEvent.rrule ?? null"
+                :model-value="taskEvent.rrule"
                 :start-time="taskEvent.start_time"
                 @update:model-value="onRecurrenceChange"
               />
