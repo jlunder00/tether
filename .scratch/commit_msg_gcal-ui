@@ -1,0 +1,14 @@
+feat(frontend): add GoogleCalendarSection component and wire into Settings
+
+Adds GoogleCalendarSection.vue with:
+- Connected/Not connected status display
+- Connect button (navigates to OAuth endpoint)
+- Disconnect button (POST /api/integrations/google/disconnect)
+- Loading state disabling during async ops
+
+Wires component into SettingsView between Telegram and OAuth sections.
+Includes 9 Vitest component tests. Build is clean (0 type errors).
+
+Note: no backend status/email/last-synced endpoint exists yet; UI shows
+connected/not-connected only. Routes match actual integrations.py
+(not the task description's placeholder contract).
