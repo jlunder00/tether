@@ -72,6 +72,20 @@ def _conference_url(event: dict) -> str | None:
     return None
 
 
+def _extract_recurrence(raw: dict) -> tuple[str | None, list[str]]:
+    """Extract RRULE string and EXDATE lines from a GCal event's recurrence array.
+
+    Returns (rrule, exdates) where:
+    - rrule: the first "RRULE:..." line joined as a single string, or None
+    - exdates: all lines starting with "EXDATE"
+    """
+    lines: list[str] = raw.get("recurrence", [])
+    rrule_lines = [l for l in lines if l.startswith("RRULE:")]
+    exdate_lines = [l for l in lines if l.startswith("EXDATE")]
+    rrule = rrule_lines[0] if rrule_lines else None
+    return rrule, exdate_lines
+
+
 def map_event(raw: dict) -> TaskDraft:
     """Convert a raw Google Calendar event dict to a TaskDraft.
 
@@ -79,6 +93,8 @@ def map_event(raw: dict) -> TaskDraft:
     - Regular and all-day events
     - Conference links (Meet preferred, htmlLink fallback)
     - Cancelled status → source_status='cancelled'
+    - Recurring series: extracts rrule and exdates from recurrence array
+    - Exception instances: extracts recurringEventId → recurrence_id
     """
     title = raw.get("summary") or "(No title)"
     external_id = raw.get("id", "")
@@ -97,6 +113,9 @@ def map_event(raw: dict) -> TaskDraft:
 
     source_status = "cancelled" if raw.get("status") == "cancelled" else None
 
+    rrule, exdates = _extract_recurrence(raw)
+    recurrence_id: str | None = raw.get("recurringEventId")
+
     return TaskDraft(
         title=title,
         source=_SOURCE,
@@ -106,4 +125,7 @@ def map_event(raw: dict) -> TaskDraft:
         description=description,
         external_url=external_url,
         source_status=source_status,
+        rrule=rrule,
+        recurrence_id=recurrence_id,
+        exdates=exdates,
     )

@@ -632,17 +632,21 @@ async def upsert_task_from_draft(
         INSERT INTO tasks
             (uuid, user_id, text, source, external_id,
              start_time, end_time, description, external_url, source_status,
+             rrule, recurrence_id, exdates,
              status, position)
-        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 0)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', 0)
         ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
         DO UPDATE SET
-            text         = EXCLUDED.text,
-            start_time   = EXCLUDED.start_time,
-            end_time     = EXCLUDED.end_time,
-            description  = EXCLUDED.description,
-            external_url = EXCLUDED.external_url,
+            text          = EXCLUDED.text,
+            start_time    = EXCLUDED.start_time,
+            end_time      = EXCLUDED.end_time,
+            description   = EXCLUDED.description,
+            external_url  = EXCLUDED.external_url,
             source_status = EXCLUDED.source_status,
-            version      = tasks.version + 1
+            rrule         = EXCLUDED.rrule,
+            recurrence_id = EXCLUDED.recurrence_id,
+            exdates       = EXCLUDED.exdates,
+            version       = tasks.version + 1
         RETURNING
             uuid, text, status, position, followup_config,
             description, context_subject, context_node_id, version
@@ -657,6 +661,9 @@ async def upsert_task_from_draft(
         draft.description,
         draft.external_url,
         draft.source_status,
+        draft.rrule,
+        draft.recurrence_id,
+        draft.exdates or [],
     )
     return _row_to_task(row)
 
