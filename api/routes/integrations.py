@@ -15,7 +15,7 @@ import logging
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -31,6 +31,7 @@ from integrations.google_calendar.auth import (
     GoogleCalendarAuth,
     verify_oauth_state,
 )
+from integrations.google_calendar.sync import GoogleCalendarSync
 from sync.dispatch import dispatch_sync  # re-exported so tests can monkeypatch at this name
 
 logger = logging.getLogger(__name__)
@@ -71,16 +72,81 @@ async def google_connect(
 # 2. GET /integrations/google/callback (unauthenticated — Google redirects here)
 # ---------------------------------------------------------------------------
 
+async def _initial_sync_and_register(pool: asyncpg.Pool, user_id: str) -> None:
+    """Background task fired immediately after OAuth callback completes.
+
+    For each selected calendar (default ``["primary"]``):
+      * dispatches an initial poll sync via PG NOTIFY so events appear right away,
+      * registers a Google push-notification webhook so future changes flow in.
+
+    Webhook registration is best-effort — the dev tunnel may be down, and
+    failure must not prevent the initial sync from running. Sync dispatch
+    failures are also caught per-calendar so one bad calendar can't starve
+    the rest.
+    """
+    import db.postgres as pg
+
+    async with pg.get_conn(pool, user_id=user_id) as conn:
+        row = await get_integration(conn, user_id, _PROVIDER)
+
+    if row is None:
+        logger.info(
+            "initial_sync_and_register: no integration row for user %s; skipping",
+            user_id,
+        )
+        return
+
+    integration_id = str(row["id"])
+    metadata = row.get("metadata") or {}
+    calendar_ids: list[str] = metadata.get("selected_calendar_ids", ["primary"])
+
+    sync_provider = GoogleCalendarSync(pool)
+
+    for calendar_id in calendar_ids:
+        try:
+            await dispatch_sync(
+                pool,
+                integration_id,
+                calendar_id,
+                provider=_PROVIDER,
+                notify_type="poll",
+            )
+        except Exception:
+            logger.exception(
+                "initial_sync_and_register: dispatch_sync failed for %s/%s",
+                integration_id,
+                calendar_id,
+            )
+
+        try:
+            await sync_provider.register_webhook(integration_id, calendar_id)
+        except Exception:
+            # Webhook registration is best-effort: dev tunnel may be down,
+            # Google may rate-limit, etc. Log and continue.
+            logger.warning(
+                "initial_sync_and_register: register_webhook failed for %s/%s "
+                "(continuing — initial poll sync still scheduled)",
+                integration_id,
+                calendar_id,
+                exc_info=True,
+            )
+
+
 @router.get("/integrations/google/callback")
 async def google_callback(
     request: Request,
     code: str,
     state: str,
+    background_tasks: BackgroundTasks,
 ):
     """Exchange authorization code for tokens and persist them.
 
     User identity is recovered from the signed `state` parameter — no cookie
     is reliably available on this cross-site redirect.
+
+    After persisting tokens, schedules a background task that fires the
+    initial sync and registers the Google push webhook. The redirect to
+    /plan/day is not blocked on either operation.
     """
     try:
         user_id = verify_oauth_state(state)
@@ -95,6 +161,12 @@ async def google_callback(
     except Exception:
         logger.exception("Google Calendar callback failed for user %s", user_id)
         raise HTTPException(status_code=502, detail="Token exchange failed")
+
+    background_tasks.add_task(
+        _initial_sync_and_register,
+        request.app.state.pool,
+        user_id,
+    )
 
     return RedirectResponse("/plan/day")
 
