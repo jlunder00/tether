@@ -13,8 +13,9 @@ export const useChatStore = defineStore('chat', () => {
   const isStreaming = ref(false)
   const heartbeat = ref(false)
 
-  const transport = getBotTransport()
-  transport.onHeartbeat(a => { heartbeat.value = a })
+  // Register heartbeat via a stable wrapper so it always reflects the current
+  // transport, even after setBotTransport() replaces it post-auth.
+  getBotTransport().onHeartbeat(a => { heartbeat.value = a })
 
   async function send(text: string): Promise<void> {
     messages.value.push({ id: makeId(), role: 'user', content: text, ts: Date.now() })
@@ -27,7 +28,9 @@ export const useChatStore = defineStore('chat', () => {
 
     isStreaming.value = true
     try {
-      for await (const chunk of transport.send(text)) {
+      // Always call getBotTransport() at send time — not a cached reference —
+      // so we use whichever transport is current (mock → real WS after auth).
+      for await (const chunk of getBotTransport().send(text)) {
         messages.value[botMsgIndex].content += chunk
       }
     } finally {

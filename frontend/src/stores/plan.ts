@@ -154,7 +154,8 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   function connectWebSocket() {
-    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${proto}://${location.host}/ws`)
     ws.onmessage = (e) => {
       const msg = JSON.parse(e.data)
       if (msg.type === 'plan_updated') fetchPlan()
