@@ -897,7 +897,7 @@ async def get_events_for_range(
     # Key exceptions by (recurrence_id, original_date) for substitution.
     # original_start_time is the slot being replaced (what expand_recurring would compute).
     # start_time is where the exception actually appears (may differ for moved exceptions).
-    exception_by_key: dict[tuple[str, tuple[int, int, int]], dict] = {}
+    exception_by_key: dict[tuple[str, tuple[int, int, int]], dict | None] = {}
     for exc_row in exception_rows:
         rid = exc_row["recurrence_id"]
         if not rid:
@@ -918,7 +918,7 @@ async def get_events_for_range(
             exception_by_key[(str(rid), key_date)] = exc
         else:
             # Moved outside window — still register the key to suppress the ghost occurrence
-            exception_by_key[(str(rid), key_date)] = None  # type: ignore[assignment]
+            exception_by_key[(str(rid), key_date)] = None
 
     # Expand each recurring master and substitute exception instances
     for master_row in recurring_rows:

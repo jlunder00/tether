@@ -79,7 +79,7 @@ def _extract_recurrence(raw: dict) -> tuple[str | None, list[str]]:
     - rrule: the first "RRULE:..." line joined as a single string, or None
     - exdates: all lines starting with "EXDATE"
     """
-    lines: list[str] = raw.get("recurrence", [])
+    lines: list[str] = raw.get("recurrence") or []
     rrule_lines = [l for l in lines if l.startswith("RRULE:")]
     exdate_lines = [l for l in lines if l.startswith("EXDATE")]
     rrule = rrule_lines[0] if rrule_lines else None
