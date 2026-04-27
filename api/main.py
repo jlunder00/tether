@@ -174,15 +174,20 @@ def create_app(lifespan_override=None) -> FastAPI:
             try:
                 payload = decode_jwt(token)
                 user_id = payload["user_id"]
+                is_admin = payload.get("is_admin", False)
             except Exception:
                 await websocket.close(code=1008)
                 return
             await manager.connect(websocket, user_id)
+            if is_admin:
+                manager.register_only(websocket, "__bot__")
             try:
                 while True:
                     await websocket.receive_text()
             except WebSocketDisconnect:
                 manager.disconnect(websocket, user_id)
+                if is_admin:
+                    manager.disconnect(websocket, "__bot__")
         else:
             await websocket.accept()
             try:
@@ -197,15 +202,20 @@ def create_app(lifespan_override=None) -> FastAPI:
             try:
                 payload = decode_jwt(msg["token"])
                 user_id = payload["user_id"]
+                is_admin = payload.get("is_admin", False)
             except Exception:
                 await websocket.close(code=1008)
                 return
-            manager._connections.setdefault(user_id, []).append(websocket)
+            manager.register_only(websocket, user_id)
+            if is_admin:
+                manager.register_only(websocket, "__bot__")
             try:
                 while True:
                     await websocket.receive_text()
             except WebSocketDisconnect:
                 manager.disconnect(websocket, user_id)
+                if is_admin:
+                    manager.disconnect(websocket, "__bot__")
 
     if FRONTEND_DIST.exists():
         # Serve static assets (JS, CSS, images) directly
