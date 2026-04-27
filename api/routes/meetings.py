@@ -1,10 +1,13 @@
 """Meeting request endpoints."""
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import asyncpg
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 from api.auth import auth_dependency
 from db.pool_middleware import get_db_conn
@@ -23,6 +26,17 @@ from db.pg_queries.scheduling import (
 from api.ws import manager
 
 router = APIRouter()
+
+
+async def _broadcast_to_bot(event: dict) -> None:
+    """Broadcast a meeting event to the bot's __bot__ channel.
+
+    Logs a warning when no bot is connected so dropped events are detectable
+    in the API logs during bot restarts or auth failures.
+    """
+    if not manager._connections.get("__bot__"):
+        log.warning("__bot__ broadcast: no bot listeners connected — event dropped: %s", event.get("type"))
+    await manager.broadcast({"__bot__": True, **event}, "__bot__")
 
 
 class MeetingRequestBody(BaseModel):
@@ -75,17 +89,16 @@ async def request_meeting(
     )
 
     # Broadcast meeting_request event to each target
+    meeting_request_event = {
+        "type": "meeting_request",
+        "request_id": request["id"],
+        "from_user": caller_username,
+        "duration": body.duration_minutes,
+        "context": body.context or "",
+    }
     for target_id in target_ids:
-        await manager.broadcast(
-            {
-                "type": "meeting_request",
-                "request_id": request["id"],
-                "from_user": caller_username,
-                "duration": body.duration_minutes,
-                "context": body.context or "",
-            },
-            target_id,
-        )
+        await manager.broadcast(meeting_request_event, target_id)
+    await _broadcast_to_bot(meeting_request_event)
 
     return {"id": request["id"], "status": request["status"], "round": request["round"]}
 
@@ -127,15 +140,14 @@ async def propose_slots(
 
     # Broadcast to initiator
     req_after = await get_meeting_request(conn, meeting_id)
-    await manager.broadcast(
-        {
-            "type": "meeting_proposal",
-            "request_id": meeting_id,
-            "round": req_after["round"],
-            "proposed_by": caller_username,
-        },
-        request["initiator_id"],
-    )
+    meeting_proposal_event = {
+        "type": "meeting_proposal",
+        "request_id": meeting_id,
+        "round": req_after["round"],
+        "proposed_by": caller_username,
+    }
+    await manager.broadcast(meeting_proposal_event, request["initiator_id"])
+    await _broadcast_to_bot(meeting_proposal_event)
 
     return {
         "proposal_id": proposal["id"],
@@ -181,6 +193,7 @@ async def accept_slot(
     }
     for uid in participant_ids:
         await manager.broadcast(event, uid)
+    await _broadcast_to_bot(event)
 
     return {
         "id": updated["id"],
@@ -210,6 +223,7 @@ async def cancel_meeting_route(
     event = {"type": "meeting_cancelled", "request_id": meeting_id}
     for uid in participants:
         await manager.broadcast(event, uid)
+    await _broadcast_to_bot(event)
 
     return {"id": updated["id"], "status": updated["status"]}
 

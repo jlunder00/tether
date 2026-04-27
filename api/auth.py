@@ -14,12 +14,18 @@ def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
 
-def create_jwt(user_id: str, username: str, is_admin: bool) -> str:
+def create_jwt(
+    user_id: str,
+    username: str,
+    is_admin: bool,
+    expires_in: timedelta | None = None,
+) -> str:
+    exp = datetime.utcnow() + (expires_in if expires_in is not None else timedelta(days=7))
     payload = {
         "user_id": user_id,
         "username": username,
         "is_admin": is_admin,
-        "exp": datetime.utcnow() + timedelta(days=7),
+        "exp": exp,
     }
     return jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
 
