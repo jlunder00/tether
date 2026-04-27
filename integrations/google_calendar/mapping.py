@@ -115,6 +115,7 @@ def map_event(raw: dict) -> TaskDraft:
 
     rrule, exdates = _extract_recurrence(raw)
     recurrence_id: str | None = raw.get("recurringEventId")
+    original_start_time = _parse_dt(raw.get("originalStartTime"))
 
     return TaskDraft(
         title=title,
@@ -128,4 +129,5 @@ def map_event(raw: dict) -> TaskDraft:
         rrule=rrule,
         recurrence_id=recurrence_id,
         exdates=exdates,
+        original_start_time=original_start_time,
     )

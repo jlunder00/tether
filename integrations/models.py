@@ -26,6 +26,7 @@ class TaskDraft:
     rrule: str | None = None                          # e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO"
     recurrence_id: str | None = None                  # GCal recurringEventId (exception instances)
     exdates: list[str] = field(default_factory=list)  # EXDATE lines from recurrence array
+    original_start_time: datetime | None = None       # originalStartTime for moved exceptions
 
 
 @dataclass

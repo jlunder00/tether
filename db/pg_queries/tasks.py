@@ -632,21 +632,22 @@ async def upsert_task_from_draft(
         INSERT INTO tasks
             (uuid, user_id, text, source, external_id,
              start_time, end_time, description, external_url, source_status,
-             rrule, recurrence_id, exdates,
+             rrule, recurrence_id, exdates, original_start_time,
              status, position)
-        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', 0)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', 0)
         ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
         DO UPDATE SET
-            text          = EXCLUDED.text,
-            start_time    = EXCLUDED.start_time,
-            end_time      = EXCLUDED.end_time,
-            description   = EXCLUDED.description,
-            external_url  = EXCLUDED.external_url,
-            source_status = EXCLUDED.source_status,
-            rrule         = EXCLUDED.rrule,
-            recurrence_id = EXCLUDED.recurrence_id,
-            exdates       = EXCLUDED.exdates,
-            version       = tasks.version + 1
+            text               = EXCLUDED.text,
+            start_time         = EXCLUDED.start_time,
+            end_time           = EXCLUDED.end_time,
+            description        = EXCLUDED.description,
+            external_url       = EXCLUDED.external_url,
+            source_status      = EXCLUDED.source_status,
+            rrule              = EXCLUDED.rrule,
+            recurrence_id      = EXCLUDED.recurrence_id,
+            exdates            = EXCLUDED.exdates,
+            original_start_time = EXCLUDED.original_start_time,
+            version            = tasks.version + 1
         RETURNING
             uuid, text, status, position, followup_config,
             description, context_subject, context_node_id, version
@@ -664,6 +665,7 @@ async def upsert_task_from_draft(
         draft.rrule,
         draft.recurrence_id,
         draft.exdates or [],
+        draft.original_start_time,
     )
     return _row_to_task(row)
 
@@ -847,7 +849,8 @@ async def get_events_for_range(
     # 1. Single events (non-recurring, non-exception): rrule IS NULL and no recurrence_id
     single_rows = await conn.fetch(
         """
-        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
+               rrule, recurrence_id, exdates, original_start_time
         FROM tasks
         WHERE start_time IS NOT NULL
           AND rrule IS NULL
@@ -863,7 +866,8 @@ async def get_events_for_range(
     # 2. Recurring series masters: expand via RRULE
     recurring_rows = await conn.fetch(
         """
-        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
+               rrule, recurrence_id, exdates, original_start_time
         FROM tasks
         WHERE rrule IS NOT NULL
           AND start_time IS NOT NULL
@@ -874,29 +878,47 @@ async def get_events_for_range(
     if not recurring_rows:
         return sorted(results, key=lambda e: e["start_time"] or "")
 
-    # Fetch all exception instances (recurrence_id IS NOT NULL) for series in window
+    # Fetch all exception instances (recurrence_id IS NOT NULL) for series in window.
+    # No time filter here — moved exceptions may fall outside the query window in
+    # start_time but still need to suppress the computed occurrence.
     master_external_ids = [str(r["external_id"]) for r in recurring_rows if r["external_id"]]
     exception_rows: list = []
     if master_external_ids:
         exception_rows = await conn.fetch(
             """
-            SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
+            SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
+                   rrule, recurrence_id, exdates, original_start_time
             FROM tasks
             WHERE recurrence_id = ANY($1::text[])
-              AND start_time >= $2
-              AND start_time <= $3
             """,
-            master_external_ids, window_start, window_end,
+            master_external_ids,
         )
 
-    # Key exceptions by (recurrence_id, date) for substitution
+    # Key exceptions by (recurrence_id, original_date) for substitution.
+    # original_start_time is the slot being replaced (what expand_recurring would compute).
+    # start_time is where the exception actually appears (may differ for moved exceptions).
     exception_by_key: dict[tuple[str, tuple[int, int, int]], dict] = {}
     for exc_row in exception_rows:
-        exc = _row_to_event(exc_row, is_occurrence=True, is_recurring=True)
         rid = exc_row["recurrence_id"]
-        if exc["start_time"] and rid:
-            dt = _parse_ts(exc["start_time"])
-            exception_by_key[(str(rid), (dt.year, dt.month, dt.day))] = exc
+        if not rid:
+            continue
+        # Use original_start_time to key the occurrence being replaced; fall back to start_time
+        original_st = exc_row.get("original_start_time") or exc_row.get("start_time")
+        if not original_st:
+            continue
+        if hasattr(original_st, "date"):
+            key_date = (original_st.year, original_st.month, original_st.day)
+        else:
+            dt = _parse_ts(str(original_st))
+            key_date = (dt.year, dt.month, dt.day)
+        # Only include in results if the exception itself falls within the window
+        exc_start = exc_row.get("start_time")
+        if exc_start and window_start <= exc_start <= window_end:
+            exc = _row_to_event(exc_row, is_occurrence=True, is_recurring=True)
+            exception_by_key[(str(rid), key_date)] = exc
+        else:
+            # Moved outside window — still register the key to suppress the ghost occurrence
+            exception_by_key[(str(rid), key_date)] = None  # type: ignore[assignment]
 
     # Expand each recurring master and substitute exception instances
     for master_row in recurring_rows:
@@ -910,8 +932,11 @@ async def get_events_for_range(
             occ_dt = _parse_ts(occ["start_time"])
             key = (str(master_row["external_id"] or ""), (occ_dt.year, occ_dt.month, occ_dt.day))
             if key in exception_by_key:
-                # Exception instance overrides this occurrence
-                results.append(exception_by_key[key])
+                # exception_by_key[key] is None when the moved exception falls outside the
+                # query window — suppress the ghost occurrence but emit nothing.
+                exc = exception_by_key[key]
+                if exc is not None:
+                    results.append(exc)
             else:
                 results.append(occ)
 

@@ -24,8 +24,12 @@ def upgrade() -> None:
     # recurrence_id — GCal recurringEventId for one-off exception instances
     op.execute("ALTER TABLE tasks ADD COLUMN recurrence_id TEXT NULL")
 
-    # exdates — excluded dates from the series (ISO date strings)
+    # exdates — excluded dates from the series (EXDATE lines from iCalendar recurrence array)
     op.execute("ALTER TABLE tasks ADD COLUMN exdates TEXT[] NULL DEFAULT '{}'")
+
+    # original_start_time — the original slot being replaced for moved exception instances;
+    # required for correct exception substitution when keying by original date
+    op.execute("ALTER TABLE tasks ADD COLUMN original_start_time TIMESTAMPTZ NULL")
 
     # Partial index for fast lookups of exception instances by series
     op.execute(
@@ -36,6 +40,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS tasks_recurrence_id_idx")
+    op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS original_start_time")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS exdates")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS recurrence_id")
     op.execute("ALTER TABLE tasks DROP COLUMN IF EXISTS rrule")
