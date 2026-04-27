@@ -15,7 +15,7 @@ class SetSettingBody(BaseModel):
 @router.get("/settings")
 async def list_settings(request: Request, _auth=Depends(auth_dependency),
                         conn: asyncpg.Connection = Depends(get_db_conn)):
-    return await get_all_user_settings(conn, request.state.user_id)
+    return await get_all_user_settings(conn)
 
 
 @router.put("/settings/{key}")
