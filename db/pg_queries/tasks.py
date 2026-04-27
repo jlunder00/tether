@@ -670,7 +670,7 @@ async def upsert_task_from_draft(
 
 # ─── Event queries (tasks with start_time/end_time set) ───────────────────────
 
-from datetime import datetime as _datetime
+from datetime import datetime as _datetime, timedelta as _timedelta
 
 
 def _parse_ts(s: str) -> _datetime:
@@ -683,7 +683,7 @@ def _parse_ts(s: str) -> _datetime:
     return _datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
-def _row_to_event(row) -> dict:
+def _row_to_event(row, *, is_recurring: bool = False, is_occurrence: bool = False) -> dict:
     """Map a task row that has event fields to CalendarEvent shape."""
     r = dict(row)
     st = r.get("start_time")
@@ -699,7 +699,86 @@ def _row_to_event(row) -> dict:
         "task_id": uid,
         "anchor_id": str(r["anchor_id"]) if r.get("anchor_id") else None,
         "color": None,
+        "is_recurring": is_recurring,
+        "is_occurrence": is_occurrence,
     }
+
+
+def _parse_exdate(exdate_line: str) -> _datetime | None:
+    """Extract datetime from an EXDATE line like 'EXDATE;TZID=UTC:20260511T090000Z'.
+
+    Returns a UTC-aware datetime, or None if parsing fails.
+    """
+    try:
+        # Value is after the last colon
+        value = exdate_line.rsplit(":", 1)[-1].strip()
+        # Normalise: replace trailing Z, ensure isoformat-compatible string
+        value = value.replace("Z", "+00:00")
+        # iCalendar compact form: 20260511T090000+00:00
+        if "T" in value and len(value) >= 15:
+            # Insert separators if missing: YYYYMMDDTHHMMSS → YYYY-MM-DDTHH:MM:SS
+            if "-" not in value[:8]:
+                value = f"{value[:4]}-{value[4:6]}-{value[6:8]}T{value[9:11]}:{value[11:13]}:{value[13:15]}{value[15:]}"
+        dt = _datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime) -> list[dict]:
+    """Expand a recurring task's RRULE into concrete occurrences within the window.
+
+    Args:
+        task: CalendarEvent-shaped dict with rrule, start_time, end_time, exdates.
+        window_start: inclusive start of the query window (tz-aware).
+        window_end: inclusive end of the query window (tz-aware).
+
+    Returns:
+        List of CalendarEvent dicts, one per occurrence, with is_occurrence=True.
+        Occurrences matching any exdate are excluded.
+    """
+    from dateutil.rrule import rrulestr
+
+    rrule_str = task.get("rrule")
+    if not rrule_str:
+        return []
+
+    raw_start = task.get("start_time")
+    raw_end = task.get("end_time")
+    if not raw_start:
+        return []
+
+    dtstart = _parse_ts(raw_start) if isinstance(raw_start, str) else raw_start
+    if raw_end:
+        dtend = _parse_ts(raw_end) if isinstance(raw_end, str) else raw_end
+        duration = dtend - dtstart
+    else:
+        duration = _timedelta(hours=1)
+
+    # Build excluded dates set (date-only comparison for flexibility)
+    exdate_dates: set[tuple[int, int, int]] = set()
+    for exdate_line in (task.get("exdates") or []):
+        dt = _parse_exdate(exdate_line)
+        if dt:
+            exdate_dates.add((dt.year, dt.month, dt.day))
+
+    rule = rrulestr(rrule_str, dtstart=dtstart, ignoretz=False)
+    occurrences = []
+    for dt in rule.between(window_start, window_end, inc=True):
+        if (dt.year, dt.month, dt.day) in exdate_dates:
+            continue
+        occ = {
+            **task,
+            "start_time": dt.isoformat(),
+            "end_time": (dt + duration).isoformat(),
+            "is_occurrence": True,
+            "is_recurring": True,
+        }
+        occurrences.append(occ)
+    return occurrences
 
 
 async def promote_task_to_event(
@@ -732,19 +811,92 @@ async def get_events_for_range(
     start: str,
     end: str,
 ) -> list[dict]:
-    """Return all tasks that have been promoted to events within [start, end]."""
-    rows = await conn.fetch(
+    """Return all calendar events whose occurrence falls within [start, end].
+
+    Handles two kinds of tasks:
+    1. Single events (rrule IS NULL): start_time must fall in the window.
+       Exception instances (recurrence_id IS NOT NULL) are treated as single
+       events — they override a specific occurrence of a series.
+    2. Recurring series masters (rrule IS NOT NULL): fetched separately and
+       expanded via RRULE; occurrences outside the window are dropped.
+       Exception instances from the same user are fetched and substitute
+       the computed occurrence for their specific date.
+    """
+    window_start = _parse_ts(start)
+    window_end = _parse_ts(end)
+
+    # 1. Single events (non-recurring, non-exception): rrule IS NULL and no recurrence_id
+    single_rows = await conn.fetch(
         """
-        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
         FROM tasks
         WHERE start_time IS NOT NULL
+          AND rrule IS NULL
+          AND recurrence_id IS NULL
           AND start_time >= $1
           AND start_time <= $2
         ORDER BY start_time
         """,
-        _parse_ts(start), _parse_ts(end),
+        window_start, window_end,
     )
-    return [_row_to_event(r) for r in rows]
+    results: list[dict] = [_row_to_event(r) for r in single_rows]
+
+    # 2. Recurring series masters: expand via RRULE
+    recurring_rows = await conn.fetch(
+        """
+        SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
+        FROM tasks
+        WHERE rrule IS NOT NULL
+          AND start_time IS NOT NULL
+        ORDER BY start_time
+        """,
+    )
+
+    if not recurring_rows:
+        return sorted(results, key=lambda e: e["start_time"] or "")
+
+    # Fetch all exception instances (recurrence_id IS NOT NULL) for series in window
+    master_external_ids = [str(r["external_id"]) for r in recurring_rows if r["external_id"]]
+    exception_rows: list = []
+    if master_external_ids:
+        exception_rows = await conn.fetch(
+            """
+            SELECT uuid, text, start_time, end_time, source, external_id, anchor_id, rrule, recurrence_id, exdates
+            FROM tasks
+            WHERE recurrence_id = ANY($1::text[])
+              AND start_time >= $2
+              AND start_time <= $3
+            """,
+            master_external_ids, window_start, window_end,
+        )
+
+    # Key exceptions by (recurrence_id, date) for substitution
+    exception_by_key: dict[tuple[str, tuple[int, int, int]], dict] = {}
+    for exc_row in exception_rows:
+        exc = _row_to_event(exc_row, is_occurrence=True, is_recurring=True)
+        rid = exc_row["recurrence_id"]
+        if exc["start_time"] and rid:
+            dt = _parse_ts(exc["start_time"])
+            exception_by_key[(str(rid), (dt.year, dt.month, dt.day))] = exc
+
+    # Expand each recurring master and substitute exception instances
+    for master_row in recurring_rows:
+        task = _row_to_event(master_row, is_recurring=True)
+        task["rrule"] = master_row["rrule"]
+        task["exdates"] = list(master_row["exdates"] or [])
+        task["start_time"] = master_row["start_time"].isoformat() if master_row["start_time"] else None
+        task["end_time"] = master_row["end_time"].isoformat() if master_row["end_time"] else None
+
+        for occ in expand_recurring(task, window_start, window_end):
+            occ_dt = _parse_ts(occ["start_time"])
+            key = (str(master_row["external_id"] or ""), (occ_dt.year, occ_dt.month, occ_dt.day))
+            if key in exception_by_key:
+                # Exception instance overrides this occurrence
+                results.append(exception_by_key[key])
+            else:
+                results.append(occ)
+
+    return sorted(results, key=lambda e: e["start_time"] or "")
 
 
 async def update_event_time(

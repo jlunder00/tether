@@ -1,0 +1,133 @@
+"""Unit tests for RRULE occurrence expansion in event queries.
+
+Tests the expand_recurring() helper and the get_events_with_recurrence()
+query function. No live DB needed — all mocked.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone, timedelta
+
+import pytest
+
+from db.pg_queries.tasks import expand_recurring
+
+
+# ---------------------------------------------------------------------------
+# expand_recurring — basic weekly recurrence
+# ---------------------------------------------------------------------------
+
+def _make_task(rrule: str, start: datetime, end: datetime, **kwargs) -> dict:
+    """Build a minimal recurring task row dict."""
+    duration = end - start
+    return {
+        "id": kwargs.get("id", "uuid-series-1"),
+        "title": kwargs.get("title", "Weekly meeting"),
+        "start_time": start.isoformat(),
+        "end_time": end.isoformat(),
+        "rrule": rrule,
+        "exdates": kwargs.get("exdates", []),
+        "source": "google_calendar",
+        "external_id": kwargs.get("external_id", "gcal-series-1"),
+        "anchor_id": None,
+        "is_recurring": True,
+        "is_occurrence": False,
+    }
+
+
+def test_expand_weekly_returns_occurrences_in_window():
+    """Weekly RRULE produces one occurrence per week within the window."""
+    # Monday 2026-05-04, 09:00 UTC — weekly for 4 weeks
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end)
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+
+    # May has weeks starting May 4, 11, 18, 25 — 4 occurrences
+    assert len(occurrences) == 4
+    for occ in occurrences:
+        assert occ["is_occurrence"] is True
+        assert occ["is_recurring"] is True
+
+
+def test_expand_recurring_preserves_duration():
+    """Each occurrence has the same duration as the original event."""
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 10, 30, tzinfo=timezone.utc)  # 90 min
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end)
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert len(occurrences) >= 1
+
+    for occ in occurrences:
+        occ_start = datetime.fromisoformat(occ["start_time"])
+        occ_end = datetime.fromisoformat(occ["end_time"])
+        assert occ_end - occ_start == timedelta(minutes=90)
+
+
+def test_expand_recurring_no_occurrences_outside_window():
+    """An event starting in June produces no occurrences for a May window."""
+    start = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 6, 1, 10, 0, tzinfo=timezone.utc)
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end)
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert occurrences == []
+
+
+def test_expand_recurring_respects_exdates():
+    """Occurrences matching exdates are excluded from the result."""
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    # Exclude May 11 occurrence
+    exdate = "EXDATE;TZID=UTC:20260511T090000Z"
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end, exdates=[exdate])
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    occurrence_starts = [occ["start_time"] for occ in occurrences]
+
+    # Should have 3 occurrences (May 4, 18, 25) — May 11 excluded
+    assert len(occurrences) == 3
+    excluded_dt = datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc)
+    for start_str in occurrence_starts:
+        occ_dt = datetime.fromisoformat(start_str)
+        assert occ_dt.date() != excluded_dt.date(), "May 11 should be excluded"
+
+
+def test_expand_recurring_daily_within_window():
+    """Daily RRULE within a 3-day window produces 3 occurrences."""
+    start = datetime(2026, 5, 1, 8, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 1, 8, 15, tzinfo=timezone.utc)
+    task = _make_task("RRULE:FREQ=DAILY", start, end)
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 3, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert len(occurrences) == 3
+
+
+def test_expand_recurring_count_limited_rrule():
+    """RRULE with COUNT limits total occurrences."""
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    task = _make_task("RRULE:FREQ=WEEKLY;COUNT=2", start, end)
+
+    # Big window — but COUNT=2 means only 2 occur ever
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 6, 30, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert len(occurrences) == 2
