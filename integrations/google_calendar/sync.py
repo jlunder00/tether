@@ -46,11 +46,23 @@ class GoogleCalendarSync(SyncProvider):
         self._pool = pool
 
     async def _get_integration_row(self, integration_id: str) -> dict:
-        """Fetch user_id and access_token for an integration in one query."""
+        """Fetch user_id and access_token for an integration.
+
+        The sync worker is a background system process — it cannot set
+        app.current_user_id before knowing the user_id.  Direct SQL on an
+        unscoped tether_app connection returns zero rows because
+        user_integrations has FORCE ROW LEVEL SECURITY and tether_app is
+        NOBYPASSRLS.
+
+        get_integration_for_sync() is a SECURITY DEFINER function owned by
+        postgres (BYPASSRLS).  It exposes only user_id and access_token and
+        executes as the function owner for that one call only, leaving RLS
+        intact for every other access path.
+        """
         import db.postgres as pg
         async with pg.get_conn(self._pool) as conn:
             row = await conn.fetchrow(
-                "SELECT user_id, access_token FROM user_integrations WHERE id = $1",
+                "SELECT user_id, access_token FROM get_integration_for_sync($1)",
                 _uuid.UUID(integration_id),
             )
         if not row:
