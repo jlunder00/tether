@@ -54,6 +54,9 @@ export const useEventStore = defineStore('events', () => {
       task_id: taskId,
       anchor_id: null,
       color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      rrule: null,
     }
     events.value.push(optimistic)
     return optimistic
@@ -135,5 +138,27 @@ export const useEventStore = defineStore('events', () => {
     events.value = events.value.filter(e => e.task_id !== taskId)
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask }
+  /**
+   * Set or clear the recurrence rule for a calendar event.
+   * Pass null to remove the recurrence entirely.
+   * PATCH /api/events/:id with { rrule } — updates optimistically.
+   */
+  async function setRecurrence(eventId: string, rrule: string | null): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
+    if (!ev) return
+    // Occurrences cannot carry their own rrule — only the master can.
+    if (ev.is_occurrence) return
+    // Optimistic update
+    ev.rrule = rrule
+    ev.is_recurring = rrule !== null
+    try {
+      await api(`/api/events/${eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rrule }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
+  }
+
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask, setRecurrence }
 })

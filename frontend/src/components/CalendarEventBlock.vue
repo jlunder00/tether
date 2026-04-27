@@ -40,6 +40,13 @@ function eventColor(event: CalendarEvent): string {
       >
         {{ event.source === 'google_calendar' ? 'G' : '↗' }}
       </span>
+      <!-- Recurring indicator for master events and synthesized occurrences -->
+      <span
+        v-if="event.is_recurring || event.is_occurrence"
+        data-testid="recurring-indicator"
+        class="text-[9px] flex-shrink-0 opacity-80"
+        title="Recurring event"
+      >↻</span>
       <span class="truncate font-medium text-white">{{ event.title }}</span>
     </div>
   </div>

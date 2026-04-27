@@ -22,6 +22,9 @@ const baseEvent: CalendarEvent = {
   task_id: null,
   anchor_id: null,
   color: null,
+  is_recurring: false,
+  is_occurrence: false,
+  rrule: null,
 }
 
 describe('CalendarEventBlock', () => {
@@ -76,5 +79,39 @@ describe('CalendarEventBlock', () => {
     })
     await wrapper.trigger('click')
     expect(wrapper.emitted('click')).toBeTruthy()
+  })
+
+  // --- Recurring indicator tests ---
+
+  it('shows recurring indicator when is_recurring is true', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: { ...baseEvent, is_recurring: true },
+        topPx: 0,
+        heightPx: 30,
+      },
+    })
+    expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(true)
+  })
+
+  it('shows recurring indicator when is_occurrence is true', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: { ...baseEvent, is_occurrence: true },
+        topPx: 0,
+        heightPx: 30,
+      },
+    })
+    expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(true)
+  })
+
+  it('does not show recurring indicator for non-recurring events', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 0, heightPx: 30 },
+    })
+    expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(false)
   })
 })

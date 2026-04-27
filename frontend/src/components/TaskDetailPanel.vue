@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api'
 import SearchAutocomplete from './SearchAutocomplete.vue'
+import RecurrencePicker from './RecurrencePicker.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
@@ -308,6 +309,11 @@ async function onCalendarEndChange(e: Event) {
   await eventStore.moveEvent(taskEvent.value.id, taskEvent.value.start_time, new Date(val).toISOString())
 }
 
+async function onRecurrenceChange(rrule: string | null) {
+  if (!taskEvent.value) return
+  await eventStore.setRecurrence(taskEvent.value.id, rrule)
+}
+
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
@@ -388,6 +394,12 @@ onMounted(async () => {
                   @change="onCalendarEndChange"
                   class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
               </label>
+              <!-- Recurrence picker — shown only when event exists -->
+              <RecurrencePicker
+                :model-value="taskEvent.rrule"
+                :start-time="taskEvent.start_time"
+                @update:model-value="onRecurrenceChange"
+              />
             </div>
           </template>
           <template v-else>

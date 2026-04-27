@@ -174,6 +174,9 @@ describe('CalendarView', () => {
         task_id: 'task-a',
         anchor_id: null,
         color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        rrule: null,
       },
       {
         id: 'ev-b',
@@ -185,6 +188,9 @@ describe('CalendarView', () => {
         task_id: 'task-b',
         anchor_id: null,
         color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        rrule: null,
       },
     )
     await nextTick()

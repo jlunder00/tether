@@ -5,26 +5,34 @@ vi.mock('../../lib/api', () => ({
   api: vi.fn(() => Promise.resolve({ ok: false, json: async () => ({}) })),
 }))
 
+/** Minimal required fields for a non-recurring CalendarEvent. */
+const BASE_EVENT_FIELDS = {
+  source: 'tether' as const,
+  external_id: null,
+  anchor_id: null,
+  color: null,
+  is_recurring: false,
+  is_occurrence: false,
+  rrule: null,
+}
+
 describe('useEventStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.clearAllMocks()
   })
 
   it('moveEvent updates start_time and end_time of the matching event', async () => {
     const { useEventStore } = await import('../events')
     const store = useEventStore()
 
-    // Seed a known event directly
     store.events.push({
+      ...BASE_EVENT_FIELDS,
       id: 'ev-1',
       title: 'Test',
       start_time: '2024-06-10T09:00:00.000Z',
       end_time: '2024-06-10T10:00:00.000Z',
-      source: 'tether',
-      external_id: null,
       task_id: null,
-      anchor_id: null,
-      color: null,
     })
 
     await store.moveEvent('ev-1', '2024-06-10T14:00:00.000Z', '2024-06-10T15:00:00.000Z')
@@ -36,7 +44,6 @@ describe('useEventStore', () => {
   it('moveEvent is a no-op for an unknown event id', async () => {
     const { useEventStore } = await import('../events')
     const store = useEventStore()
-    // Should not throw
     await expect(store.moveEvent('nonexistent', '2024-01-01T00:00:00Z', '2024-01-01T01:00:00Z')).resolves.toBeUndefined()
   })
 
@@ -54,15 +61,12 @@ describe('useEventStore', () => {
     const { api } = await import('../../lib/api')
     const mockTask = { id: 'task-123', text: 'New Event', status: 'pending' }
     const mockEvent = {
+      ...BASE_EVENT_FIELDS,
       id: 'ev-456',
       title: 'New Event',
       start_time: '2024-06-10T09:00:00Z',
       end_time: '2024-06-10T10:00:00Z',
-      source: 'tether',
-      external_id: null,
       task_id: 'task-123',
-      anchor_id: null,
-      color: null,
     }
     vi.mocked(api)
       .mockResolvedValueOnce({ ok: true, json: async () => mockTask } as any)
@@ -86,7 +90,121 @@ describe('useEventStore', () => {
     const store = useEventStore()
     const result = await store.createTaskAndPromote('2024-06-10T09:00:00Z', '2024-06-10T10:00:00Z')
     expect(result).toBe('task-789')
-    // Event not added to store since promotion failed
     expect(store.events).toHaveLength(0)
+  })
+
+  // --- RRULE / recurrence tests ---
+
+  it('fetchEvents passes through is_recurring and is_occurrence fields', async () => {
+    const { api } = await import('../../lib/api')
+    const mockEvents = [
+      {
+        ...BASE_EVENT_FIELDS,
+        id: 'ev-r1',
+        title: 'Weekly standup',
+        start_time: '2024-06-10T09:00:00Z',
+        end_time: '2024-06-10T09:30:00Z',
+        task_id: null,
+        is_recurring: true,
+        is_occurrence: false,
+        rrule: 'FREQ=WEEKLY;BYDAY=MO',
+      },
+      {
+        ...BASE_EVENT_FIELDS,
+        id: 'ev-r2',
+        title: 'Weekly standup',
+        start_time: '2024-06-17T09:00:00Z',
+        end_time: '2024-06-17T09:30:00Z',
+        task_id: null,
+        is_recurring: false,
+        is_occurrence: true,
+        rrule: null,
+      },
+    ]
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => mockEvents } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    await store.fetchEvents('2024-06-10', '2024-06-17')
+    expect(store.events).toHaveLength(2)
+    expect(store.events[0].is_recurring).toBe(true)
+    expect(store.events[0].rrule).toBe('FREQ=WEEKLY;BYDAY=MO')
+    expect(store.events[1].is_occurrence).toBe(true)
+  })
+
+  it('setRecurrence PATCHes the event and updates rrule in local state', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-5',
+      title: 'Recurring task',
+      start_time: '2024-06-10T10:00:00Z',
+      end_time: '2024-06-10T11:00:00Z',
+      task_id: 'task-5',
+    })
+
+    await store.setRecurrence('ev-5', 'FREQ=DAILY')
+
+    expect(vi.mocked(api)).toHaveBeenCalledWith(
+      '/api/events/ev-5',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: expect.stringContaining('FREQ=DAILY'),
+      }),
+    )
+    expect(store.events[0].rrule).toBe('FREQ=DAILY')
+    expect(store.events[0].is_recurring).toBe(true)
+  })
+
+  it('setRecurrence with null clears rrule and is_recurring', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-6',
+      title: 'Was recurring',
+      start_time: '2024-06-10T10:00:00Z',
+      end_time: '2024-06-10T11:00:00Z',
+      task_id: null,
+      is_recurring: true,
+      rrule: 'FREQ=WEEKLY',
+    })
+
+    await store.setRecurrence('ev-6', null)
+
+    expect(store.events[0].rrule).toBeNull()
+    expect(store.events[0].is_recurring).toBe(false)
+  })
+
+  it('setRecurrence is a no-op for unknown event id', async () => {
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    await expect(store.setRecurrence('nonexistent', 'FREQ=DAILY')).resolves.toBeUndefined()
+  })
+
+  it('setRecurrence is a no-op for an occurrence event (occurrences cannot own an rrule)', async () => {
+    const { api } = await import('../../lib/api')
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-occ',
+      title: 'Occurrence',
+      start_time: '2024-06-10T10:00:00Z',
+      end_time: '2024-06-10T11:00:00Z',
+      task_id: null,
+      is_occurrence: true,
+    })
+
+    await store.setRecurrence('ev-occ', 'FREQ=DAILY')
+
+    // API should not have been called, and rrule should remain null
+    expect(vi.mocked(api)).not.toHaveBeenCalled()
+    expect(store.events[0].rrule).toBeNull()
+    expect(store.events[0].is_recurring).toBe(false)
   })
 })
