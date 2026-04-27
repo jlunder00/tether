@@ -180,6 +180,14 @@ class GoogleCalendarSync(SyncProvider):
     ) -> str:
         """Fetch incremental changes via Google's syncToken mechanism.
 
+        Uses singleEvents=false so recurring event series are returned as a single
+        master row (with an RRULE string) rather than expanded into individual
+        occurrences. This avoids the 250-item page limit that expansion causes.
+
+        Paginates through all pages via nextPageToken — each subsequent request
+        uses only pageToken (not syncToken). nextSyncToken appears on the final
+        page and is persisted as the new cursor.
+
         Iterates all returned items:
           - cancelled items  → soft_delete_task_by_external_id
           - active items     → normalize_event() → upsert_task_from_draft()
@@ -194,38 +202,47 @@ class GoogleCalendarSync(SyncProvider):
         user_id = info["user_id"]
 
         url = _CALENDAR_EVENTS_URL.format(calendar_id=calendar_id)
-        params: dict = {"singleEvents": "true"}
+        # Build initial params — singleEvents omitted (false is the default) so
+        # recurring events come back as series masters with RRULE, not expanded.
+        initial_params: dict = {}
         if since_cursor:
-            params["syncToken"] = since_cursor
+            initial_params["syncToken"] = since_cursor
         else:
             # Initial import: 30 days back, no end limit
             thirty_days_ago = (
                 datetime.now(timezone.utc) - timedelta(days=30)
             ).isoformat()
-            params["timeMin"] = thirty_days_ago
+            initial_params["timeMin"] = thirty_days_ago
 
+        all_items: list[dict] = []
+        new_token = ""
+
+        # Pagination loop: first request uses initial_params; subsequent requests
+        # use only pageToken (drop syncToken per Google API spec).
+        params = initial_params
         async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params=params,
-            )
+            while True:
+                resp = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params=params,
+                )
+                if resp.status_code == 410:
+                    raise ValueError("Sync token invalidated (410) — full resync needed")
+                resp.raise_for_status()
+                data = resp.json()
 
-        if resp.status_code == 410:
-            raise ValueError("Sync token invalidated (410) — full resync needed")
-        resp.raise_for_status()
-        data = resp.json()
+                all_items.extend(data.get("items", []))
+                new_token = data.get("nextSyncToken", new_token)
 
-        if data.get("nextPageToken"):
-            logger.warning(
-                "poll: nextPageToken present for integration=%s calendar=%s — "
-                "pagination is not yet implemented; some items may be truncated",
-                integration_id,
-                calendar_id,
-            )
+                next_page = data.get("nextPageToken")
+                if not next_page:
+                    break
+                # Subsequent pages: use only pageToken, not syncToken
+                params = {"pageToken": next_page}
 
         async with pg.get_conn(self._pool, user_id=user_id) as conn:
-            for item in data.get("items", []):
+            for item in all_items:
                 if item.get("status") == "cancelled":
                     await soft_delete_task_by_external_id(
                         conn, user_id, "google_calendar", item["id"]
@@ -234,7 +251,6 @@ class GoogleCalendarSync(SyncProvider):
                     draft = await self.normalize_event(item)
                     await upsert_task_from_draft(conn, user_id, draft)
 
-            new_token = data.get("nextSyncToken", "")
             if new_token:
                 await upsert_sync_state(
                     conn, integration_id, calendar_id, sync_cursor=new_token

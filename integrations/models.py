@@ -22,6 +22,12 @@ class TaskDraft:
     external_url: str | None = None
     source_status: str | None = None   # "cancelled" triggers soft-delete
 
+    # Recurrence fields (Google Calendar recurring events)
+    rrule: str | None = None                          # e.g. "RRULE:FREQ=WEEKLY;BYDAY=MO"
+    recurrence_id: str | None = None                  # GCal recurringEventId (exception instances)
+    exdates: list[str] = field(default_factory=list)  # EXDATE lines from recurrence array
+    original_start_time: datetime | None = None       # originalStartTime for moved exceptions
+
 
 @dataclass
 class WebhookPayload:

@@ -75,3 +75,133 @@ def test_map_event_spoofed_meet_url_not_used_as_external_url():
     draft = map_event(raw)
     # Should fall back to htmlLink, not the spoofed URI
     assert draft.external_url == "https://calendar.google.com/event?eid=safe"
+
+
+# ── map_event — RRULE / recurrence fields ─────────────────────────────────────
+
+def _recurring_event(rrule: str = "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR") -> dict:
+    return {
+        "summary": "Weekly standup",
+        "id": "series-master-1",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T09:30:00+00:00"},
+        "recurrence": [rrule, "EXDATE;TZID=UTC:20260505T090000Z"],
+    }
+
+
+def test_map_event_extracts_rrule():
+    """map_event sets draft.rrule from the recurrence array."""
+    draft = map_event(_recurring_event("RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"))
+    assert draft.rrule == "RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"
+
+
+def test_map_event_no_recurrence_rrule_is_none():
+    """Non-recurring event has draft.rrule == None."""
+    raw = {
+        "summary": "One-off",
+        "id": "evt-once",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.rrule is None
+
+
+def test_map_event_extracts_exdates():
+    """EXDATE lines from recurrence array land in draft.exdates."""
+    raw = {
+        "summary": "Series",
+        "id": "s1",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+        "recurrence": [
+            "RRULE:FREQ=WEEKLY",
+            "EXDATE;TZID=UTC:20260505T090000Z",
+            "EXDATE;TZID=UTC:20260512T090000Z",
+        ],
+    }
+    draft = map_event(raw)
+    assert len(draft.exdates) == 2
+    assert "EXDATE;TZID=UTC:20260505T090000Z" in draft.exdates
+
+
+def test_map_event_no_exdates_is_empty_list():
+    """Events with no EXDATE lines have draft.exdates == []."""
+    raw = {
+        "summary": "Series no exdate",
+        "id": "s2",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+        "recurrence": ["RRULE:FREQ=DAILY"],
+    }
+    draft = map_event(raw)
+    assert draft.exdates == []
+
+
+def test_map_event_extracts_recurring_event_id():
+    """Exception instances carry recurringEventId → draft.recurrence_id."""
+    raw = {
+        "summary": "Exception instance",
+        "id": "exception-1",
+        "recurringEventId": "series-master-1",
+        "start": {"dateTime": "2026-05-05T10:00:00+00:00"},
+        "end": {"dateTime": "2026-05-05T10:30:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.recurrence_id == "series-master-1"
+
+
+def test_map_event_recurrence_id_none_for_regular():
+    """Regular non-exception events have draft.recurrence_id == None."""
+    raw = {
+        "summary": "Regular",
+        "id": "r1",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.recurrence_id is None
+
+
+def test_map_event_extracts_original_start_time():
+    """Exception instances with originalStartTime populate draft.original_start_time."""
+    from datetime import datetime, timezone
+    raw = {
+        "summary": "Moved exception",
+        "id": "exception-moved",
+        "recurringEventId": "series-master-1",
+        "originalStartTime": {"dateTime": "2026-05-11T09:00:00+00:00"},
+        "start": {"dateTime": "2026-05-11T10:00:00+00:00"},  # moved to 10am
+        "end": {"dateTime": "2026-05-11T10:30:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.original_start_time is not None
+    assert draft.original_start_time == datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc)
+
+
+def test_map_event_original_start_time_none_for_non_exception():
+    """Regular non-exception events have draft.original_start_time == None."""
+    raw = {
+        "summary": "Regular",
+        "id": "r1",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.original_start_time is None
+
+
+def test_map_event_raises_on_missing_id():
+    """map_event must raise ValueError when the event has no 'id' field.
+
+    A missing id would cause silent data collision on the (user_id, source, external_id)
+    unique index — multiple events would map to external_id='' and overwrite each other.
+    """
+    raw = {
+        "summary": "No ID event",
+        # 'id' deliberately absent
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    with pytest.raises(ValueError, match="missing 'id'"):
+        map_event(raw)

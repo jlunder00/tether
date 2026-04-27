@@ -281,24 +281,22 @@ async def test_poll_mixed_items_routes_correctly():
 
 
 # ---------------------------------------------------------------------------
-# poll — warns when nextPageToken present
+# poll — singleEvents=false (recurring events as series masters)
 # ---------------------------------------------------------------------------
 
-async def test_poll_warns_on_next_page_token(caplog):
-    """poll() logs a warning when nextPageToken is present (pagination not implemented)."""
-    import logging
+async def test_poll_does_not_send_single_events_true():
+    """poll() must NOT send singleEvents=true — recurring events need series masters."""
     pool = _make_pool()
     sync = GoogleCalendarSync(pool)
 
     mock_conn = AsyncMock()
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.raise_for_status = MagicMock()
-    resp.json.return_value = {
-        "items": [],
-        "nextPageToken": "page-tok",
-        "nextSyncToken": _NEW_SYNC_TOKEN,
-    }
+    resp = _make_response([])
+
+    captured_params: list[dict] = []
+
+    async def fake_get(url, headers, params):
+        captured_params.append(dict(params))
+        return resp
 
     with patch.object(sync, "_get_integration_row", new=AsyncMock(
         return_value={"user_id": _USER_ID, "access_token": "tok"}
@@ -307,14 +305,147 @@ async def test_poll_warns_on_next_page_token(caplog):
             mock_client = AsyncMock()
             mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get = AsyncMock(return_value=resp)
+            mock_client.get = fake_get
 
             with _patch_get_conn(mock_conn):
                 with patch("integrations.google_calendar.sync.upsert_sync_state", new=AsyncMock(return_value={})):
-                    with caplog.at_level(logging.WARNING, logger="integrations.google_calendar.sync"):
-                        await sync.poll(_INTEGRATION_ID, _CALENDAR_ID, _SYNC_TOKEN)
+                    await sync.poll(_INTEGRATION_ID, _CALENDAR_ID, _SYNC_TOKEN)
 
-    assert any("nextPageToken" in r.message or "pagination" in r.message.lower() for r in caplog.records)
+    assert captured_params, "No HTTP GET captured"
+    first_params = captured_params[0]
+    assert first_params.get("singleEvents") != "true", \
+        "singleEvents=true must not be sent (would expand recurring events)"
+
+
+# ---------------------------------------------------------------------------
+# poll — pagination: walks all pages, persists final syncToken
+# ---------------------------------------------------------------------------
+
+async def _run_paginated_poll(sync, page_responses: list[MagicMock], mock_conn: AsyncMock) -> str:
+    """Helper: run poll() with a sequence of paginated responses."""
+    call_count = 0
+
+    async def fake_get(url, headers, params):
+        nonlocal call_count
+        resp = page_responses[call_count]
+        call_count += 1
+        return resp
+
+    with patch.object(sync, "_get_integration_row", new=AsyncMock(
+        return_value={"user_id": _USER_ID, "access_token": "tok"}
+    )):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = fake_get
+
+            with _patch_get_conn(mock_conn):
+                with patch(
+                    "integrations.google_calendar.sync.soft_delete_task_by_external_id",
+                    new=AsyncMock(),
+                ):
+                    with patch(
+                        "integrations.google_calendar.sync.upsert_task_from_draft",
+                        new=AsyncMock(return_value={}),
+                    ):
+                        with patch(
+                            "integrations.google_calendar.sync.upsert_sync_state",
+                            new=AsyncMock(return_value={}),
+                        ):
+                            return await sync.poll(_INTEGRATION_ID, _CALENDAR_ID, _SYNC_TOKEN)
+
+
+def _page_response(items: list[dict], *, next_page_token: str | None = None, next_sync_token: str | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status = MagicMock()
+    data: dict = {"items": items}
+    if next_page_token:
+        data["nextPageToken"] = next_page_token
+    if next_sync_token:
+        data["nextSyncToken"] = next_sync_token
+    resp.json.return_value = data
+    return resp
+
+
+async def test_poll_pagination_walks_all_pages():
+    """poll() follows nextPageToken across all pages before returning."""
+    pool = _make_pool()
+    sync = GoogleCalendarSync(pool)
+    mock_conn = AsyncMock()
+
+    page1 = _page_response([_active_event("evt-1")], next_page_token="page2-tok")
+    page2 = _page_response([_active_event("evt-2")], next_page_token="page3-tok")
+    page3 = _page_response([_active_event("evt-3")], next_sync_token=_NEW_SYNC_TOKEN)
+
+    with patch(
+        "integrations.google_calendar.sync.upsert_task_from_draft",
+        new=AsyncMock(return_value={}),
+    ) as mock_upsert:
+        with patch.object(sync, "_get_integration_row", new=AsyncMock(
+            return_value={"user_id": _USER_ID, "access_token": "tok"}
+        )):
+            call_count = 0
+            responses = [page1, page2, page3]
+
+            async def fake_get(url, headers, params):
+                nonlocal call_count
+                r = responses[call_count]
+                call_count += 1
+                return r
+
+            with patch("httpx.AsyncClient") as mock_client_cls:
+                mock_client = AsyncMock()
+                mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+                mock_client.get = fake_get
+
+                with _patch_get_conn(mock_conn):
+                    with patch("integrations.google_calendar.sync.soft_delete_task_by_external_id", new=AsyncMock()):
+                        with patch("integrations.google_calendar.sync.upsert_sync_state", new=AsyncMock(return_value={})):
+                            result = await sync.poll(_INTEGRATION_ID, _CALENDAR_ID, _SYNC_TOKEN)
+
+    assert call_count == 3, f"Expected 3 HTTP requests (one per page), got {call_count}"
+    assert result == _NEW_SYNC_TOKEN
+    assert mock_upsert.await_count == 3
+
+
+async def test_poll_pagination_uses_page_token_not_sync_token():
+    """Subsequent page requests must use pageToken, not syncToken."""
+    pool = _make_pool()
+    sync = GoogleCalendarSync(pool)
+    mock_conn = AsyncMock()
+
+    captured_params: list[dict] = []
+    page1 = _page_response([_active_event("e1")], next_page_token="page2-tok")
+    page2 = _page_response([_active_event("e2")], next_sync_token=_NEW_SYNC_TOKEN)
+
+    async def fake_get(url, headers, params):
+        captured_params.append(dict(params))
+        return [page1, page2][len(captured_params) - 1]
+
+    with patch.object(sync, "_get_integration_row", new=AsyncMock(
+        return_value={"user_id": _USER_ID, "access_token": "tok"}
+    )):
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get = fake_get
+
+            with _patch_get_conn(mock_conn):
+                with patch("integrations.google_calendar.sync.soft_delete_task_by_external_id", new=AsyncMock()):
+                    with patch("integrations.google_calendar.sync.upsert_task_from_draft", new=AsyncMock(return_value={})):
+                        with patch("integrations.google_calendar.sync.upsert_sync_state", new=AsyncMock(return_value={})):
+                            await sync.poll(_INTEGRATION_ID, _CALENDAR_ID, _SYNC_TOKEN)
+
+    assert len(captured_params) == 2
+    # First request uses syncToken
+    assert "syncToken" in captured_params[0]
+    # Second request uses pageToken, NOT syncToken
+    assert "pageToken" in captured_params[1]
+    assert "syncToken" not in captured_params[1]
 
 
 # ---------------------------------------------------------------------------
@@ -369,3 +500,51 @@ async def test_handle_webhook_unknown_channel_skips():
             await sync.handle_webhook(_INTEGRATION_ID, payload)
 
     mock_poll.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# upsert_sync_state — COALESCE preserves watch fields when syncing cursor only
+# ---------------------------------------------------------------------------
+
+async def test_upsert_sync_state_preserves_watch_fields_on_cursor_update():
+    """Updating only sync_cursor must not overwrite existing watch channel fields with NULL.
+
+    poll() calls upsert_sync_state with only sync_cursor set. On conflict, the SQL
+    must COALESCE incoming NULLs against the existing watch_channel_id / watch_expiry /
+    watch_resource_id values — not blindly replace them.
+
+    This test verifies the SQL sent to the DB contains COALESCE for watch fields.
+    """
+    from db.pg_queries.integrations import upsert_sync_state
+
+    captured_sql: list[str] = []
+    captured_args: list[tuple] = []
+
+    mock_conn = AsyncMock()
+
+    async def fake_fetchrow(sql, *args):
+        captured_sql.append(sql)
+        captured_args.append(args)
+        # Return a minimal row so _row() doesn't blow up
+        return {
+            "integration_id": uuid.UUID(_INTEGRATION_ID),
+            "calendar_id": _CALENDAR_ID,
+            "sync_cursor": _NEW_SYNC_TOKEN,
+            "watch_channel_id": "existing-ch",
+            "watch_expiry": None,
+            "watch_resource_id": "existing-res",
+            "updated_at": None,
+        }
+
+    mock_conn.fetchrow = fake_fetchrow
+
+    await upsert_sync_state(mock_conn, _INTEGRATION_ID, _CALENDAR_ID, sync_cursor=_NEW_SYNC_TOKEN)
+
+    assert len(captured_sql) == 1, "upsert_sync_state should execute exactly one query"
+    sql = captured_sql[0].upper()
+
+    # The ON CONFLICT clause must use COALESCE for the three watch fields
+    assert "COALESCE" in sql, (
+        "upsert_sync_state ON CONFLICT must use COALESCE to preserve existing "
+        "watch_channel_id / watch_expiry / watch_resource_id when called with only sync_cursor"
+    )
