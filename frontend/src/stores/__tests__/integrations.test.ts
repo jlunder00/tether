@@ -134,6 +134,69 @@ describe('useIntegrationsStore', () => {
     })
   })
 
+  describe('syncNow', () => {
+    it('sets lastSyncedAt to a valid ISO string and clears error on success', async () => {
+      const { api } = await import('../../lib/api')
+      vi.mocked(api).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true }),
+      } as any)
+
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      await store.syncNow()
+
+      expect(store.lastSyncedAt).toBeTypeOf('string')
+      expect(() => new Date(store.lastSyncedAt as string).toISOString()).not.toThrow()
+      expect(store.error).toBeNull()
+      expect(store.loading).toBe(false)
+    })
+
+    it('calls POST /api/integrations/google/sync', async () => {
+      const { api } = await import('../../lib/api')
+      const mockApi = vi.mocked(api).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true }),
+      } as any)
+
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      await store.syncNow()
+
+      expect(mockApi).toHaveBeenCalledWith(
+        '/api/integrations/google/sync',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+
+    it('sets an error message and leaves lastSyncedAt null on failure', async () => {
+      const { api } = await import('../../lib/api')
+      vi.mocked(api).mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ detail: 'oops' }),
+      } as any)
+
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      await store.syncNow()
+
+      expect(store.error).toBe('Sync failed. Please try again.')
+      expect(store.lastSyncedAt).toBeNull()
+    })
+
+    it('sets an error message on network error', async () => {
+      const { api } = await import('../../lib/api')
+      vi.mocked(api).mockRejectedValueOnce(new Error('Network error'))
+
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      await store.syncNow()
+
+      expect(store.error).toBe('Sync failed. Please try again.')
+      expect(store.loading).toBe(false)
+    })
+  })
+
   describe('connectGCal', () => {
     it('navigates to the Google Calendar OAuth URL', async () => {
       // happy-dom allows direct assignment to window.location.href

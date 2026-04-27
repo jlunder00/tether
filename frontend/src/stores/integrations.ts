@@ -6,6 +6,7 @@ export const useIntegrationsStore = defineStore('integrations', () => {
   const gcalConnected = ref(false)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const lastSyncedAt = ref<string | null>(null)
 
   /**
    * Check Google Calendar connection status.
@@ -54,5 +55,35 @@ export const useIntegrationsStore = defineStore('integrations', () => {
     }
   }
 
-  return { gcalConnected, loading, error, fetchGCalStatus, connectGCal, disconnectGCal }
+  /**
+   * Trigger an explicit Google Calendar sync.
+   * POST /api/integrations/google/sync — re-pulls calendar events.
+   */
+  async function syncNow() {
+    loading.value = true
+    error.value = null
+    try {
+      const resp = await api('/api/integrations/google/sync', { method: 'POST' })
+      if (resp.ok) {
+        lastSyncedAt.value = new Date().toISOString()
+      } else {
+        error.value = 'Sync failed. Please try again.'
+      }
+    } catch {
+      error.value = 'Sync failed. Please try again.'
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return {
+    gcalConnected,
+    loading,
+    error,
+    lastSyncedAt,
+    fetchGCalStatus,
+    connectGCal,
+    disconnectGCal,
+    syncNow,
+  }
 })
