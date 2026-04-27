@@ -75,17 +75,16 @@ async def request_meeting(
     )
 
     # Broadcast meeting_request event to each target
+    meeting_request_event = {
+        "type": "meeting_request",
+        "request_id": request["id"],
+        "from_user": caller_username,
+        "duration": body.duration_minutes,
+        "context": body.context or "",
+    }
     for target_id in target_ids:
-        await manager.broadcast(
-            {
-                "type": "meeting_request",
-                "request_id": request["id"],
-                "from_user": caller_username,
-                "duration": body.duration_minutes,
-                "context": body.context or "",
-            },
-            target_id,
-        )
+        await manager.broadcast(meeting_request_event, target_id)
+    await manager.broadcast({"__bot__": True, **meeting_request_event}, "__bot__")
 
     return {"id": request["id"], "status": request["status"], "round": request["round"]}
 
@@ -127,15 +126,14 @@ async def propose_slots(
 
     # Broadcast to initiator
     req_after = await get_meeting_request(conn, meeting_id)
-    await manager.broadcast(
-        {
-            "type": "meeting_proposal",
-            "request_id": meeting_id,
-            "round": req_after["round"],
-            "proposed_by": caller_username,
-        },
-        request["initiator_id"],
-    )
+    meeting_proposal_event = {
+        "type": "meeting_proposal",
+        "request_id": meeting_id,
+        "round": req_after["round"],
+        "proposed_by": caller_username,
+    }
+    await manager.broadcast(meeting_proposal_event, request["initiator_id"])
+    await manager.broadcast({"__bot__": True, **meeting_proposal_event}, "__bot__")
 
     return {
         "proposal_id": proposal["id"],
@@ -181,6 +179,7 @@ async def accept_slot(
     }
     for uid in participant_ids:
         await manager.broadcast(event, uid)
+    await manager.broadcast({"__bot__": True, **event}, "__bot__")
 
     return {
         "id": updated["id"],
@@ -210,6 +209,7 @@ async def cancel_meeting_route(
     event = {"type": "meeting_cancelled", "request_id": meeting_id}
     for uid in participants:
         await manager.broadcast(event, uid)
+    await manager.broadcast({"__bot__": True, **event}, "__bot__")
 
     return {"id": updated["id"], "status": updated["status"]}
 
