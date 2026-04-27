@@ -156,6 +156,45 @@ def test_expand_recurring_comma_separated_exdates():
     assert date(2026, 5, 18) not in occurrence_dates
 
 
+def test_expand_recurring_naive_window_bounds_with_aware_task():
+    """Reproduces production 500: naive window bounds + tz-aware task dtstart.
+
+    The API may receive query params without timezone offset (e.g. "2026-05-01T00:00:00").
+    _parse_ts returns a naive datetime. But dtstart comes from asyncpg TIMESTAMPTZ and is
+    tz-aware. rrulestr then generates tz-aware datetimes; rule.between(naive, naive) raises
+    "can't compare offset-naive and offset-aware datetimes".
+    """
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)  # tz-aware (from asyncpg)
+    end = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end)
+
+    # Naive window bounds — what _parse_ts returns for strings like "2026-05-01T00:00:00"
+    window_start = datetime(2026, 5, 1)
+    window_end = datetime(2026, 5, 31, 23, 59, 59)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert len(occurrences) == 4
+
+
+def test_expand_recurring_naive_dtstart_aware_window_does_not_raise():
+    """Inverse case: naive task dtstart + aware window bounds must not raise TypeError.
+
+    Unlikely in production (asyncpg TIMESTAMPTZ always returns tz-aware), but
+    the symmetric guard in expand_recurring covers this to prevent a crash if
+    a TIMESTAMP column ever returns a naive datetime.
+    """
+    start = datetime(2026, 5, 4, 9, 0)  # naive — no tzinfo
+    end = datetime(2026, 5, 4, 9, 30)
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end)
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    # Must not raise — returns 4 occurrences (naive rule, bounds stripped to naive)
+    occurrences = expand_recurring(task, window_start, window_end)
+    assert len(occurrences) == 4
+
+
 def test_expand_recurring_all_day_exdate_suppresses_occurrence():
     """EXDATE with bare date token (all-day, no time) suppresses the matching occurrence.
 
