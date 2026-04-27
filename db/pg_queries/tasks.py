@@ -704,21 +704,21 @@ def _row_to_event(row, *, is_recurring: bool = False, is_occurrence: bool = Fals
     }
 
 
-def _parse_exdate(exdate_line: str) -> _datetime | None:
-    """Extract datetime from an EXDATE line like 'EXDATE;TZID=UTC:20260511T090000Z'.
+def _parse_exdate_value(value: str) -> _datetime | None:
+    """Parse a single EXDATE datetime token into a UTC-aware datetime.
 
-    Returns a UTC-aware datetime, or None if parsing fails.
+    Handles iCalendar compact form without hyphens/colons, e.g. 20260511T090000Z.
+    Returns None if parsing fails.
     """
     try:
-        # Value is after the last colon
-        value = exdate_line.rsplit(":", 1)[-1].strip()
-        # Normalise: replace trailing Z, ensure isoformat-compatible string
-        value = value.replace("Z", "+00:00")
-        # iCalendar compact form: 20260511T090000+00:00
+        value = value.strip().replace("Z", "+00:00")
         if "T" in value and len(value) >= 15:
             # Insert separators if missing: YYYYMMDDTHHMMSS → YYYY-MM-DDTHH:MM:SS
             if "-" not in value[:8]:
-                value = f"{value[:4]}-{value[4:6]}-{value[6:8]}T{value[9:11]}:{value[11:13]}:{value[13:15]}{value[15:]}"
+                value = (
+                    f"{value[:4]}-{value[4:6]}-{value[6:8]}"
+                    f"T{value[9:11]}:{value[11:13]}:{value[13:15]}{value[15:]}"
+                )
         dt = _datetime.fromisoformat(value)
         if dt.tzinfo is None:
             from datetime import timezone as _tz
@@ -726,6 +726,26 @@ def _parse_exdate(exdate_line: str) -> _datetime | None:
         return dt
     except Exception:
         return None
+
+
+def _parse_exdate(exdate_line: str) -> list[_datetime]:
+    """Extract datetimes from an EXDATE line.
+
+    Handles single and comma-separated RFC 5545 formats:
+      EXDATE;TZID=UTC:20260511T090000Z
+      EXDATE;TZID=UTC:20260511T090000Z,20260518T090000Z
+
+    Returns a list of UTC-aware datetimes (may be empty on parse failure).
+    """
+    try:
+        # Value portion is everything after the last colon
+        value_part = exdate_line.rsplit(":", 1)[-1].strip()
+        return [
+            dt for raw in value_part.split(",")
+            if (dt := _parse_exdate_value(raw)) is not None
+        ]
+    except Exception:
+        return []
 
 
 def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime) -> list[dict]:
@@ -761,8 +781,7 @@ def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime)
     # Build excluded dates set (date-only comparison for flexibility)
     exdate_dates: set[tuple[int, int, int]] = set()
     for exdate_line in (task.get("exdates") or []):
-        dt = _parse_exdate(exdate_line)
-        if dt:
+        for dt in _parse_exdate(exdate_line):
             exdate_dates.add((dt.year, dt.month, dt.day))
 
     rule = rrulestr(rrule_str, dtstart=dtstart, ignoretz=False)
