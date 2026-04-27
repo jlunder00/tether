@@ -799,6 +799,28 @@ def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime)
             exdate_dates.add((dt.year, dt.month, dt.day))
 
     rule = rrulestr(rrule_str, dtstart=dtstart, ignoretz=False)
+
+    # Normalize window bounds to match dtstart's tz-awareness so rule.between()
+    # never raises "can't compare offset-naive and offset-aware datetimes".
+    #
+    # Typical case: dtstart is tz-aware (asyncpg TIMESTAMPTZ) but window bounds
+    # are naive (API query params sent without timezone offset → _parse_ts returns
+    # naive). Treat naive bounds as UTC.
+    #
+    # Symmetric guard: if dtstart is naive (unexpected, but possible if the column
+    # ever returns TIMESTAMP instead of TIMESTAMPTZ), strip tz from aware bounds.
+    from datetime import timezone as _tz
+    if dtstart.tzinfo is not None:
+        if window_start.tzinfo is None:
+            window_start = window_start.replace(tzinfo=_tz.utc)
+        if window_end.tzinfo is None:
+            window_end = window_end.replace(tzinfo=_tz.utc)
+    else:
+        if window_start.tzinfo is not None:
+            window_start = window_start.replace(tzinfo=None)
+        if window_end.tzinfo is not None:
+            window_end = window_end.replace(tzinfo=None)
+
     occurrences = []
     for dt in rule.between(window_start, window_end, inc=True):
         if (dt.year, dt.month, dt.day) in exdate_dates:
