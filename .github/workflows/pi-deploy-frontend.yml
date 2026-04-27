@@ -1,16 +1,11 @@
-name: Deploy Sync
+name: "[Pi] Deploy Frontend"
 
 on:
   push:
     branches: [main]
     paths:
-      - 'sync/**'
-      - 'integrations/**'
-      - 'db/**'
-      - 'config/**'
+      - 'frontend/**'
       - 'Dockerfile'
-      - 'requirements.txt'
-      - 'pyproject.toml'
   workflow_dispatch:
     inputs:
       no_cache:
@@ -24,12 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy-sync
+  group: pi-deploy-frontend
   cancel-in-progress: false
 
 jobs:
-  deploy-sync:
-    name: Build and deploy sync service
+  deploy-frontend:
+    name: Build and deploy frontend
     runs-on: self-hosted
     steps:
       - name: Pull latest code
@@ -44,8 +39,10 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             SEMVER="${GITHUB_REF#refs/tags/}"
             echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+            echo "extra_tag=${SEMVER}" >> $GITHUB_OUTPUT
           else
             echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+            echo "extra_tag=" >> $GITHUB_OUTPUT
           fi
 
       - name: Resolve premium ref
@@ -62,7 +59,7 @@ jobs:
           fi
           echo "ref=${REF}" >> $GITHUB_OUTPUT
 
-      - name: Build image
+      - name: Build image (includes frontend)
         env:
           TAG: ${{ steps.version.outputs.tag }}
           PREMIUM_REF: ${{ steps.premium.outputs.ref }}
@@ -81,18 +78,17 @@ jobs:
             && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
             || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
 
-      - name: Restart sync service
+      - name: Restart API service (serves frontend static files)
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-            docker compose up -d --no-deps sync
+            docker compose up -d --no-deps api
 
-      - name: Prune old images (keep 3)
-        run: |
-          docker images tether-premium --format "{{.CreatedAt}}\t{{.ID}}\t{{.Tag}}" \
-            | sort -r \
-            | awk 'NR>3 && $3 != "latest" {print $2}' \
-            | xargs -r docker rmi --force 2>/dev/null || true
-          docker image prune -f
+  prune:
+    name: Prune old images
+    needs: deploy-frontend
+    uses: ./.github/workflows/pi-prune-images.yml
+    with:
+      keep: 3

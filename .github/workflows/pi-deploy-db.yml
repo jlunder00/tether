@@ -1,4 +1,4 @@
-name: Deploy DB (migrations)
+name: "[Pi] Deploy DB (migrations)"
 
 on:
   push:

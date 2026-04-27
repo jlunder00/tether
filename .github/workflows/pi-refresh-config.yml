@@ -1,4 +1,4 @@
-name: Refresh config (no rebuild)
+name: "[Pi] Refresh config (no rebuild)"
 
 # Triggered when only config/envs/prod/ changes.
 # Writes updated YAML to the Pi and restarts containers — no image rebuild needed.

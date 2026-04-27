@@ -1,11 +1,10 @@
-name: Deploy API
+name: "[Pi] Deploy MCP"
 
 on:
   push:
     branches: [main]
     paths:
-      - 'api/**'
-      - 'db/**'
+      - 'tether_mcp/**'
       - 'config/**'
       - 'Dockerfile'
       - 'requirements.txt'
@@ -23,12 +22,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy-api
+  group: pi-deploy-mcp
   cancel-in-progress: false
 
 jobs:
-  deploy-api:
-    name: Build and deploy API service
+  deploy-mcp:
+    name: Build and deploy MCP service
     runs-on: self-hosted
     steps:
       - name: Pull latest code
@@ -61,7 +60,7 @@ jobs:
           fi
           echo "ref=${REF}" >> $GITHUB_OUTPUT
 
-      - name: Build API image
+      - name: Build MCP image
         env:
           TAG: ${{ steps.version.outputs.tag }}
           PREMIUM_REF: ${{ steps.premium.outputs.ref }}
@@ -83,67 +82,25 @@ jobs:
       - name: Write production config
         env:
           TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
-          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
           TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL }}
-          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL }}
-          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
-          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
-          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL }}
         run: |
           cd /home/toast/tether
           make configure-auth \
-            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
-            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
-            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
-          make configure-google \
-            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
-            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
-            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
-            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
-          make configure-github \
-            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
-            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
-            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
+            TETHER_JWT_SECRET=${TETHER_JWT_SECRET} \
+            TETHER_COOKIE_SECURE=true \
+            TETHER_ALLOWED_ORIGINS=${TETHER_ALLOWED_ORIGINS}
 
-      - name: Run DB migrations
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          cd /home/toast/tether
-          migration_failed=0
-          for db in /home/toast/.tether-config/users/*.db; do
-            if [ -f "$db" ]; then
-              if TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-                   TETHER_DATA_DIR=/home/toast/.tether-config \
-                   docker compose run --rm --no-deps api \
-                     python db/migrate_data_model.py /data/users/$(basename "$db"); then
-                echo "Migrated $db"
-              else
-                echo "ERROR: Migration failed for $db" >&2
-                migration_failed=1
-              fi
-            fi
-          done
-          if [ "$migration_failed" -ne 0 ]; then
-            echo "One or more migrations failed — aborting deploy" >&2
-            exit 1
-          fi
-
-      - name: Restart API service
+      - name: Restart MCP service
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-            docker compose up -d --no-deps api
+            docker compose up -d --no-deps mcp
 
-      - name: Prune old images (keep 3)
-        run: |
-          docker images tether-premium --format "{{.CreatedAt}}\t{{.ID}}\t{{.Tag}}" \
-            | sort -r \
-            | awk 'NR>3 && $3 != "latest" {print $2}' \
-            | xargs -r docker rmi --force 2>/dev/null || true
-          docker image prune -f
+  prune:
+    name: Prune old images
+    needs: deploy-mcp
+    uses: ./.github/workflows/pi-prune-images.yml
+    with:
+      keep: 3

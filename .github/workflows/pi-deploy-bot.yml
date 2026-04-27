@@ -1,14 +1,18 @@
-name: Deploy MCP
+name: "[Pi] Deploy Bot"
 
 on:
   push:
     branches: [main]
     paths:
-      - 'tether_mcp/**'
+      - 'bot/**'
       - 'config/**'
+      - 'prompts/**'
       - 'Dockerfile'
       - 'requirements.txt'
       - 'pyproject.toml'
+  # Triggered by tether-premium when it merges to main.
+  repository_dispatch:
+    types: [premium-updated]
   workflow_dispatch:
     inputs:
       no_cache:
@@ -22,12 +26,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy-mcp
+  group: pi-deploy-bot
   cancel-in-progress: false
 
 jobs:
-  deploy-mcp:
-    name: Build and deploy MCP service
+  deploy-bot:
+    name: Build and deploy bot service
     runs-on: self-hosted
     steps:
       - name: Pull latest code
@@ -49,18 +53,24 @@ jobs:
       - name: Resolve premium ref
         id: premium
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          PREMIUM_REF_PAYLOAD: ${{ github.event.client_payload.premium_ref }}
           TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
         run: |
-          REF=$(git ls-remote \
-            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
-            HEAD | cut -f1 | cut -c1-7)
+          if [ "$EVENT_NAME" = "repository_dispatch" ]; then
+            REF="$PREMIUM_REF_PAYLOAD"
+          else
+            REF=$(git ls-remote \
+              "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+              HEAD | cut -f1 | cut -c1-7)
+          fi
           if [ -z "$REF" ]; then
             echo "ERROR: Failed to resolve tether-premium HEAD ref" >&2
             exit 1
           fi
           echo "ref=${REF}" >> $GITHUB_OUTPUT
 
-      - name: Build MCP image
+      - name: Build bot image
         env:
           TAG: ${{ steps.version.outputs.tag }}
           PREMIUM_REF: ${{ steps.premium.outputs.ref }}
@@ -81,27 +91,25 @@ jobs:
 
       - name: Write production config
         env:
-          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
-          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           cd /home/toast/tether
-          make configure-auth \
-            TETHER_JWT_SECRET=${TETHER_JWT_SECRET} \
-            TETHER_COOKIE_SECURE=true \
-            TETHER_ALLOWED_ORIGINS=${TETHER_ALLOWED_ORIGINS}
+          make configure-telegram \
+            TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN} \
+            TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
 
-      - name: Restart MCP service
+      - name: Restart bot service
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-            docker compose up -d --no-deps mcp
+            docker compose up -d --no-deps bot
 
-      - name: Prune old images (keep 3)
-        run: |
-          docker images tether-premium --format "{{.CreatedAt}}\t{{.ID}}\t{{.Tag}}" \
-            | sort -r \
-            | awk 'NR>3 && $3 != "latest" {print $2}' \
-            | xargs -r docker rmi --force 2>/dev/null || true
-          docker image prune -f
+  prune:
+    name: Prune old images
+    needs: deploy-bot
+    uses: ./.github/workflows/pi-prune-images.yml
+    with:
+      keep: 3

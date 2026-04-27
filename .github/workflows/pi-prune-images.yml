@@ -1,0 +1,35 @@
+name: "[Pi] Prune old images"
+
+on:
+  workflow_call:
+    inputs:
+      keep:
+        description: "Number of most-recent unique image IDs to keep"
+        required: false
+        default: 3
+        type: number
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Number of most-recent unique image IDs to keep"
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    name: Prune tether-premium images
+    runs-on: self-hosted
+    steps:
+      - name: Remove old images
+        env:
+          KEEP: ${{ inputs.keep }}
+        run: |
+          docker images tether-premium --format "{{.ID}}" \
+            | awk '!seen[$0]++' \
+            | tail -n +$((KEEP + 1)) \
+            | xargs -r docker rmi --force 2>/dev/null || true
+          docker image prune -f
