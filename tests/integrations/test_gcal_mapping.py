@@ -161,3 +161,31 @@ def test_map_event_recurrence_id_none_for_regular():
     }
     draft = map_event(raw)
     assert draft.recurrence_id is None
+
+
+def test_map_event_extracts_original_start_time():
+    """Exception instances with originalStartTime populate draft.original_start_time."""
+    from datetime import datetime, timezone
+    raw = {
+        "summary": "Moved exception",
+        "id": "exception-moved",
+        "recurringEventId": "series-master-1",
+        "originalStartTime": {"dateTime": "2026-05-11T09:00:00+00:00"},
+        "start": {"dateTime": "2026-05-11T10:00:00+00:00"},  # moved to 10am
+        "end": {"dateTime": "2026-05-11T10:30:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.original_start_time is not None
+    assert draft.original_start_time == datetime(2026, 5, 11, 9, 0, tzinfo=timezone.utc)
+
+
+def test_map_event_original_start_time_none_for_non_exception():
+    """Regular non-exception events have draft.original_start_time == None."""
+    raw = {
+        "summary": "Regular",
+        "id": "r1",
+        "start": {"dateTime": "2026-04-28T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-28T10:00:00+00:00"},
+    }
+    draft = map_event(raw)
+    assert draft.original_start_time is None

@@ -131,3 +131,26 @@ def test_expand_recurring_count_limited_rrule():
 
     occurrences = expand_recurring(task, window_start, window_end)
     assert len(occurrences) == 2
+
+
+def test_expand_recurring_comma_separated_exdates():
+    """Multiple dates on a single EXDATE line are all excluded (RFC 5545 comma syntax)."""
+    start = datetime(2026, 5, 4, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 4, 9, 30, tzinfo=timezone.utc)
+    # Single EXDATE line with two comma-separated datetimes: May 11 and May 18
+    exdate = "EXDATE;TZID=UTC:20260511T090000Z,20260518T090000Z"
+    task = _make_task("RRULE:FREQ=WEEKLY", start, end, exdates=[exdate])
+
+    window_start = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    window_end = datetime(2026, 5, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+
+    # 4 weekly occurrences (May 4, 11, 18, 25); May 11 and 18 excluded → 2 remain
+    assert len(occurrences) == 2
+    occurrence_dates = {datetime.fromisoformat(occ["start_time"]).date() for occ in occurrences}
+    from datetime import date
+    assert date(2026, 5, 4) in occurrence_dates
+    assert date(2026, 5, 25) in occurrence_dates
+    assert date(2026, 5, 11) not in occurrence_dates
+    assert date(2026, 5, 18) not in occurrence_dates
