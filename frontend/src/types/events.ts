@@ -6,6 +6,9 @@
 //   POST /api/events                    → CalendarEvent  (promote task to event)
 //   PATCH /api/events/:id               → CalendarEvent
 //   DELETE /api/events/:id/time-constraint → void  (demote back to plain task)
+//
+// Note: backend contract uses numeric ids; frontend uses string ids throughout.
+// ID type reconciliation is tracked separately.
 
 export type EventSource = 'tether' | 'google_calendar' | 'ical'
 
@@ -19,4 +22,10 @@ export interface CalendarEvent {
   task_id: string | null  // FK to task if promoted; null for standalone/synced
   anchor_id: string | null
   color: string | null
+  /** True when this event is the master of a recurring series. */
+  is_recurring?: boolean
+  /** True when this event is a synthesized occurrence from an rrule expansion. */
+  is_occurrence?: boolean
+  /** RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO"). Present only on master events. */
+  rrule?: string | null
 }
