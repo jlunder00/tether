@@ -46,14 +46,9 @@ class GoogleCalendarSync(SyncProvider):
         self._pool = pool
 
     async def _get_integration_row(self, integration_id: str) -> dict:
-        """Fetch user_id and access_token for an integration in one query.
-
-        Uses a direct pool acquire (no RLS setup) because the sync worker is a
-        background system process, not a per-user request.  pg.get_conn would
-        call SET LOCAL app.current_user_id only when user_id is supplied; without
-        it RLS on user_integrations hides all rows.
-        """
-        async with self._pool.acquire() as conn:
+        """Fetch user_id and access_token for an integration in one query."""
+        import db.postgres as pg
+        async with pg.get_conn(self._pool) as conn:
             row = await conn.fetchrow(
                 "SELECT user_id, access_token FROM user_integrations WHERE id = $1",
                 _uuid.UUID(integration_id),
