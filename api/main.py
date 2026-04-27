@@ -184,7 +184,9 @@ def create_app(lifespan_override=None) -> FastAPI:
             try:
                 while True:
                     await websocket.receive_text()
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            finally:
                 manager.disconnect(websocket, user_id)
                 if is_admin:
                     manager.disconnect(websocket, "__bot__")
@@ -212,7 +214,9 @@ def create_app(lifespan_override=None) -> FastAPI:
             try:
                 while True:
                     await websocket.receive_text()
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            finally:
                 manager.disconnect(websocket, user_id)
                 if is_admin:
                     manager.disconnect(websocket, "__bot__")
