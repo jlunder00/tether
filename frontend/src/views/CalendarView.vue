@@ -333,8 +333,6 @@ const activeFilterCount = computed(() =>
   activeFilter.value.milestoneIds.size + activeFilter.value.contextNodeIds.size + activeFilter.value.kanbanColumnIds.size
 )
 
-function clearFilters() { activeFilter.value = emptyFilter() }
-
 // Tasks allowed by milestone/context filters (null = no filter active)
 const allowedTaskIds = computed<Set<string> | null>(() => {
   const { milestoneIds, contextNodeIds } = activeFilter.value
