@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch, onMounted, ref } from 'vue'
+import { computed, watch, onMounted, ref, nextTick } from 'vue'
 import { useEventStore } from '../stores/events'
 import { useAnchorStore } from '../stores/anchors'
 import CalendarEventBlock from './CalendarEventBlock.vue'
@@ -101,7 +101,8 @@ function onRecurrenceCancel() {
 
 // --- Drag-to-move (vertical) ---
 
-// draggingEvent tracks the event being dragged and the initial cursor offset
+// draggingEvent tracks the event being dragged and the initial cursor offset.
+// justDragged guards against the browser firing a trailing click after mouseup.
 const draggingEvent = ref<{
   event: CalendarEvent
   startY: number
@@ -110,6 +111,7 @@ const draggingEvent = ref<{
 } | null>(null)
 
 const dragOffsetY = ref(0)
+const justDragged = ref(false)
 
 function onEventMousedown(event: CalendarEvent, mouseEvent: MouseEvent) {
   const top = eventTopPx(event.start_time)
@@ -138,6 +140,9 @@ function onEventMousedown(event: CalendarEvent, mouseEvent: MouseEvent) {
       return
     }
 
+    // Set guard BEFORE clearing draggingEvent so the trailing click is blocked.
+    // Clear it after nextTick once the click event has been processed.
+    justDragged.value = true
     const origStart = new Date(draggingEvent.value.event.start_time)
     const origEnd = new Date(draggingEvent.value.event.end_time)
     const newStart = new Date(origStart.getTime() + deltaMin * 60_000)
@@ -146,6 +151,8 @@ function onEventMousedown(event: CalendarEvent, mouseEvent: MouseEvent) {
     const ev = draggingEvent.value.event
     draggingEvent.value = null
     await handleEventMove(ev, newStart.toISOString(), newEnd.toISOString())
+    await nextTick()
+    justDragged.value = false
   }
 
   window.addEventListener('mousemove', onMove)
@@ -155,7 +162,9 @@ function onEventMousedown(event: CalendarEvent, mouseEvent: MouseEvent) {
 // --- Click-to-create ---
 
 function onTimedAreaClick(e: MouseEvent) {
-  // Ignore if we were dragging
+  // Block click fired immediately after a drag-end (mouseup → click ordering)
+  if (justDragged.value) return
+  // Also block if we're mid-drag (shouldn't happen, but guard anyway)
   if (draggingEvent.value) return
 
   const target = e.currentTarget as HTMLElement
@@ -170,13 +179,19 @@ function onTimedAreaClick(e: MouseEvent) {
   d.setHours(AXIS_START_HOUR, 0, 0, 0)
   d.setMinutes(d.getMinutes() + snappedMin)
 
-  // Format as local ISO (no Z) to preserve intent
+  emit('create-at', toLocalIso(d))
+}
+
+// --- Time formatting helpers ---
+
+/** Format a Date as local-naive ISO (YYYY-MM-DDTHH:MM) — no timezone offset. */
+function toLocalIso(d: Date): string {
   const year = d.getFullYear()
   const mo = String(d.getMonth() + 1).padStart(2, '0')
   const day = String(d.getDate()).padStart(2, '0')
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')
-  emit('create-at', `${year}-${mo}-${day}T${hh}:${mm}`)
+  return `${year}-${mo}-${day}T${hh}:${mm}`
 }
 
 // --- Drop from anchor block (task promotion) ---
@@ -192,11 +207,11 @@ async function onTimedAreaDrop(e: DragEvent) {
   if (!raw) return
   try {
     const data = JSON.parse(raw)
-    // AnchorBlock drag payload: { taskId, fromAnchorId, fromDate }
+    // AnchorBlock drag payload: { taskId, title, fromAnchorId, fromDate }
     // Check for taskId directly (AnchorBlock format) or type:'task' (application/json format)
     const isTask = data.taskId && (data.type === 'task' || data.fromAnchorId !== undefined)
     if (isTask) {
-      // Compute drop time from cursor position
+      // Compute drop time from cursor position — use local ISO to match click-create format
       const target = e.currentTarget as HTMLElement
       const rect = target.getBoundingClientRect()
       const offsetY = e.clientY - rect.top + target.scrollTop
@@ -206,11 +221,12 @@ async function onTimedAreaDrop(e: DragEvent) {
       const d = new Date(props.date + 'T00:00:00')
       d.setHours(AXIS_START_HOUR, 0, 0, 0)
       d.setMinutes(d.getMinutes() + snappedMin)
-      const startISO = d.toISOString()
-      const endISO = new Date(d.getTime() + 30 * 60_000).toISOString()
+      const startISO = toLocalIso(d)
+      const endD = new Date(d.getTime() + 30 * 60_000)
+      const endISO = toLocalIso(endD)
 
       // TODO: if task is recurring, show RecurrenceEditDialog with title "Edit recurring task: move to timeline?"
-      await eventStore.promoteTask(data.taskId, startISO, endISO, data.title ?? 'Task')
+      await eventStore.promoteTask(data.taskId, startISO, endISO, data.title ?? data.taskId)
     }
   } catch {
     // ignore malformed drag data
@@ -318,20 +334,36 @@ function timedEventStyle(event: CalendarEvent) {
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         />
 
-        <!-- Timed events — draggable for vertical move and demote to anchor column -->
+        <!--
+          Timed event wrapper.
+          Layout: an absolute positioned container holds two children:
+            1. A narrow left-edge grip strip — has draggable="true" for HTML5 demote-to-sidebar drag.
+               HTML5 drag suppresses mousemove once started (Chromium/WebKit), so it lives on its
+               own element, separate from the mousedown-based vertical reposition.
+            2. CalendarEventBlock — handles mousedown (vertical reposition) and click (open panel).
+               No draggable attr here so the browser's drag threshold never cancels mousemove.
+        -->
         <div
           v-for="ev in timedEvents"
           :key="ev.id"
-          class="absolute"
+          class="absolute flex"
           :style="{
             top: `${eventTopPx(ev.start_time)}px`,
             left: timedEventStyle(ev).left,
             width: timedEventStyle(ev).width,
+            height: `${eventHeightPx(ev.start_time, ev.end_time)}px`,
           }"
-          draggable="true"
-          @dragstart="(de) => onEventDragstart(ev, de)"
         >
+          <!-- Drag grip (HTML5 demote drag) — narrow left strip -->
+          <div
+            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-white/20 transition-opacity"
+            :title="'Drag to anchor column to un-schedule'"
+            draggable="true"
+            @dragstart.stop="(de) => onEventDragstart(ev, de)"
+          />
+          <!-- Event block body — mousedown for vertical reposition only, no draggable -->
           <CalendarEventBlock
+            class="flex-1 min-w-0"
             :event="ev"
             :top-px="0"
             :height-px="eventHeightPx(ev.start_time, ev.end_time)"

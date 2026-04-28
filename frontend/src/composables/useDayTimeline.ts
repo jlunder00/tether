@@ -24,9 +24,23 @@ export function eventTopPx(startTime: string): number {
   return Math.max(0, minutesFromAxisStart(dt)) * PX_PER_MINUTE
 }
 
+/**
+ * Height of an event block in pixels, clipped to the visible axis window.
+ * Uses raw start position + duration (not end getHours()) so that events
+ * crossing midnight (e.g. 11pm–1am) compute correctly when AXIS_END_HOUR=24.
+ */
 export function eventHeightPx(startTime: string, endTime: string): number {
+  const axisStartMin = 0
+  const axisEndMin = (AXIS_END_HOUR - AXIS_START_HOUR) * 60
+
+  const rawStartMin = minutesFromAxisStart(new Date(startTime))
   const durationMin = (new Date(endTime).getTime() - new Date(startTime).getTime()) / 60_000
-  return Math.max(20, durationMin * PX_PER_MINUTE)
+
+  const clampedStartMin = Math.max(axisStartMin, rawStartMin)
+  // Compute end as start+duration so it works even when endTime wraps past midnight
+  const clampedEndMin = Math.min(axisEndMin, rawStartMin + durationMin)
+  const visibleMin = Math.max(0, clampedEndMin - clampedStartMin)
+  return Math.max(20, visibleMin * PX_PER_MINUTE)
 }
 
 export function anchorBandTopPx(anchor: Anchor, date: Date): number {

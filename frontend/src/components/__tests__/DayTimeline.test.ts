@@ -8,6 +8,7 @@ import {
   anchorBandTopPx,
   anchorBandHeightPx,
   AXIS_START_HOUR,
+  AXIS_END_HOUR,
   PX_PER_MINUTE,
 } from '../../composables/useDayTimeline'
 import type { Anchor } from '../../stores/anchors'
@@ -163,6 +164,31 @@ describe('eventHeightPx', () => {
     // 1-minute event would be 1.5px without clamping
     expect(eventHeightPx('2024-06-10T09:00:00', '2024-06-10T09:01:00')).toBe(20)
   })
+
+  it('clips start to axis start for events beginning before 6am', () => {
+    // Event 5am–7am: only 60min visible (6–7am), not 120min
+    const d5am = new Date('2024-06-10T00:00:00')
+    d5am.setHours(AXIS_START_HOUR - 1, 0, 0, 0)
+    const d7am = new Date('2024-06-10T00:00:00')
+    d7am.setHours(AXIS_START_HOUR + 1, 0, 0, 0)
+    const to5 = `${d5am.getFullYear()}-${String(d5am.getMonth()+1).padStart(2,'0')}-${String(d5am.getDate()).padStart(2,'0')}T${String(d5am.getHours()).padStart(2,'0')}:00:00`
+    const to7 = `${d7am.getFullYear()}-${String(d7am.getMonth()+1).padStart(2,'0')}-${String(d7am.getDate()).padStart(2,'0')}T${String(d7am.getHours()).padStart(2,'0')}:00:00`
+    expect(eventHeightPx(to5, to7)).toBe(60 * PX_PER_MINUTE)
+  })
+
+  it('clips end to axis end for events ending past midnight', () => {
+    // Build times relative to AXIS_END_HOUR (midnight = 24)
+    // 23:00 – 25:00 (conceptually); we use AXIS_END_HOUR - 1 to AXIS_END_HOUR + 1
+    const d23 = new Date('2024-06-10T00:00:00')
+    d23.setHours(AXIS_END_HOUR - 1, 0, 0, 0)
+    // Simulate a time past axis end by adding 2 hours of ms after the end boundary
+    const pastMidnight = new Date(d23.getTime() + 2 * 60 * 60_000)
+    const to23 = `${d23.getFullYear()}-${String(d23.getMonth()+1).padStart(2,'0')}-${String(d23.getDate()).padStart(2,'0')}T${String(d23.getHours()).padStart(2,'0')}:00:00`
+    // past midnight ISO from Date object
+    const toPast = pastMidnight.toISOString()
+    // Only 60 visible minutes (23:00–24:00)
+    expect(eventHeightPx(to23, toPast)).toBe(60 * PX_PER_MINUTE)
+  })
 })
 
 describe('anchorBandTopPx', () => {
@@ -275,11 +301,28 @@ describe('DayTimeline component', () => {
     await expect(timedArea.trigger('drop')).resolves.not.toThrow()
   })
 
-  it('event blocks are draggable (have draggable attribute)', async () => {
+  it('grip strip has draggable attribute; CalendarEventBlock body does not', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
-    // The timed event wrapper should have draggable="true"
-    const draggableBlocks = wrapper.findAll('[draggable="true"]')
-    expect(draggableBlocks.length).toBeGreaterThan(0)
+    // The grip element (left-edge strip) should have draggable="true"
+    const draggableGrips = wrapper.findAll('[draggable="true"]')
+    expect(draggableGrips.length).toBeGreaterThan(0)
+    // But the CalendarEventBlock rendered inside the event container should NOT be the draggable element
+    // (draggable is on the grip, not on the CalendarEventBlock absolute div)
+    for (const grip of draggableGrips) {
+      // Each grip is the narrow left-strip, it should not contain the event title text directly
+      expect(grip.text()).not.toContain('Team standup')
+    }
+  })
+
+  it('create-at emit uses local ISO format (no Z suffix)', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    await timedArea.trigger('click', { offsetY: 0 })
+    const emitted = wrapper.emitted('create-at')
+    expect(emitted).toBeTruthy()
+    // Should be local-naive: YYYY-MM-DDTHH:MM (no Z, no +offset)
+    expect(emitted![0][0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
   })
 })

@@ -157,7 +157,7 @@ async function onAnchorColumnDrop(e: DragEvent) {
     <template v-else>
       <div v-if="planStore.loading" class="text-white/40">Loading...</div>
       <!-- Two-column: anchor blocks left, day timeline right -->
-      <div v-else class="grid grid-cols-[1fr,320px] gap-4 items-start">
+      <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
         <!-- Left: anchor blocks -->
         <div
           class="flex flex-col gap-2"

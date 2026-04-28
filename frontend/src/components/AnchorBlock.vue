@@ -114,6 +114,7 @@ function onDragStart(evt: DragEvent, task: Task) {
   evt.dataTransfer!.effectAllowed = 'move'
   evt.dataTransfer!.setData('text/plain', JSON.stringify({
     taskId: task.id,
+    title: task.text,
     fromAnchorId: props.anchorId,
     fromDate: effectiveDate.value,
   }))
