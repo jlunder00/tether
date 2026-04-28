@@ -75,6 +75,13 @@ async def lifespan(app):
     if _startup_os.environ.get("ENVIRONMENT") == "production":
         _check_jwt_secret(cfg.JWT_SECRET)
     async with _pool_lifespan(app):
+        # Initialize credentials vault if key is configured
+        from api.credentials_vault import CredentialsVault
+        if cfg.VAULT_KEY:
+            app.state.vault = CredentialsVault(app.state.pool, cfg.VAULT_KEY)
+        else:
+            app.state.vault = None
+
         task = asyncio.create_task(_expiry_loop(app))
         yield
         task.cancel()

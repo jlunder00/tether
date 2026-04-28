@@ -1,6 +1,6 @@
-"""Google Calendar integration routes.
+"""Integration routes — Google Calendar + Anthropic OAuth vault.
 
-Endpoints (all under /api/integrations/google/):
+Google Calendar endpoints (all under /api/integrations/google/):
   GET  /connect      — initiate OAuth, redirect to Google consent
   GET  /callback     — exchange code, store tokens (unauthenticated — comes from Google)
   POST /disconnect   — revoke tokens + delete integration
@@ -8,10 +8,24 @@ Endpoints (all under /api/integrations/google/):
   POST /webhook      — receive Google push notifications (must return 200 fast)
   GET  /calendars    — list user's calendars from Google API
   PATCH /calendars   — update selected calendar IDs in metadata
+
+Anthropic OAuth vault endpoints:
+  POST   /integrations/anthropic/start    — spawn claude setup-token, return auth URL
+  POST   /integrations/anthropic/complete — submit code, persist credentials
+  DELETE /integrations/anthropic          — disconnect (delete credentials blob)
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import os
+import pathlib
+import re
+import shutil
+import tempfile
+import time
+import urllib.parse
 
 import asyncpg
 import httpx
@@ -41,6 +55,37 @@ router = APIRouter()
 _PROVIDER = "google_calendar"
 _GCAL_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calendarList"
 
+# ---------------------------------------------------------------------------
+# Anthropic OAuth vault — module-level state
+# ---------------------------------------------------------------------------
+
+# Registry of pending claude setup-token processes keyed by user_id.
+# Entries older than _SETUP_TTL seconds are swept on each /start call.
+_pending_setups: dict[str, dict] = {}
+
+# Per-user locks to prevent concurrent /start races.
+_start_locks: dict[str, asyncio.Lock] = {}
+
+_SETUP_TTL = 600  # seconds
+_ANTHROPIC_URL_RE = re.compile(r"https://\S+")
+_ANTHROPIC_URL_SCHEME = "https"
+_ANTHROPIC_URL_NETLOC = "console.anthropic.com"
+
+
+def _extract_anthropic_url(text: str) -> str | None:
+    """Extract and strictly validate the Anthropic auth URL from subprocess output.
+
+    Uses urlparse to check scheme and netloc exactly — prevents substring-match
+    bypasses where 'console.anthropic.com' appears at an arbitrary position in a
+    crafted URL (e.g. as a query parameter).
+    """
+    for match in _ANTHROPIC_URL_RE.finditer(text):
+        candidate = match.group(0).rstrip(".,;)")  # strip trailing punctuation
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.scheme == _ANTHROPIC_URL_SCHEME and parsed.netloc == _ANTHROPIC_URL_NETLOC:
+            return candidate
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -48,6 +93,47 @@ _GCAL_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calen
 
 class CalendarPatchBody(BaseModel):
     calendar_ids: list[str]
+
+
+class AnthropicCompleteBody(BaseModel):
+    code: str
+
+
+# ---------------------------------------------------------------------------
+# Anthropic OAuth helpers
+# ---------------------------------------------------------------------------
+
+async def _reap_proc(proc) -> None:
+    """Kill a subprocess and await it to release transport/pipe FDs."""
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        await proc.wait()
+    except Exception:
+        pass
+
+
+async def _sweep_expired_setups() -> None:
+    """Kill and remove any pending setups older than _SETUP_TTL seconds.
+
+    Each killed process is reaped via an asyncio task so pipe FDs are released
+    without blocking the current request.
+    """
+    now = time.time()
+    expired_users = [
+        uid for uid, entry in list(_pending_setups.items())
+        if now - entry["started_at"] > _SETUP_TTL
+    ]
+    for uid in expired_users:
+        entry = _pending_setups.pop(uid)
+        proc = entry.get("proc")
+        if proc is not None:
+            asyncio.create_task(_reap_proc(proc))
+        temp_dir = entry.get("temp_dir")
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -345,3 +431,170 @@ async def patch_calendars(
             "selected_calendar_ids", body.calendar_ids
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# 8. GET /integrations/anthropic — connection status
+# ---------------------------------------------------------------------------
+
+@router.get("/integrations/anthropic")
+async def anthropic_status(
+    request: Request,
+    _auth: dict = Depends(auth_dependency),
+):
+    """Return whether the authenticated user has Anthropic credentials stored."""
+    user_id = request.state.user_id
+    vault = request.app.state.vault
+    connected = await vault.is_connected(user_id) if vault is not None else False
+    return {"connected": connected}
+
+
+# ---------------------------------------------------------------------------
+# 9. POST /integrations/anthropic/start
+# ---------------------------------------------------------------------------
+
+@router.post("/integrations/anthropic/start")
+async def anthropic_start(
+    request: Request,
+    _auth: dict = Depends(auth_dependency),
+):
+    """Spawn `claude setup-token`, scrape the auth URL, return it to the client."""
+    user_id = request.state.user_id
+
+    await _sweep_expired_setups()
+
+    # Serialize concurrent /start calls per user to prevent subprocess leaks.
+    lock = _start_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        return await _anthropic_start_locked(request, user_id)
+
+
+async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
+    """Inner /start logic — called while holding the per-user _start_locks entry."""
+    if user_id in _pending_setups:
+        old = _pending_setups.pop(user_id)
+        asyncio.create_task(_reap_proc(old["proc"]))
+        shutil.rmtree(old.get("temp_dir", ""), ignore_errors=True)
+
+    temp_dir = tempfile.mkdtemp()
+    env_override = {**os.environ, "CLAUDE_CONFIG_DIR": temp_dir}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "setup-token",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE,
+            env=env_override,
+        )
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.exception("Failed to spawn claude setup-token: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to spawn setup process")
+
+    async def _read_stream(stream):
+        try:
+            return await asyncio.wait_for(stream.read(65536), timeout=10.0)
+        except asyncio.TimeoutError:
+            return b""
+
+    stdout_bytes, stderr_bytes = await asyncio.gather(
+        _read_stream(proc.stdout),
+        _read_stream(proc.stderr),
+    )
+
+    combined = stdout_bytes.decode(errors="replace") + stderr_bytes.decode(errors="replace")
+    url = _extract_anthropic_url(combined)
+
+    if url is None:
+        proc.kill()
+        await proc.wait()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=502, detail="Auth URL not found in claude output")
+
+    _pending_setups[user_id] = {
+        "proc": proc,
+        "temp_dir": temp_dir,
+        "started_at": time.time(),
+    }
+
+    return {"url": url, "expires_in": _SETUP_TTL}
+
+
+# ---------------------------------------------------------------------------
+# 9. POST /integrations/anthropic/complete
+# ---------------------------------------------------------------------------
+
+@router.post("/integrations/anthropic/complete")
+async def anthropic_complete(
+    request: Request,
+    body: AnthropicCompleteBody,
+    _auth: dict = Depends(auth_dependency),
+):
+    """Submit the OAuth code to the waiting subprocess and persist credentials."""
+    user_id = request.state.user_id
+
+    entry = _pending_setups.get(user_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
+
+    proc = entry["proc"]
+    temp_dir = entry["temp_dir"]
+
+    # Write code to subprocess stdin — guard against broken pipe if process already exited.
+    try:
+        proc.stdin.write((body.code + "\n").encode())
+        await asyncio.wait_for(proc.stdin.drain(), timeout=5.0)
+    except (BrokenPipeError, ConnectionResetError, asyncio.TimeoutError, OSError) as exc:
+        _pending_setups.pop(user_id, None)
+        asyncio.create_task(_reap_proc(proc))
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.warning("anthropic_complete: stdin write failed (%s)", exc)
+        raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=30.0)
+    except asyncio.TimeoutError:
+        _pending_setups.pop(user_id, None)
+        asyncio.create_task(_reap_proc(proc))
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=504, detail="Setup process timed out")
+
+    if proc.returncode != 0:
+        _pending_setups.pop(user_id, None)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return {"ok": False, "error": "setup failed"}
+
+    creds_file = pathlib.Path(temp_dir) / ".credentials.json"
+    if not creds_file.exists():
+        _pending_setups.pop(user_id, None)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return {"ok": False, "error": "credentials file not found"}
+
+    blob_dict = json.loads(creds_file.read_text())
+
+    vault = request.app.state.vault
+    if vault is not None:
+        await vault.store_initial(user_id, blob_dict)
+
+    _pending_setups.pop(user_id, None)
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 10. DELETE /integrations/anthropic
+# ---------------------------------------------------------------------------
+
+@router.delete("/integrations/anthropic")
+async def anthropic_disconnect(
+    request: Request,
+    _auth: dict = Depends(auth_dependency),
+):
+    """Delete the Anthropic credentials blob for the authenticated user."""
+    user_id = request.state.user_id
+    vault = request.app.state.vault
+    if vault is not None:
+        await vault.disconnect(user_id)
+    return {"ok": True}

@@ -167,6 +167,55 @@ async def delete_tasks_by_source(
         return 0
 
 
+_ANTHROPIC_PROVIDER = "anthropic"
+
+
+async def get_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+) -> bytes | None:
+    """Return raw credentials_blob bytes for 'anthropic' provider, or None."""
+    row = await conn.fetchrow(
+        "SELECT credentials_blob FROM user_integrations"
+        " WHERE user_id = $1 AND provider = $2",
+        user_id, _ANTHROPIC_PROVIDER,
+    )
+    if row is None:
+        return None
+    return row["credentials_blob"]
+
+
+async def store_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+    blob: bytes,
+) -> None:
+    """Upsert anthropic row setting credentials_blob.
+
+    Uses ON CONFLICT (user_id, provider) to safely insert-or-update.
+    """
+    await conn.execute(
+        """
+        INSERT INTO user_integrations (user_id, provider, credentials_blob, enabled)
+        VALUES ($1, $2, $3, true)
+        ON CONFLICT (user_id, provider) DO UPDATE SET
+            credentials_blob = EXCLUDED.credentials_blob
+        """,
+        user_id, _ANTHROPIC_PROVIDER, blob,
+    )
+
+
+async def delete_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+) -> None:
+    """DELETE the anthropic integration row for user_id."""
+    await conn.execute(
+        "DELETE FROM user_integrations WHERE user_id = $1 AND provider = $2",
+        user_id, _ANTHROPIC_PROVIDER,
+    )
+
+
 async def soft_delete_task_by_external_id(
     conn: asyncpg.Connection,
     user_id: str,
