@@ -86,6 +86,31 @@ def _extract_recurrence(raw: dict) -> tuple[str | None, list[str]]:
     return rrule, exdate_lines
 
 
+def _prepend_dtstart_tzid(rrule: str, start_dt: datetime, tzid: str) -> str:
+    """Prepend a DTSTART;TZID line to an RRULE string.
+
+    This preserves wall-clock time semantics across DST transitions. Without it,
+    dateutil's rrulestr anchors expansion at UTC and a "9am Eastern" winter event
+    becomes "10am Eastern" (14:00 UTC) after DST springs forward.
+
+    The embedded DTSTART overrides the dtstart= keyword argument in rrulestr()
+    calls, so expand_recurring() picks it up automatically.
+
+    Example output:
+        DTSTART;TZID=America/New_York:20260209T090000
+        RRULE:FREQ=WEEKLY
+    """
+    import zoneinfo
+    try:
+        tz = zoneinfo.ZoneInfo(tzid)
+    except (KeyError, zoneinfo.ZoneInfoNotFoundError):
+        # Unknown IANA name — fall back to bare RRULE (no DST correction)
+        return rrule
+    local_dt = start_dt.astimezone(tz)
+    dtstart_line = f"DTSTART;TZID={tzid}:{local_dt.strftime('%Y%m%dT%H%M%S')}"
+    return f"{dtstart_line}\n{rrule}"
+
+
 def map_event(raw: dict) -> TaskDraft:
     """Convert a raw Google Calendar event dict to a TaskDraft.
 
@@ -116,6 +141,13 @@ def map_event(raw: dict) -> TaskDraft:
     source_status = "cancelled" if raw.get("status") == "cancelled" else None
 
     rrule, exdates = _extract_recurrence(raw)
+    # Embed DTSTART;TZID in the stored rrule so expand_recurring() uses wall-clock
+    # semantics and produces the correct time after DST transitions.
+    # Only recurring master events (rrule set, no recurrence_id) carry a timeZone.
+    tz_id: str | None = raw.get("start", {}).get("timeZone")
+    if rrule and tz_id and start_time:
+        rrule = _prepend_dtstart_tzid(rrule, start_time, tz_id)
+
     recurrence_id: str | None = raw.get("recurringEventId")
     original_start_time = _parse_dt(raw.get("originalStartTime"))
 

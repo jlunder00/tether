@@ -1262,12 +1262,23 @@ async def update_event_time(
     event_uuid: str,
     start_time: str,
     end_time: str,
+    original_start_time: str | None = None,
 ) -> dict | None:
     """Reposition a calendar event to a new time slot.
 
     Only updates tasks that already have start_time set (i.e. are promoted events).
     Returns CalendarEvent-shaped dict, or None if not found / not an event.
+
+    For recurring events (rrule IS NOT NULL), pass original_start_time (the
+    occurrence being dragged) to apply a delta shift that preserves the recurrence
+    anchor.  Without it the master start_time is set directly to start_time, which
+    is correct for non-recurring single events.
     """
+    if original_start_time is not None:
+        return await _update_event_time_all(
+            conn, event_uuid, start_time, end_time, original_start_time
+        )
+
     row = await conn.fetchrow(
         """
         UPDATE tasks
@@ -1479,3 +1490,67 @@ async def patch_recurring_this_and_future(
         )
 
     return _row_to_event(new_row, is_recurring=True, is_occurrence=False) if new_row else None
+
+
+async def _update_event_time_all(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    start_time: str,
+    end_time: str,
+    original_start_time: str | None,
+) -> dict | None:
+    """Shift an entire recurring series by the delta between the dragged occurrence
+    and its new position.
+
+    Logic:
+      delta         = new_start − original_start_time (the occurrence being dragged)
+      new_master    = master.start_time + delta
+      new_master_end= master.end_time   + delta  (preserves duration)
+
+    This keeps the recurrence anchor on its original calendar date while moving
+    the wall-clock time — so FREQ=WEEKLY remains weekly from the original weekday.
+
+    Note: if the stored rrule contains an embedded DTSTART;TZID line (added by
+    the GCal mapping layer for DST-correctness), that line is NOT updated here.
+    The UTC start_time is the authoritative anchor for expand_recurring(); the
+    embedded DTSTART is only consulted when the rrule is re-parsed by rrulestr.
+    A full re-sync from Google Calendar will re-embed the correct DTSTART after
+    scope=all moves. For tether-native recurring events (no DTSTART;TZID), this
+    is a non-issue.
+    """
+    if original_start_time is None:
+        raise ValueError("original_start_time is required for scope='all' on a recurring event")
+
+    occ_start_dt = _parse_ts(original_start_time)
+    new_start_dt = _parse_ts(start_time)
+    new_end_dt = _parse_ts(end_time)
+    delta = new_start_dt - occ_start_dt
+
+    master = await conn.fetchrow(
+        """
+        SELECT start_time, end_time
+        FROM tasks
+        WHERE uuid = $1
+          AND start_time IS NOT NULL
+        """,
+        _uuid.UUID(event_uuid),
+    )
+    if not master:
+        return None
+
+    new_master_start = master["start_time"] + delta
+    new_master_end = (master["end_time"] + delta) if master["end_time"] else new_end_dt
+
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1,
+            end_time   = $2,
+            version    = version + 1
+        WHERE uuid = $3
+          AND start_time IS NOT NULL
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id, context_subject
+        """,
+        new_master_start, new_master_end, _uuid.UUID(event_uuid),
+    )
+    return _row_to_event(row) if row else None

@@ -195,6 +195,62 @@ def test_expand_recurring_naive_dtstart_aware_window_does_not_raise():
     assert len(occurrences) == 4
 
 
+# ---------------------------------------------------------------------------
+# DST handling — recurring events must honour wall-clock time after DST change
+# ---------------------------------------------------------------------------
+
+def test_recurring_event_from_gcal_expands_correctly_after_dst():
+    """A GCal recurring event created in winter must show 9am EDT post-DST.
+
+    Regression for: events fetched from Google Calendar display 1 hour off after DST.
+
+    Root cause (unfixed): map_event stores start_time as UTC and the RRULE without a
+    DTSTART;TZID prefix. expand_recurring then anchors weekly expansion at UTC 14:00
+    (9am EST), producing 14:00 UTC in summer = 10am EDT — 1 hour late.
+
+    Fix: map_event embeds DTSTART;TZID=America/New_York in the stored rrule so
+    expand_recurring uses wall-clock semantics.
+    """
+    from integrations.google_calendar.mapping import map_event as _map_event
+
+    raw = {
+        "id": "gcal-dst-regression",
+        "summary": "Weekly 9am Eastern",
+        # Winter: 9am EST = 14:00 UTC.  After DST: 9am EDT = 13:00 UTC.
+        "start": {"dateTime": "2026-02-09T09:00:00-05:00", "timeZone": "America/New_York"},
+        "end":   {"dateTime": "2026-02-09T10:00:00-05:00", "timeZone": "America/New_York"},
+        "recurrence": ["RRULE:FREQ=WEEKLY"],
+    }
+    draft = _map_event(raw)
+
+    task = {
+        "id": "uuid-dst-test",
+        "title": draft.title,
+        "start_time": draft.start_time.isoformat(),
+        "end_time": draft.end_time.isoformat(),
+        "rrule": draft.rrule,
+        "exdates": draft.exdates,
+        "source": draft.source,
+        "external_id": draft.external_id,
+        "anchor_id": None,
+        "is_recurring": True,
+        "is_occurrence": False,
+    }
+
+    # April 6 is well past DST switch (US clocks sprang forward March 8, 2026)
+    window_start = datetime(2026, 4, 6, tzinfo=timezone.utc)
+    window_end   = datetime(2026, 4, 6, 23, 59, tzinfo=timezone.utc)
+
+    occurrences = expand_recurring(task, window_start, window_end)
+
+    assert len(occurrences) == 1, f"Expected 1 occurrence, got {len(occurrences)}"
+    occ_utc = datetime.fromisoformat(occurrences[0]["start_time"]).astimezone(timezone.utc)
+    assert occ_utc.hour == 13, (
+        f"Expected 9am EDT = 13:00 UTC post-DST; got UTC hour {occ_utc.hour} "
+        f"(14 would mean DST not applied — 10am EDT instead of 9am)"
+    )
+
+
 def test_expand_recurring_all_day_exdate_suppresses_occurrence():
     """EXDATE with bare date token (all-day, no time) suppresses the matching occurrence.
 
