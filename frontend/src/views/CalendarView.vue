@@ -4,9 +4,16 @@ import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
+import { useKanbanStore } from '../stores/kanban'
+import { useContextStore } from '../stores/context'
 import { useCalendarFocus } from '../composables/useCalendarFocus'
 import { useSlideOver } from '../composables/useSlideOver'
 import CalendarEventBlock from '../components/CalendarEventBlock.vue'
+import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
+import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
+import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
+import { resolveEventColor } from '../composables/useColorResolver'
+import { computeOverlapLayout, computeOverlapBands, type EventLayout, type OverlapBand } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
@@ -14,6 +21,8 @@ const anchorStore = useAnchorStore()
 const eventStore = useEventStore()
 const planStore = usePlanStore()
 const milestoneStore = useMilestoneStore()
+const kanbanStore = useKanbanStore()
+const contextStore = useContextStore()
 const { focusedDay, setFocusedDay } = useCalendarFocus()
 const { push: pushPanel } = useSlideOver()
 
@@ -51,9 +60,63 @@ interface DragState {
 }
 const draggingEvent = ref<DragState | null>(null)
 
+const pendingRecurrence = ref<PendingRecurrence>(null)
+
+const recurrenceDialogMode = computed<'event' | 'task'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'event'
+  return p.kind.startsWith('task') ? 'task' : 'event'
+})
+
+const recurrenceDialogAction = computed<'edit' | 'delete' | 'move'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'edit'
+  if (p.kind.endsWith('delete')) return 'delete'
+  if (p.kind.endsWith('move')) return 'move'
+  return 'edit'
+})
+
+async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
+  const pending = pendingRecurrence.value
+  pendingRecurrence.value = null
+  if (!pending) return
+
+  if (pending.kind === 'event-move') {
+    await eventStore.moveEvent(pending.eventId, pending.startTime, pending.endTime, scope, pending.originalStartTime)
+  } else if (pending.kind === 'event-edit') {
+    // Apply patch with scope — PATCH /api/events/:id
+    try {
+      await fetch(`/api/events/${pending.eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...pending.patch, scope, original_start_time: pending.patch.original_start_time }),
+      })
+    } catch { /* ignore */ }
+  } else if (pending.kind === 'event-delete') {
+    await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
+  } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {
+    // TODO: wire recurring task scope API when repeating tasks backend ships
+  }
+}
+
+function onRecurrenceScopeCancel() {
+  pendingRecurrence.value = null
+}
+
+// Distinguish click-as-open from click-and-drag-to-move. A bare click triggers
+// mousedown→mouseup with no movement; without a threshold, mouseup commits a
+// no-op move that still PATCHes the event (and triggers a backend round-trip).
+const DRAG_THRESHOLD_PX = 5
+let dragStartX = 0
+let dragStartY = 0
+let dragIntentConfirmed = false
+
 function onEventMousedown(e: MouseEvent, event: CalendarEvent) {
   e.stopPropagation()
   const colEl = (e.target as HTMLElement).closest('[data-day-col]') as HTMLElement | null
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragIntentConfirmed = false
   draggingEvent.value = {
     eventId: event.id,
     originalStart: event.start_time,
@@ -92,6 +155,12 @@ function onWindowMousemove(e: MouseEvent) {
     return
   }
   if (draggingEvent.value) {
+    if (!dragIntentConfirmed) {
+      const dx = e.clientX - dragStartX
+      const dy = e.clientY - dragStartY
+      if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD_PX) return
+      dragIntentConfirmed = true
+    }
     // Update ghost position — track cursor Y relative to column
     if (draggingEvent.value.columnRect) {
       draggingEvent.value.currentTop = e.clientY - draggingEvent.value.columnRect.top
@@ -115,8 +184,15 @@ async function onWindowMouseup(e: MouseEvent) {
 
   if (draggingEvent.value) {
     const state = draggingEvent.value
+    const wasConfirmedDrag = dragIntentConfirmed
     draggingEvent.value = null
+    dragIntentConfirmed = false
     document.body.style.userSelect = ''
+
+    // Click without drag — bail. The block's own @click handler opens the
+    // event panel. Without this guard, a plain click commits a no-op move
+    // that still fires a PATCH.
+    if (!wasConfirmedDrag) return
 
     // Find which day column the mouse is over
     const el = document.elementFromPoint(e.clientX, e.clientY)
@@ -141,6 +217,21 @@ async function onWindowMouseup(e: MouseEvent) {
     const newStart = new Date(dayStr + 'T00:00:00')
     newStart.setHours(hour, minute, 0, 0)
     const newEnd = new Date(newStart.getTime() + durationMs)
+
+    // Recurring occurrence — defer commit until the user picks an edit scope.
+    // Backend (PR #219) requires {scope, original_start_time} to know whether
+    // to EXDATE this instance, split the series, or move the master.
+    if (existing.is_occurrence) {
+      pendingRecurrence.value = {
+        kind: 'event-move',
+        eventId: state.eventId,
+        startTime: newStart.toISOString(),
+        endTime: newEnd.toISOString(),
+        originalStartTime: state.originalStart,
+      }
+      return
+    }
+
     await eventStore.moveEvent(state.eventId, newStart.toISOString(), newEnd.toISOString())
     return
   }
@@ -192,12 +283,18 @@ onMounted(() => {
   anchorStore.fetchAnchors()
   planStore.fetchPlan(focusedDay.value)
   milestoneStore.fetchAll()
+  kanbanStore.fetchColumns()
+  contextStore.fetchRootNodes().catch(() => {})
+  document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
   loadEvents()
 })
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', onWindowMousemove)
   window.removeEventListener('mouseup', onWindowMouseup)
+  document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
 })
 
 // ─── Week date range ──────────────────────────────────────────
@@ -313,56 +410,146 @@ const END_HOUR = 24
 
 const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR + i)
 
-// ─── Milestone filtering ──────────────────────────────────────
+// ─── Filter state ─────────────────────────────────────────────
 const filterOpen = ref(false)
-const selectedMilestoneIds = ref<Set<string>>(new Set())
+interface CalendarFilter {
+  contextNodeIds: Set<string>
+  anchorIds: Set<string>
+  kanbanColumnIds: Set<string>
+}
+const emptyFilter = (): CalendarFilter => ({
+  contextNodeIds: new Set(),
+  anchorIds: new Set(),
+  kanbanColumnIds: new Set(),
+})
+const activeFilter = ref<CalendarFilter>(emptyFilter())
+const activeFilterCount = computed(() =>
+  activeFilter.value.contextNodeIds.size + activeFilter.value.anchorIds.size + activeFilter.value.kanbanColumnIds.size
+)
 
-function toggleMilestoneFilter(id: string) {
-  const s = new Set(selectedMilestoneIds.value)
-  if (s.has(id)) s.delete(id)
-  else s.add(id)
-  selectedMilestoneIds.value = s
+// Expand a set of context node ids into the union of their subtrees (over the
+// nodes already loaded in the store). Selecting a parent should match events
+// tagged with any descendant.
+function expandSubtree(ids: Set<string>): Set<string> {
+  const result = new Set<string>(ids)
+  const stack = [...ids]
+  const allNodes = Object.values(contextStore.nodes)
+  while (stack.length) {
+    const id = stack.pop()!
+    for (const n of allNodes) {
+      if (n.parent_id === id && !result.has(n.id)) {
+        result.add(n.id)
+        stack.push(n.id)
+      }
+    }
+  }
+  return result
 }
 
-function clearFilters() {
-  selectedMilestoneIds.value = new Set()
+// Anchors define disjoint daily time windows; an event "belongs to" the latest
+// anchor whose time is ≤ the event's local time. Returns the anchor id or null.
+function anchorForEventTime(ev: CalendarEvent): string | null {
+  if (!anchorStore.anchors.length) return null
+  const d = new Date(ev.start_time)
+  const evMin = d.getHours() * 60 + d.getMinutes()
+  const sorted = [...anchorStore.anchors].sort((a, b) => a.time.localeCompare(b.time))
+  let active: Anchor | null = null
+  for (const a of sorted) {
+    const [h, m] = a.time.split(':').map(Number)
+    const aMin = (h || 0) * 60 + (m || 0)
+    if (aMin <= evMin) active = a
+    else break
+  }
+  return active?.id ?? null
 }
 
-const activeFilterCount = computed(() => selectedMilestoneIds.value.size)
-
-// Tasks allowed by the filter (or all tasks if no filter active)
+// Tasks allowed by context/milestone filter (null = no context filter active)
 const allowedTaskIds = computed<Set<string> | null>(() => {
-  if (selectedMilestoneIds.value.size === 0) return null
+  const { contextNodeIds } = activeFilter.value
+  if (contextNodeIds.size === 0) return null
   const ids = new Set<string>()
+  const expandedNodeIds = expandSubtree(contextNodeIds)
+
+  // Milestone nodes (node_type === 'milestone') own task_ids directly via the
+  // milestone store; selecting them should pull in those tasks.
   for (const m of milestoneStore.all) {
-    if (selectedMilestoneIds.value.has(m.id)) {
-      for (const tid of m.task_ids) ids.add(tid)
+    if (expandedNodeIds.has(m.id)) for (const tid of m.task_ids) ids.add(tid)
+  }
+
+  // Context nodes match events by context_subject (name). Duplicate-named nodes
+  // merge filter behavior — predictable rather than silently dropping one.
+  const allowedNames = new Set<string>()
+  for (const node of Object.values(contextStore.nodes)) {
+    if (expandedNodeIds.has(node.id)) allowedNames.add(node.name)
+  }
+  for (const ev of eventStore.events) {
+    if (ev.context_subject && allowedNames.has(ev.context_subject) && ev.task_id) {
+      ids.add(ev.task_id)
     }
   }
   return ids
 })
 
+// ─── Click-away to close filter ───────────────────────────────
+function onDocumentClick(e: MouseEvent) {
+  if (!filterOpen.value) return
+  const panel = document.getElementById('calendar-filter-panel')
+  const button = document.getElementById('calendar-filter-button')
+  if (!panel?.contains(e.target as Node) && !button?.contains(e.target as Node)) {
+    filterOpen.value = false
+  }
+}
+
+// Escape closes the filter regardless of focus (the panel's own keydown
+// handler only fires when the panel is focused, which it isn't on open).
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (filterOpen.value && e.key === 'Escape') filterOpen.value = false
+}
+
 // ─── Events mapped per day (with filter) ─────────────────────
 const filteredEventsByDay = computed(() => {
   const allowed = allowedTaskIds.value
+  const { anchorIds } = activeFilter.value
   const map: Record<string, CalendarEvent[]> = {}
   for (const ev of eventStore.events) {
     const dayKey = ev.start_time.slice(0, 10)
     if (!map[dayKey]) map[dayKey] = []
+
+    // Context/milestone filter
     if (allowed !== null) {
-      // Only include events linked to an allowed task; exclude unlinked standalone events when filter active
       if (ev.task_id === null || !allowed.has(ev.task_id)) continue
     }
+
+    // Anchor filter: map event's local start time to an anchor; skip if not in selected set
+    if (anchorIds.size > 0) {
+      const resolvedAnchor = anchorForEventTime(ev)
+      if (resolvedAnchor === null || !anchorIds.has(resolvedAnchor)) continue
+    }
+
+    // Kanban filter: match via task_id → column not yet available without a task→column index.
+    // The kanban store tracks columns but not task↔column assignments directly.
+    // Skipping kanban filter here until a task→column index is exposed.
+    // TODO: wire kanban column filter once task store exposes column_id
+
     map[dayKey].push(ev)
   }
   return map
 })
 
-// For the week view: only build the map over the visible 7 days
+// For the week view: only timed (non-all-day) events per day
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = filteredEventsByDay.value[key] ?? []
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => !ev.is_all_day)
+  }
+  return map
+})
+
+// All-day events per day (rendered in the band above the timed grid)
+const allDayEventsByDay = computed(() => {
+  const map: Record<string, CalendarEvent[]> = {}
+  for (const key of dayKeys.value) {
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => ev.is_all_day)
   }
   return map
 })
@@ -391,10 +578,39 @@ function eventHeightPx(event: CalendarEvent): number {
   return Math.max((minutes / 60) * HOUR_HEIGHT, 20)
 }
 
-function eventColor(event: CalendarEvent): string {
-  if (event.source !== 'tether') return '#4285f4' // Google blue for synced
-  return event.color ?? '#6366f1' // indigo default
+function resolveColor(event: CalendarEvent): string {
+  return resolveEventColor(event, milestoneStore.all, contextStore.nodes)
 }
+
+// ─── Overlap layout per day ───────────────────────────────────
+const overlapLayouts = computed<Record<string, Record<string, EventLayout>>>(() => {
+  const byDay: Record<string, Record<string, EventLayout>> = {}
+  for (const [dayKey, evs] of Object.entries(eventsByDay.value)) {
+    byDay[dayKey] = computeOverlapLayout(evs)
+  }
+  return byDay
+})
+
+// ─── Overlap background bands per day ────────────────────────
+// Helpers that match the signature expected by computeOverlapBands
+function _topByTime(startTime: string): number {
+  const d = new Date(startTime)
+  return (d.getHours() + d.getMinutes() / 60 - START_HOUR) * HOUR_HEIGHT
+}
+function _heightByTime(startTime: string, endTime: string): number {
+  const start = new Date(startTime).getTime()
+  const end = new Date(endTime).getTime()
+  const minutes = (end - start) / 60_000
+  return Math.max((minutes / 60) * HOUR_HEIGHT, 20)
+}
+
+const overlapBandsByDay = computed<Record<string, OverlapBand[]>>(() => {
+  const result: Record<string, OverlapBand[]> = {}
+  for (const [dayKey, evs] of Object.entries(eventsByDay.value)) {
+    result[dayKey] = computeOverlapBands(evs, overlapLayouts.value[dayKey] ?? {}, _topByTime, _heightByTime)
+  }
+  return result
+})
 
 // Creation drag selection rect (in px relative to day column)
 const createSelectionStyle = computed(() => {
@@ -456,7 +672,17 @@ async function onDrop(e: DragEvent, day: Date) {
   const startDate = new Date(day)
   startDate.setHours(hour, minute, 0, 0)
 
-  // Promoting a sidebar task to an event.
+  // If the dragged task already has a calendar event, move it instead of
+  // promoting again — promoting creates a duplicate event row.
+  const existingEvent = eventStore.events.find(ev => ev.task_id === payload.taskId)
+  if (existingEvent) {
+    const durationMs = new Date(existingEvent.end_time).getTime() - new Date(existingEvent.start_time).getTime()
+    const endDate = new Date(startDate.getTime() + durationMs)
+    await eventStore.moveEvent(existingEvent.id, startDate.toISOString(), endDate.toISOString())
+    return
+  }
+
+  // Promoting a sidebar task (not yet on calendar) to an event.
   let title = 'Task'
   for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
     const found = anchorPlan.tasks.find(t => t.id === payload.taskId)
@@ -590,52 +816,36 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         <!-- Filter button -->
         <div class="relative">
           <button
+            id="calendar-filter-button"
             data-testid="filter-button"
             class="flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors"
             :class="activeFilterCount > 0
               ? 'text-indigo-300 border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20'
               : 'text-white/50 border-white/10 hover:text-white hover:bg-white/10'"
-            @click="filterOpen = !filterOpen"
+            @click.stop="filterOpen = !filterOpen"
           >
             Filter
             <span v-if="activeFilterCount > 0" class="bg-indigo-500 text-white rounded-full text-[10px] px-1 leading-none py-0.5 font-bold">
               {{ activeFilterCount }}
             </span>
           </button>
-          <!-- Filter dropdown -->
           <Teleport to="body">
             <div
               v-if="filterOpen"
-              class="fixed z-50 bg-gray-800 border border-white/20 rounded-xl shadow-xl p-3 min-w-[200px] space-y-1"
+              id="calendar-filter-panel"
+              class="fixed z-50"
               style="top: 56px; right: 16px"
               @click.stop
             >
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs text-white/50 font-medium uppercase tracking-wide">Milestones</span>
-                <button v-if="activeFilterCount > 0" @click="clearFilters" class="text-[10px] text-indigo-400 hover:text-indigo-300">
-                  Clear all
-                </button>
-              </div>
-              <div v-if="!milestoneStore.all.length" class="text-xs text-white/30 py-1">No milestones</div>
-              <button
-                v-for="m in milestoneStore.all"
-                :key="m.id"
-                class="flex items-center gap-2 w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
-                :class="selectedMilestoneIds.has(m.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
-                @click="toggleMilestoneFilter(m.id)"
-              >
-                <span
-                  class="w-2 h-2 rounded-full flex-shrink-0"
-                  :style="m.color ? { backgroundColor: m.color } : { backgroundColor: '#6366f1' }"
-                />
-                {{ m.name }}
-              </button>
-              <button
-                class="mt-2 text-[10px] text-white/30 hover:text-white/60 w-full text-right"
-                @click="filterOpen = false"
-              >
-                Done
-              </button>
+              <CalendarFilterPanel
+                v-model="activeFilter"
+                :root-nodes="contextStore.rootNodes"
+                :children-of="contextStore.childrenOf"
+                :fetch-children="contextStore.fetchChildren"
+                :anchors="anchorStore.anchors"
+                :kanban-columns="kanbanStore.columns"
+                @close="filterOpen = false"
+              />
             </div>
           </Teleport>
         </div>
@@ -678,7 +888,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
                 v-for="ev in eventsForDay(date).slice(0, 3)"
                 :key="ev.id"
                 class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none"
-                :style="{ backgroundColor: eventColor(ev) }"
+                :style="{ backgroundColor: resolveColor(ev) }"
               >
                 {{ ev.title }}
               </div>
@@ -699,25 +909,49 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
              container width even when the scrollbar is visible. -->
         <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
 
-          <!-- Day-of-week header — sticky inside scroll container so it always
-               has the same width context as the day columns beneath it. -->
-          <div class="sticky top-0 z-10 flex border-b border-white/10 bg-gray-900 pl-12">
+          <!-- Sticky header wrapper: day-of-week header + all-day band scroll together -->
+          <div class="sticky top-0 z-10">
+
+            <!-- Day-of-week header -->
+            <div class="flex border-b border-white/10 bg-gray-900 pl-12">
+              <div
+                v-for="(day, i) in days"
+                :key="dayKeys[i]"
+                :data-testid="`day-header-${i}`"
+                :data-day="dayKeys[i]"
+                :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
+                class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
+                :class="[
+                  dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
+                  focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+                ]"
+                @click="focusDay(dayKeys[i])"
+              >
+                {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+              </div>
+            </div>
+
+            <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
+            <div data-testid="all-day-band" class="sticky flex border-b border-white/10 bg-gray-900/80 pl-12">
             <div
-              v-for="(day, i) in days"
+              v-for="(_, i) in days"
               :key="dayKeys[i]"
-              :data-testid="`day-header-${i}`"
-              :data-day="dayKeys[i]"
-              :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
-              class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
-              :class="[
-                dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
-                focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-              ]"
-              @click="focusDay(dayKeys[i])"
+              class="flex-1 min-h-[24px] flex flex-wrap gap-0.5 px-1 py-0.5 border-l border-white/5"
             >
-              {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+              <div
+                v-for="ev in allDayEventsByDay[dayKeys[i]]"
+                :key="ev.id"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none cursor-pointer"
+                :style="{ backgroundColor: resolveColor(ev) }"
+                data-event-block
+                @click="openEventPanel(ev)"
+                @mousedown.stop="(e: MouseEvent) => onEventMousedown(e, ev)"
+              >
+                {{ ev.title }}
+              </div>
             </div>
           </div>
+          </div><!-- end sticky header wrapper -->
 
           <div data-testid="week-view" class="flex">
 
@@ -771,6 +1005,15 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
                 class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
               />
 
+              <!-- Overlap background bands — light tint over time windows with simultaneous events -->
+              <div
+                v-for="(band, bi) in overlapBandsByDay[dayKeys[i]]"
+                :key="'overlap-bg-' + bi"
+                data-testid="overlap-background"
+                class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+                :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
+              />
+
               <!-- Event blocks — using CalendarEventBlock component -->
               <CalendarEventBlock
                 v-for="event in eventsByDay[dayKeys[i]]"
@@ -778,6 +1021,9 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
                 :event="event"
                 :top-px="eventTopPx(event)"
                 :height-px="eventHeightPx(event)"
+                :left-percent="overlapLayouts[dayKeys[i]]?.[event.id]?.leftPercent ?? 0"
+                :width-percent="overlapLayouts[dayKeys[i]]?.[event.id]?.widthPercent ?? 100"
+                :resolved-color="resolveColor(event)"
                 :style="draggingEvent?.eventId === event.id ? { opacity: 0.5 } : {}"
                 data-event-block
                 @click="openEventPanel(event)"
@@ -804,5 +1050,13 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     </div>
 
     <router-view />
+
+    <RecurrenceEditDialog
+      :visible="pendingRecurrence !== null"
+      :mode="recurrenceDialogMode"
+      :action="recurrenceDialogAction"
+      @confirm="onRecurrenceScopeConfirm"
+      @cancel="onRecurrenceScopeCancel"
+    />
   </div>
 </template>

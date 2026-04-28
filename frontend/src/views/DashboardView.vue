@@ -4,17 +4,26 @@ import { api } from '../lib/api'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
+import { useEventStore } from '../stores/events'
 import TaskCard from '../components/TaskCard.vue'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
+const eventStore = useEventStore()
 const botStatus = ref('unknown')
+
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 onMounted(async () => {
   planStore.fetchPlan()
   anchorStore.fetchAnchors()
   milestoneStore.fetchAll()
+  const today = localToday()
+  eventStore.fetchEvents(today, today)
   try {
     const resp = await api('/api/bot/health')
     if (resp.ok) {
@@ -47,7 +56,7 @@ const currentTasks = computed(() => {
 
 async function onAddTaskToNow() {
   if (!currentAnchor.value) return
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   try {
     const resp = await api('/api/tasks/unscheduled', {
       method: 'POST',
@@ -60,6 +69,10 @@ async function onAddTaskToNow() {
     console.error('Failed to create task:', e)
   }
 }
+
+const allDayEventsToday = computed(() => {
+  return eventStore.events.filter(ev => ev.is_all_day === true && ev.start_time.startsWith(localToday()))
+})
 
 const dayStats = computed(() => {
   if (!planStore.plan) return []
@@ -89,6 +102,14 @@ const dayStats = computed(() => {
           <div v-if="currentAnchor" class="w-3 h-3 rounded-full" :style="{ background: currentAnchor.color }" />
           <h2 class="font-semibold text-lg">{{ currentAnchor?.name ?? 'No active block' }}</h2>
           <span class="text-white/40 text-sm ml-auto">{{ currentAnchor?.time }}</span>
+        </div>
+        <div v-if="allDayEventsToday.length" class="flex flex-wrap gap-1 mb-2">
+          <div v-for="ev in allDayEventsToday" :key="ev.id"
+               data-testid="all-day-event-chip"
+               class="text-xs px-2 py-0.5 rounded text-white font-medium"
+               :style="{ backgroundColor: ev.color ?? '#6366f1' }">
+            {{ ev.title }}
+          </div>
         </div>
         <ul class="flex flex-col gap-1.5">
           <TaskCard v-for="task in currentTasks" :key="task.id"

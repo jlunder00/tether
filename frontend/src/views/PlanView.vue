@@ -4,15 +4,21 @@ import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
+import { useEventStore } from '../stores/events'
+import { useSlideOver } from '../composables/useSlideOver'
 import AnchorBlock from '../components/AnchorBlock.vue'
 import WeekView from '../components/WeekView.vue'
 import MonthView from '../components/MonthView.vue'
+import DayTimeline from '../components/DayTimeline.vue'
+import type { CalendarEvent } from '../types/events'
 
 const props = defineProps<{ view: string; date?: string }>()
 const router = useRouter()
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
+const eventStore = useEventStore()
+const { push: pushPanel } = useSlideOver()
 
 // Resolve date from route or default to today
 const activeDate = computed(() => (props.date as string) || planStore.today)
@@ -61,6 +67,42 @@ function nextDay() {
 
 function goToday() {
   goToDate(planStore.today)
+}
+
+async function onCreateAt(isoTime: string) {
+  // Create a new task then promote it to a calendar event at the chosen time
+  const endTime = new Date(new Date(isoTime).getTime() + 30 * 60_000).toISOString()
+  const taskId = await eventStore.createTaskAndPromote(isoTime, endTime)
+  if (taskId) {
+    pushPanel({ kind: 'task', entityId: taskId })
+  }
+}
+
+function onOpenEvent(event: CalendarEvent) {
+  if (event.task_id) {
+    pushPanel({ kind: 'task', entityId: event.task_id })
+  }
+}
+
+/** Handle drop of a calendar event onto the anchor column — demotes it back to a plain task. */
+async function onAnchorColumnDrop(e: DragEvent) {
+  // DayTimeline writes both application/json and text/plain; prefer application/json
+  const rawJson = e.dataTransfer?.getData('application/json')
+  const rawText = e.dataTransfer?.getData('text/plain')
+  const raw = rawJson || rawText
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw)
+    if (data.type === 'calendar-event' && data.eventId) {
+      // Use the event's original anchor if available; fall back to first anchor
+      const anchorId = data.anchorId ?? anchorStore.anchors[0]?.id ?? ''
+      await eventStore.demoteEvent(data.eventId, anchorId, activeDate.value)
+      // Refresh plan so the demoted task appears in anchor blocks
+      await planStore.fetchPlan(activeDate.value)
+    }
+  } catch {
+    // ignore malformed drag data
+  }
 }
 </script>
 
@@ -113,17 +155,31 @@ function goToday() {
     <!-- Month view -->
     <MonthView v-else-if="props.view === 'month'" />
 
-    <!-- Day view -->
+    <!-- Day view: two-column layout -->
     <template v-else>
       <div v-if="planStore.loading" class="text-white/40">Loading...</div>
-      <div v-else class="flex flex-col gap-2">
-        <AnchorBlock
-          v-for="anchor in anchorStore.anchors"
-          :key="anchor.id"
-          :anchor-id="anchor.id"
-          :anchor-name="anchor.name"
-          :time="anchor.time"
-          :color="anchor.color" />
+      <!-- Two-column: anchor blocks left, day timeline right -->
+      <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
+        <!-- Left: anchor blocks -->
+        <div
+          class="flex flex-col gap-2"
+          @dragover.prevent
+          @drop="onAnchorColumnDrop"
+        >
+          <AnchorBlock
+            v-for="anchor in anchorStore.anchors"
+            :key="anchor.id"
+            :anchor-id="anchor.id"
+            :anchor-name="anchor.name"
+            :time="anchor.time"
+            :color="anchor.color" />
+        </div>
+        <!-- Right: day timeline -->
+        <DayTimeline
+          :date="activeDate"
+          @create-at="onCreateAt"
+          @open-event="onOpenEvent"
+        />
       </div>
     </template>
 

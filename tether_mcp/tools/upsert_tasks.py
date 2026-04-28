@@ -4,6 +4,32 @@ from __future__ import annotations
 
 import asyncpg
 
+from db.pg_queries import (
+    get_task_by_uuid,
+    patch_task_fields,
+    upsert_plan,
+    move_task_atomic,
+    create_unscheduled_task,
+    link_task_to_node,
+    unlink_task_from_node,
+    link_milestone_task,
+    add_dependency,
+    remove_dependency,
+    get_dependencies_for,
+    get_node_by_path,
+    create_subtask,
+    update_subtask,
+    delete_subtask,
+    get_subtasks,
+    promote_task_to_event,
+    update_event_time,
+)
+from tether_mcp.batch import validate_no_duplicates
+from tether_mcp.write_modes import apply_resolved_field
+
+
+_ABSENT = object()
+
 
 async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> list[dict]:
     """Batch create or update tasks with write modes, scheduling, and linking.
@@ -11,32 +37,12 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
     Each spec may contain:
         task_uuid, text, status, description, date, anchor_id, backlog,
         context_subject, node_ids, node_ids_remove, milestone_ids,
-        blocked_by, blocked_by_remove, subtasks, subtasks_remove
+        blocked_by, blocked_by_remove, subtasks, subtasks_remove,
+        start_time, end_time, rrule, color
 
     Returns list of {id, text, status, description, context_subject,
                      plan_date, anchor_id} dicts.
     """
-    from db.pg_queries import (
-        get_task_by_uuid,
-        patch_task_fields,
-        upsert_plan,
-        move_task_atomic,
-        create_unscheduled_task,
-        link_task_to_node,
-        unlink_task_from_node,
-        link_milestone_task,
-        add_dependency,
-        remove_dependency,
-        get_dependencies_for,
-        get_node_by_path,
-        create_subtask,
-        update_subtask,
-        delete_subtask,
-        get_subtasks,
-    )
-    from tether_mcp.batch import validate_no_duplicates
-    from tether_mcp.write_modes import apply_resolved_field
-
     validate_no_duplicates(tasks, key="task_uuid")
 
     results: list[dict] = []
@@ -58,14 +64,25 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
         subtasks = spec.get("subtasks") or []
         subtasks_remove = spec.get("subtasks_remove") or []
 
+        start_time = spec.get("start_time") or ""
+        end_time = spec.get("end_time") or ""
+        rrule = spec.get("rrule", _ABSENT)
+        color = spec.get("color", _ABSENT)
+
+        if bool(start_time) != bool(end_time):
+            missing = "end_time" if start_time else "start_time"
+            raise ValueError(
+                f"upsert_tasks: {missing} is required when the other event time field is provided"
+            )
+        if start_time and end_time and start_time >= end_time:
+            raise ValueError("upsert_tasks: start_time must be before end_time")
+
         if task_uuid:
             # --- UPDATE path ---
             patch_fields: dict = {}
 
-            # Fetch existing task once for write-mode resolution
             existing_task = await get_task_by_uuid(conn, task_uuid)
 
-            # Resolve text field
             new_text, _ = apply_resolved_field(
                 text_raw,
                 existing_task.get("text") if existing_task else None,
@@ -73,7 +90,6 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             if new_text is not None:
                 patch_fields["text"] = new_text
 
-            # Resolve description field
             new_desc, _ = apply_resolved_field(
                 description_raw,
                 existing_task.get("description") if existing_task else None,
@@ -81,14 +97,26 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             if new_desc is not None:
                 patch_fields["description"] = new_desc
 
-            # Scalar fields
             if status:
                 patch_fields["status"] = status
+
+            if rrule is not _ABSENT:
+                patch_fields["rrule"] = rrule
+            if color is not _ABSENT:
+                patch_fields["color"] = color
+
+            # Direct start/end update goes through patch_task_fields (trusted MCP
+            # path) rather than update_event_time.  update_event_time enforces a
+            # recurrence-aware delta for the calendar UI to prevent silent anchor
+            # corruption; the MCP tool is an administrative path that sets times
+            # directly on both recurring and non-recurring tasks.
+            if start_time and end_time:
+                patch_fields["start_time"] = start_time
+                patch_fields["end_time"] = end_time
 
             if patch_fields:
                 await patch_task_fields(conn, task_uuid, patch_fields)
 
-            # Scheduling
             if backlog:
                 await move_task_atomic(conn, task_uuid, None, None)
             elif date and anchor_id:
@@ -122,35 +150,40 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             if date and anchor_id:
                 await upsert_plan(conn, date)
                 await move_task_atomic(conn, final_task_id, date, anchor_id)
-            # context_subject already set on create; skip re-patching below if already done
-            context_subject = ""  # don't re-apply below since already set
+            # context_subject already set on create; skip re-patching below
+            context_subject = ""
+
+            if start_time and end_time:
+                await promote_task_to_event(conn, final_task_id, start_time, end_time)
+
+            event_fields: dict = {}
+            if rrule is not _ABSENT and rrule is not None:
+                event_fields["rrule"] = rrule
+            if color is not _ABSENT and color is not None:
+                event_fields["color"] = color
+            if event_fields:
+                await patch_task_fields(conn, final_task_id, event_fields)
 
         # --- Post create/update operations ---
 
-        # context_subject: patch + link via path
         if context_subject:
             await patch_task_fields(conn, final_task_id, {"context_subject": context_subject})
             node = await get_node_by_path(conn, context_subject)
             if node:
                 await link_task_to_node(conn, node["id"], final_task_id)
 
-        # node_ids: explicit link
         for nid in node_ids:
             await link_task_to_node(conn, nid, final_task_id)
 
-        # node_ids_remove: explicit unlink
         for nid in node_ids_remove:
             await unlink_task_from_node(conn, nid, final_task_id)
 
-        # milestone_ids: link
         for mid in milestone_ids:
             await link_milestone_task(conn, mid, final_task_id)
 
-        # blocked_by: add dependencies
         for blocker_id in blocked_by:
             await add_dependency(conn, "task", blocker_id, "task", final_task_id)
 
-        # blocked_by_remove: look up dep by entity_id then remove
         if blocked_by_remove:
             deps = await get_dependencies_for(conn, "task", final_task_id)
             for blocker_id in blocked_by_remove:
@@ -159,23 +192,19 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
                         await remove_dependency(conn, dep["id"])
                         break
 
-        # subtasks: create new (no "id") or update existing (has "id")
         for sub in subtasks:
             if "id" in sub:
                 await update_subtask(conn, sub["id"], **{
                     k: v for k, v in sub.items() if k != "id"
                 })
             else:
-                # Determine position: after existing subtasks
                 existing_subs = await get_subtasks(conn, final_task_id)
                 pos = len(existing_subs)
                 await create_subtask(conn, final_task_id, sub["text"], position=pos)
 
-        # subtasks_remove: delete by id
         for sub_id in subtasks_remove:
             await delete_subtask(conn, sub_id)
 
-        # Fetch final state
         final = await get_task_by_uuid(conn, final_task_id)
         if final:
             results.append({
