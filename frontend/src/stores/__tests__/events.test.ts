@@ -14,6 +14,7 @@ const BASE_EVENT_FIELDS = {
   is_recurring: false,
   is_occurrence: false,
   rrule: null,
+  context_subject: null,
 }
 
 describe('useEventStore', () => {
