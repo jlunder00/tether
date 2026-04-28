@@ -27,10 +27,11 @@ function defaultColor(event: CalendarEvent): string {
     :style="{
       top: `${topPx}px`,
       height: `${heightPx}px`,
-      left: `calc(${props.leftPercent ?? 0}% + 2px)`,
-      width: `calc(${props.widthPercent ?? 100}% - 4px)`,
+      left: `calc(${props.leftPercent ?? 0}% + ${(props.widthPercent ?? 100) * 0.05}% + 2px)`,
+      width: `calc(${(props.widthPercent ?? 100) * 0.9}% - 4px)`,
       backgroundColor: props.resolvedColor ?? defaultColor(event),
-      opacity: event.source !== 'tether' ? 0.75 : 1,
+      borderLeft: '3px solid ' + (props.resolvedColor ?? defaultColor(event)),
+      opacity: event.source !== 'tether' ? 0.75 : 0.92,
     }"
     @click.stop="emit('click', event)"
     @mousedown.stop="(ev) => emit('mousedown', ev)"

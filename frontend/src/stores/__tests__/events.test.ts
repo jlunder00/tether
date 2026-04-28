@@ -308,4 +308,52 @@ describe('useEventStore', () => {
     expect(call[0]).toContain('scope=all')
     expect(call[0]).toContain('original_start_time=')
   })
+
+  // --- updateEventColor ---
+
+  it('updateEventColor updates ev.color optimistically in the store', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-col1',
+      title: 'Colorable',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+      color: null,
+    })
+
+    await store.updateEventColor('ev-col1', '#ff0000')
+
+    expect(store.events[0].color).toBe('#ff0000')
+  })
+
+  it('updateEventColor sets color to null when passed null', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-col2',
+      title: 'Colorable',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+      color: '#ff0000',
+    })
+
+    await store.updateEventColor('ev-col2', null)
+
+    expect(store.events[0].color).toBeNull()
+  })
+
+  it('updateEventColor is a no-op for unknown event id', async () => {
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    await expect(store.updateEventColor('nonexistent', '#ff0000')).resolves.toBeUndefined()
+  })
 })

@@ -96,6 +96,19 @@ vi.mock('../../stores/events', () => ({
   }),
 }))
 
+vi.mock('../../stores/milestones', () => ({
+  useMilestoneStore: () => ({
+    all: [],
+    fetchAll: vi.fn(),
+  }),
+}))
+
+vi.mock('../../stores/context', () => ({
+  useContextStore: () => ({
+    nodes: {},
+  }),
+}))
+
 // --- Pure function tests ---
 
 const testAnchor: Anchor = {
@@ -326,5 +339,21 @@ describe('DayTimeline component', () => {
     expect(emitted).toBeTruthy()
     // Should be local-naive: YYYY-MM-DDTHH:MM (no Z, no +offset)
     expect(emitted![0][0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+  })
+
+  it('timed-area does not have a hardcoded inline style of height: 480px', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    const style = timedArea.attributes('style') ?? ''
+    expect(style).not.toContain('height: 480px')
+  })
+
+  it('anchor band style includes a borderLeft property', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const band = wrapper.find('[data-testid="anchor-band-a1"]')
+    const style = band.attributes('style') ?? ''
+    expect(style).toContain('border-left')
   })
 })

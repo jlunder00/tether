@@ -300,4 +300,12 @@ describe('CalendarView', () => {
     expect(wrapper.find('[data-testid="all-day-band"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('All Day Event')
   })
+
+  it('all-day band has sticky class so it does not scroll away', async () => {
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    const band = wrapper.find('[data-testid="all-day-band"]')
+    expect(band.exists()).toBe(true)
+    expect(band.classes()).toContain('sticky')
+  })
 })
