@@ -200,7 +200,10 @@ async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
         "started_at": time.time(),
     }
 
-    with patch("api.routes.integrations.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+    # wait_for is called twice: once for stdin.drain (should succeed → None),
+    # once for proc.wait (should timeout). Use a side_effect list.
+    mock_wait_for = AsyncMock(side_effect=[None, asyncio.TimeoutError()])
+    with patch("api.routes.integrations.asyncio.wait_for", mock_wait_for):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "code"},
@@ -244,3 +247,93 @@ async def test_start_requires_auth():
         resp = await unauth_client.post("/api/integrations/anthropic/start")
 
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# 8. POST /api/integrations/anthropic/complete -- broken pipe returns 502
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
+    """If stdin.drain raises BrokenPipeError (process already exited), return 502."""
+    import api.routes.integrations as routes
+    client, mock_vault, app = auth_app_client
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.drain = AsyncMock(side_effect=BrokenPipeError("pipe broken"))
+    mock_proc.kill = MagicMock()
+    mock_proc.wait = AsyncMock(return_value=None)
+
+    routes._pending_setups[TEST_USER_ID] = {
+        "proc": mock_proc,
+        "temp_dir": str(tmp_path),
+        "started_at": time.time(),
+    }
+
+    resp = await client.post(
+        "/api/integrations/anthropic/complete",
+        json={"code": "code"},
+    )
+
+    assert resp.status_code == 502
+    # Entry should be cleaned up
+    assert TEST_USER_ID not in routes._pending_setups
+
+
+# ---------------------------------------------------------------------------
+# 9. cfg.VAULT_KEY roundtrip — key format matches what Fernet expects
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_cfg_vault_key_roundtrip(tmp_path, monkeypatch):
+    """A key from Fernet.generate_key().decode() round-trips through cfg → CredentialsVault."""
+    from cryptography.fernet import Fernet
+    from contextlib import asynccontextmanager
+    from unittest.mock import patch
+
+    raw_key = Fernet.generate_key()           # bytes: URL-safe base64, 44 chars
+    key_str = raw_key.decode()                # str: what operator puts in TETHER_VAULT_KEY
+
+    monkeypatch.setenv("TETHER_VAULT_KEY", key_str)
+
+    # Reset the config singleton's cache so it re-resolves placeholders from env,
+    # then reload api.config so VAULT_KEY is recomputed with the new value.
+    from config import loader as config_loader
+    config_loader.config._cfg = None
+
+    import importlib
+    import api.config as cfg
+    importlib.reload(cfg)
+
+    assert cfg.VAULT_KEY is not None, "VAULT_KEY should be set"
+
+    from api.credentials_vault import CredentialsVault
+
+    vault = CredentialsVault(pool=None, encryption_key=cfg.VAULT_KEY, creds_dir=tmp_path)
+
+    original = {"token": "test-roundtrip"}
+    stored: list[bytes] = []
+
+    async def fake_store(conn, user_id, blob):
+        stored.append(blob)
+
+    async def fake_get(conn, user_id):
+        return stored[-1] if stored else None
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        from unittest.mock import AsyncMock
+        yield AsyncMock()
+
+    with patch("api.credentials_vault.store_credentials_blob", side_effect=fake_store), \
+         patch("api.credentials_vault.get_credentials_blob", side_effect=fake_get), \
+         patch("api.credentials_vault.db_pg.get_conn", fake_get_conn):
+
+        await vault.store_initial("user1", original)
+        async with vault.materialize("user1") as creds_dir:
+            import json
+            loaded = json.loads((creds_dir / ".credentials.json").read_text())
+
+    assert loaded == original

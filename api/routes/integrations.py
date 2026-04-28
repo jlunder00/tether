@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import pathlib
 import re
 import shutil
 import tempfile
@@ -61,6 +62,9 @@ _GCAL_CALENDAR_LIST_URL = "https://www.googleapis.com/calendar/v3/users/me/calen
 # Entries older than _SETUP_TTL seconds are swept on each /start call.
 _pending_setups: dict[str, dict] = {}
 
+# Per-user locks to prevent concurrent /start races.
+_start_locks: dict[str, asyncio.Lock] = {}
+
 _SETUP_TTL = 600  # seconds
 _ANTHROPIC_URL_RE = re.compile(r"https://console\.anthropic\.com/\S+")
 
@@ -81,8 +85,24 @@ class AnthropicCompleteBody(BaseModel):
 # Anthropic OAuth helpers
 # ---------------------------------------------------------------------------
 
-def _sweep_expired_setups() -> None:
-    """Kill and remove any pending setups older than _SETUP_TTL seconds."""
+async def _reap_proc(proc) -> None:
+    """Kill a subprocess and await it to release transport/pipe FDs."""
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        await proc.wait()
+    except Exception:
+        pass
+
+
+async def _sweep_expired_setups() -> None:
+    """Kill and remove any pending setups older than _SETUP_TTL seconds.
+
+    Each killed process is reaped via an asyncio task so pipe FDs are released
+    without blocking the current request.
+    """
     now = time.time()
     expired_users = [
         uid for uid, entry in list(_pending_setups.items())
@@ -90,12 +110,9 @@ def _sweep_expired_setups() -> None:
     ]
     for uid in expired_users:
         entry = _pending_setups.pop(uid)
-        try:
-            proc = entry.get("proc")
-            if proc is not None:
-                proc.kill()
-        except Exception:
-            pass
+        proc = entry.get("proc")
+        if proc is not None:
+            asyncio.create_task(_reap_proc(proc))
         temp_dir = entry.get("temp_dir")
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -410,15 +427,19 @@ async def anthropic_start(
     """Spawn `claude setup-token`, scrape the auth URL, return it to the client."""
     user_id = request.state.user_id
 
-    _sweep_expired_setups()
+    await _sweep_expired_setups()
 
+    # Serialize concurrent /start calls per user to prevent subprocess leaks.
+    lock = _start_locks.setdefault(user_id, asyncio.Lock())
+    async with lock:
+        return await _anthropic_start_locked(request, user_id)
+
+
+async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
+    """Inner /start logic — called while holding the per-user _start_locks entry."""
     if user_id in _pending_setups:
         old = _pending_setups.pop(user_id)
-        try:
-            old["proc"].kill()
-            await old["proc"].wait()
-        except Exception:
-            pass
+        asyncio.create_task(_reap_proc(old["proc"]))
         shutil.rmtree(old.get("temp_dir", ""), ignore_errors=True)
 
     temp_dir = tempfile.mkdtemp()
@@ -486,15 +507,22 @@ async def anthropic_complete(
     proc = entry["proc"]
     temp_dir = entry["temp_dir"]
 
-    proc.stdin.write((body.code + "\n").encode())
-    await proc.stdin.drain()
+    # Write code to subprocess stdin — guard against broken pipe if process already exited.
+    try:
+        proc.stdin.write((body.code + "\n").encode())
+        await asyncio.wait_for(proc.stdin.drain(), timeout=5.0)
+    except (BrokenPipeError, ConnectionResetError, asyncio.TimeoutError, OSError) as exc:
+        _pending_setups.pop(user_id, None)
+        asyncio.create_task(_reap_proc(proc))
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.warning("anthropic_complete: stdin write failed (%s)", exc)
+        raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
 
     try:
         await asyncio.wait_for(proc.wait(), timeout=30.0)
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
         _pending_setups.pop(user_id, None)
+        asyncio.create_task(_reap_proc(proc))
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
@@ -503,7 +531,6 @@ async def anthropic_complete(
         shutil.rmtree(temp_dir, ignore_errors=True)
         return {"ok": False, "error": "setup failed"}
 
-    import pathlib
     creds_file = pathlib.Path(temp_dir) / ".credentials.json"
     if not creds_file.exists():
         _pending_setups.pop(user_id, None)
