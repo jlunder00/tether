@@ -358,11 +358,40 @@ describe('DayTimeline component', () => {
     expect(style).toContain('border-left')
   })
 
-  it('overlap-background strips appear when two events overlap', async () => {
+  it('no overlap-background strip when only one timed event', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
-    // mockEvents has only one timed event so no overlap strip expected
+    // mockEvents has only one timed event — no overlap possible
     expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(false)
+  })
+
+  it('overlap-background strip appears when two timed events overlap', async () => {
+    // Push a second timed event that overlaps with ev-timed (09:00–09:30)
+    const overlappingEvent: CalendarEvent = {
+      id: 'ev-overlap',
+      title: 'Conflicting meeting',
+      start_time: '2024-06-10T09:15:00',
+      end_time: '2024-06-10T09:45:00',
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      rrule: null,
+      is_all_day: false,
+      context_subject: null,
+    }
+    mockEvents.push(overlappingEvent)
+
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(true)
+
+    // Restore mockEvents to its original state for subsequent tests
+    const idx = mockEvents.findIndex(e => e.id === 'ev-overlap')
+    if (idx !== -1) mockEvents.splice(idx, 1)
   })
 })
 

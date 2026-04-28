@@ -308,4 +308,53 @@ describe('CalendarView', () => {
     expect(band.exists()).toBe(true)
     expect(band.classes()).toContain('sticky')
   })
+
+  it('overlap-background band appears when two timed events overlap in the same day column', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    // Seed two timed events that overlap in the same day
+    useEventStore().events.push(
+      {
+        id: 'ev-ov1',
+        title: 'Event Overlap 1',
+        start_time: `${TODAY}T09:00:00`,
+        end_time: `${TODAY}T10:00:00`,
+        source: 'tether',
+        external_id: null,
+        task_id: null,
+        anchor_id: null,
+        color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        is_all_day: false,
+        rrule: null,
+        context_subject: null,
+      },
+      {
+        id: 'ev-ov2',
+        title: 'Event Overlap 2',
+        start_time: `${TODAY}T09:30:00`,
+        end_time: `${TODAY}T10:30:00`,
+        source: 'tether',
+        external_id: null,
+        task_id: null,
+        anchor_id: null,
+        color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        is_all_day: false,
+        rrule: null,
+        context_subject: null,
+      },
+    )
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(true)
+  })
 })

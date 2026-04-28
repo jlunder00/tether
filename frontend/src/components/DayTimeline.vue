@@ -17,7 +17,7 @@ import {
   AXIS_TOTAL_PX,
   PX_PER_MINUTE,
 } from '../composables/useDayTimeline'
-import { computeOverlapLayout } from '../composables/useOverlapLayout'
+import { computeOverlapLayout, computeOverlapBands } from '../composables/useOverlapLayout'
 import { resolveEventColor } from '../composables/useColorResolver'
 import type { CalendarEvent } from '../types/events'
 import type { RecurrenceEditScope } from '../types/recurrence'
@@ -57,6 +57,12 @@ const timedEvents = computed(() =>
 // --- Overlap layout for timed events ---
 
 const overlapLayout = computed(() => computeOverlapLayout(timedEvents.value))
+
+// --- Overlap background bands (time windows with multiple concurrent events) ---
+
+const overlapBands = computed(() =>
+  computeOverlapBands(timedEvents.value, overlapLayout.value, eventTopPx, eventHeightPx)
+)
 
 // --- Anchor band overlap layout ---
 
@@ -362,6 +368,15 @@ function timedEventStyle(event: CalendarEvent) {
           :data-testid="`anchor-band-${anchor.id}`"
           class="absolute pointer-events-none rounded-sm"
           :style="anchorBandStyle(anchor)"
+        />
+
+        <!-- Overlap background bands — light tint indicating simultaneous events -->
+        <div
+          v-for="(band, bi) in overlapBands"
+          :key="'overlap-' + bi"
+          data-testid="overlap-background"
+          class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+          :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
         />
 
         <!-- Hour grid lines -->

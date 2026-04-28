@@ -13,7 +13,7 @@ import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
 import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
 import { resolveEventColor } from '../composables/useColorResolver'
-import { computeOverlapLayout, type EventLayout } from '../composables/useOverlapLayout'
+import { computeOverlapLayout, computeOverlapBands, type EventLayout, type OverlapBand } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
@@ -591,6 +591,27 @@ const overlapLayouts = computed<Record<string, Record<string, EventLayout>>>(() 
   return byDay
 })
 
+// ─── Overlap background bands per day ────────────────────────
+// Helpers that match the signature expected by computeOverlapBands
+function _topByTime(startTime: string): number {
+  const d = new Date(startTime)
+  return (d.getHours() + d.getMinutes() / 60 - START_HOUR) * HOUR_HEIGHT
+}
+function _heightByTime(startTime: string, endTime: string): number {
+  const start = new Date(startTime).getTime()
+  const end = new Date(endTime).getTime()
+  const minutes = (end - start) / 60_000
+  return Math.max((minutes / 60) * HOUR_HEIGHT, 20)
+}
+
+const overlapBandsByDay = computed<Record<string, OverlapBand[]>>(() => {
+  const result: Record<string, OverlapBand[]> = {}
+  for (const [dayKey, evs] of Object.entries(eventsByDay.value)) {
+    result[dayKey] = computeOverlapBands(evs, overlapLayouts.value[dayKey] ?? {}, _topByTime, _heightByTime)
+  }
+  return result
+})
+
 // Creation drag selection rect (in px relative to day column)
 const createSelectionStyle = computed(() => {
   if (!creatingEvent.value) return null
@@ -982,6 +1003,15 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-if="focusedDay === dayKeys[i]"
                 class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
+              />
+
+              <!-- Overlap background bands — light tint over time windows with simultaneous events -->
+              <div
+                v-for="(band, bi) in overlapBandsByDay[dayKeys[i]]"
+                :key="'overlap-bg-' + bi"
+                data-testid="overlap-background"
+                class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+                :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
               />
 
               <!-- Event blocks — using CalendarEventBlock component -->
