@@ -1,107 +1,225 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
+import { parseRrule, buildRrule, DOW_CODES, DOW_LABELS, type RruleState } from '../composables/useRruleParser'
 
 const props = defineProps<{
   modelValue: string | null
-  startTime: string  // ISO 8601 — used to derive day-of-week for weekly preset
+  startTime: string
 }>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string | null): void
 }>()
 
-type Preset = 'none' | 'daily' | 'weekly' | 'weekdays' | 'monthly' | 'custom'
-
-const DOW_NAMES: readonly string[] = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA']
-
-/** Derive BYDAY abbreviation from an ISO start_time string.
- *  Falls back to 'MO' if the date is unparseable. */
-function dowFromISO(iso: string): string {
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return 'MO'
-  return DOW_NAMES[d.getDay()]
+function initialState(v: string | null): { state: RruleState; custom: string } {
+  if (!v) return { state: parseRrule(null), custom: '' }
+  const parsed = parseRrule(v)
+  // Anything we don't fully round-trip stays as custom
+  if (parsed.freq === 'custom' || (buildRrule(parsed) !== v && parsed.freq !== 'none')) {
+    return { state: { ...parsed, freq: 'custom' }, custom: v }
+  }
+  return { state: parsed, custom: '' }
 }
 
-/** Map a known rrule string to its preset key, or 'custom' if unrecognised. */
-function rruleToPreset(rrule: string | null): Preset {
-  if (!rrule) return 'none'
-  if (rrule === 'FREQ=DAILY') return 'daily'
-  if (rrule.startsWith('FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR')) return 'weekdays'
-  if (/^FREQ=WEEKLY;BYDAY=[A-Z]{2}$/.test(rrule)) return 'weekly'
-  if (rrule === 'FREQ=MONTHLY') return 'monthly'
-  return 'custom'
-}
+const init = initialState(props.modelValue)
+const state = ref<RruleState>(init.state)
+const customRrule = ref<string>(init.custom)
 
-// Local preset tracks UI selection independently of modelValue so that choosing
-// "Custom" immediately shows the text input without needing the parent to round-trip.
-const localPreset = ref<Preset>(rruleToPreset(props.modelValue))
-
-// Sync inbound modelValue changes (e.g. parent reset) back to localPreset
 watch(() => props.modelValue, (v) => {
-  localPreset.value = rruleToPreset(v)
+  const next = initialState(v)
+  state.value = next.state
+  customRrule.value = next.custom
 })
 
-// Holds the raw text when user picks "custom"
-const customRrule = ref<string>(
-  localPreset.value === 'custom' ? (props.modelValue ?? '') : '',
-)
+const startDow = computed(() => {
+  const d = new Date(props.startTime)
+  return isNaN(d.getTime()) ? 'MO' : DOW_CODES[d.getDay()]
+})
 
-function onPresetChange(e: Event) {
-  const preset = (e.target as HTMLSelectElement).value as Preset
-  localPreset.value = preset
-  switch (preset) {
-    case 'none':
-      emit('update:modelValue', null)
-      break
-    case 'daily':
-      emit('update:modelValue', 'FREQ=DAILY')
-      break
-    case 'weekly':
-      emit('update:modelValue', `FREQ=WEEKLY;BYDAY=${dowFromISO(props.startTime)}`)
-      break
-    case 'weekdays':
-      emit('update:modelValue', 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR')
-      break
-    case 'monthly':
-      emit('update:modelValue', 'FREQ=MONTHLY')
-      break
-    case 'custom':
-      // Don't emit yet — wait for the text input
-      customRrule.value = props.modelValue ?? ''
-      break
+function emitValue() {
+  if (state.value.freq === 'custom') {
+    emit('update:modelValue', customRrule.value || null)
+    return
   }
+  emit('update:modelValue', buildRrule(state.value))
 }
 
-function onCustomChange(e: Event) {
-  const val = (e.target as HTMLInputElement).value.trim()
-  customRrule.value = val
-  if (val) emit('update:modelValue', val)
+function onFreqChange(e: Event) {
+  const newFreq = (e.target as HTMLSelectElement).value as RruleState['freq']
+  state.value.freq = newFreq
+  if (newFreq === 'weekly' && state.value.byday.length === 0) {
+    state.value.byday = [startDow.value]
+  }
+  if (newFreq === 'monthly' && state.value.monthlyMode === 'byday' && state.value.byday.length === 0) {
+    state.value.byday = [startDow.value]
+  }
+  emitValue()
+}
+
+function onIntervalChange(e: Event) {
+  state.value.interval = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1)
+  emitValue()
+}
+
+function toggleDow(dow: string) {
+  const idx = state.value.byday.indexOf(dow)
+  if (idx >= 0) state.value.byday.splice(idx, 1)
+  else state.value.byday.push(dow)
+  emitValue()
+}
+
+function onMonthlyModeChange() {
+  if (state.value.monthlyMode === 'byday' && state.value.byday.length === 0) {
+    state.value.byday = [startDow.value]
+  }
+  emitValue()
+}
+
+function onNthWeekdayChange(e: Event) {
+  state.value.nthWeekday = parseInt((e.target as HTMLSelectElement).value) || 1
+  emitValue()
+}
+
+function onMonthlyDowChange(e: Event) {
+  state.value.byday = [(e.target as HTMLSelectElement).value]
+  emitValue()
+}
+
+function onCountChange(e: Event) {
+  state.value.count = Math.max(1, parseInt((e.target as HTMLInputElement).value) || 1)
+  emitValue()
+}
+
+function onUntilChange(e: Event) {
+  state.value.until = (e.target as HTMLInputElement).value
+  emitValue()
+}
+
+function onCustomInput(e: Event) {
+  customRrule.value = (e.target as HTMLInputElement).value.trim()
+  emitValue()
 }
 </script>
 
 <template>
-  <div class="flex flex-col gap-1.5">
-    <label class="text-xs text-white/40">Repeat</label>
-    <select
-      :value="localPreset"
-      @change="onPresetChange"
-      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40"
-    >
-      <option value="none">Does not repeat</option>
-      <option value="daily">Daily</option>
-      <option value="weekly">Weekly</option>
-      <option value="weekdays">Every weekday (Mon–Fri)</option>
-      <option value="monthly">Monthly</option>
-      <option value="custom">Custom (RRULE)</option>
-    </select>
+  <div class="space-y-2 text-xs">
+    <!-- Frequency -->
+    <div class="flex items-center gap-2">
+      <label class="text-white/50 w-20 flex-shrink-0">Repeat</label>
+      <select
+        class="flex-1 bg-gray-800 border border-white/20 rounded px-2 py-1 text-white text-sm"
+        :value="state.freq"
+        @change="onFreqChange"
+      >
+        <option value="none">Does not repeat</option>
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+        <option value="yearly">Yearly</option>
+        <option value="custom">Custom (RRULE)</option>
+      </select>
+    </div>
+
+    <!-- Interval (daily/weekly/monthly only) -->
+    <div v-if="state.freq === 'daily' || state.freq === 'weekly' || state.freq === 'monthly'" class="flex items-center gap-2">
+      <label class="text-white/50 w-20 flex-shrink-0">Every</label>
+      <input
+        type="number" min="1" max="99"
+        class="w-16 bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs"
+        :value="state.interval"
+        @change="onIntervalChange"
+      />
+      <span class="text-white/40">{{ state.freq === 'daily' ? 'day(s)' : state.freq === 'weekly' ? 'week(s)' : 'month(s)' }}</span>
+    </div>
+
+    <!-- Weekly day-of-week picker -->
+    <div v-if="state.freq === 'weekly'" class="flex items-start gap-2 flex-wrap">
+      <label class="text-white/50 w-20 flex-shrink-0">On</label>
+      <div class="flex gap-1 flex-wrap">
+        <button
+          v-for="(d, i) in DOW_CODES"
+          :key="d"
+          type="button"
+          :data-testid="`rrule-dow-${d}`"
+          class="px-1.5 py-0.5 rounded text-[11px] border transition-colors"
+          :class="state.byday.includes(d) ? 'bg-indigo-500 text-white border-indigo-500' : 'text-white/40 border-white/10 hover:border-white/30'"
+          @click="toggleDow(d)"
+        >{{ DOW_LABELS[i] }}</button>
+      </div>
+    </div>
+
+    <!-- Monthly mode picker -->
+    <div v-if="state.freq === 'monthly'" class="flex flex-col gap-1 pl-22">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input type="radio" v-model="state.monthlyMode" value="date" @change="onMonthlyModeChange" />
+        <span class="text-white/60">Same date each month</span>
+      </label>
+      <label class="flex items-center gap-2 cursor-pointer flex-wrap">
+        <input type="radio" v-model="state.monthlyMode" value="byday" @change="onMonthlyModeChange" />
+        <span class="text-white/60">On the</span>
+        <select
+          v-if="state.monthlyMode === 'byday'"
+          data-testid="rrule-nth-weekday"
+          class="bg-gray-800 border border-white/20 rounded px-1 py-0.5 text-white text-xs"
+          :value="state.nthWeekday"
+          @change="onNthWeekdayChange"
+        >
+          <option value="1">1st</option>
+          <option value="2">2nd</option>
+          <option value="3">3rd</option>
+          <option value="4">4th</option>
+        </select>
+        <select
+          v-if="state.monthlyMode === 'byday'"
+          data-testid="rrule-monthly-dow"
+          class="bg-gray-800 border border-white/20 rounded px-1 py-0.5 text-white text-xs"
+          :value="state.byday[0] ?? 'MO'"
+          @change="onMonthlyDowChange"
+        >
+          <option v-for="(d, i) in DOW_CODES" :key="d" :value="d">{{ DOW_LABELS[i] }}</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- End condition -->
+    <div v-if="state.freq !== 'none' && state.freq !== 'custom'" class="flex items-center gap-2 flex-wrap">
+      <label class="text-white/50 w-20 flex-shrink-0">Ends</label>
+      <select
+        class="bg-gray-800 border border-white/20 rounded px-2 py-1 text-white text-xs"
+        v-model="state.endMode"
+        @change="emitValue"
+      >
+        <option value="never">Never</option>
+        <option value="count">After N occurrences</option>
+        <option value="until">On date</option>
+      </select>
+      <input
+        v-if="state.endMode === 'count'"
+        type="number" min="1" max="999"
+        data-testid="rrule-count"
+        class="w-16 bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs"
+        :value="state.count"
+        @change="onCountChange"
+      />
+      <input
+        v-if="state.endMode === 'until'"
+        type="date"
+        data-testid="rrule-until"
+        class="bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs"
+        :value="state.until"
+        @change="onUntilChange"
+      />
+    </div>
+
+    <!-- Custom RRULE fallback -->
     <input
-      v-if="localPreset === 'custom'"
+      v-if="state.freq === 'custom'"
       data-testid="rrule-custom-input"
       type="text"
       :value="customRrule"
       placeholder="e.g. FREQ=WEEKLY;BYDAY=MO,WE"
-      @change="onCustomChange"
-      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40 font-mono"
+      @change="onCustomInput"
+      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40 font-mono w-full"
     />
   </div>
 </template>

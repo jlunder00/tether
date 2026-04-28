@@ -25,6 +25,7 @@ const baseEvent: CalendarEvent = {
   is_recurring: false,
   is_occurrence: false,
   rrule: null,
+  context_subject: null,
 }
 
 describe('CalendarEventBlock', () => {
@@ -113,5 +114,29 @@ describe('CalendarEventBlock', () => {
       props: { event: baseEvent, topPx: 0, heightPx: 30 },
     })
     expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(false)
+  })
+
+  it('positions event using leftPercent and widthPercent', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: baseEvent, topPx: 100, heightPx: 60,
+        leftPercent: 50, widthPercent: 50,
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('50%')
+  })
+
+  it('uses resolvedColor when provided', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: baseEvent, topPx: 0, heightPx: 30,
+        resolvedColor: 'rgb(255, 0, 0)',
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('rgb(255, 0, 0)')
   })
 })

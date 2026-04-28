@@ -112,6 +112,7 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
       is_recurring: false,
       is_occurrence: false,
       rrule: null,
+      context_subject: null,
     })
 
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')

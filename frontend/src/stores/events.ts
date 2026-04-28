@@ -57,6 +57,7 @@ export const useEventStore = defineStore('events', () => {
       is_recurring: false,
       is_occurrence: false,
       rrule: null,
+      context_subject: null,
     }
     events.value.push(optimistic)
     return optimistic
