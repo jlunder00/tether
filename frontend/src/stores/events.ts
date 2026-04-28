@@ -135,14 +135,40 @@ export const useEventStore = defineStore('events', () => {
   }
 
   /**
-   * Demote a calendar event back to a plain task (removes time constraint).
-   * DELETE /api/events/:id/time-constraint
+   * Demote a calendar event to a plain anchor-bound task.
+   * Finds the linked task_id and PATCHes it with null times + anchorId + planDate.
+   * Optimistic: removes the event locally first.
    */
-  async function demoteEvent(eventId: string) {
-    try {
-      await api(`/api/events/${eventId}/time-constraint`, { method: 'DELETE' })
-    } catch { /* ignore */ }
+  async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
     events.value = events.value.filter(e => e.id !== eventId)
+    if (!ev?.task_id) return
+    try {
+      await api(`/api/tasks/${ev.task_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time: null, end_time: null, anchor_id: anchorId, plan_date: planDate }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
+  }
+
+  /**
+   * Delete a calendar event, optionally targeting a specific occurrence scope.
+   * When scope is provided, original_start_time identifies which instance.
+   */
+  async function deleteEvent(
+    eventId: string,
+    scope?: 'this' | 'this_and_future' | 'all',
+    originalStartTime?: string,
+  ): Promise<void> {
+    events.value = events.value.filter(e => e.id !== eventId)
+    try {
+      const params = new URLSearchParams()
+      if (scope) params.set('scope', scope)
+      if (originalStartTime) params.set('original_start_time', originalStartTime)
+      const qs = params.toString() ? `?${params.toString()}` : ''
+      await api(`/api/events/${eventId}${qs}`, { method: 'DELETE' })
+    } catch { /* ignore — optimistic update stays */ }
   }
 
   /**
@@ -193,5 +219,5 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* ignore — optimistic update stays */ }
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask, setRecurrence, updateEventColor }
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor }
 })
