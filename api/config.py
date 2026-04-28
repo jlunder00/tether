@@ -3,6 +3,7 @@
 All resolution logic (env vars, YAML files, placeholder expansion, secrets.json
 shim) lives in config/loader.py. This module just names the values the API needs.
 """
+import base64
 import os
 from pathlib import Path
 
@@ -43,3 +44,9 @@ GOOGLE_INTEGRATION_CALLBACK_URL: str = config.get(
     "oauth.google.integration_callback_url",
     default="http://localhost:8000/api/integrations/google/callback",
 )
+
+# Credentials vault — Fernet encryption key for per-user credentials blobs.
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+VAULT_KEY_B64: str = config.get("vault.key", default="")
+# Parse to bytes when non-empty; None signals vault is not configured
+VAULT_KEY: bytes | None = base64.b64decode(VAULT_KEY_B64) if VAULT_KEY_B64 else None

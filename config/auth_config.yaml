@@ -12,6 +12,10 @@ cors:
   # Comma-separated list parsed by loader
   allowed_origins: "${TETHER_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8000}"
 
+vault:
+  # Fernet key for per-user credentials blobs. Leave empty to disable vault.
+  key: "${TETHER_VAULT_KEY:-}"
+
 oauth:
   github:
     enabled: false
