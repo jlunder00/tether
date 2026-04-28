@@ -119,7 +119,8 @@ async def test_call_claude_no_creds_dir_no_env_key():
     finally:
         _llm_creds_dir.reset(token)
 
-    assert "CLAUDE_CONFIG_DIR" not in (captured_opts[0].env if captured_opts else {})
+    assert len(captured_opts) == 1, "query() should have been called exactly once"
+    assert "CLAUDE_CONFIG_DIR" not in captured_opts[0].env
 
 
 @pytest.mark.asyncio
@@ -182,14 +183,24 @@ async def test_handle_message_acquires_vault_lock(tmp_path, monkeypatch):
 
     vault = StubVault()
 
+    # Capture ContextVar value observed inside _handle_message_body
+    from bot.llm import _llm_creds_dir
+    observed_creds_dir: list[str | None] = []
+
+    async def _body_spy(*args, **kwargs):
+        observed_creds_dir.append(_llm_creds_dir.get())
+
     # Patch away all DB and LLM calls
-    with patch("bot.message_handler._handle_message_body", AsyncMock()) as mock_body:
+    with patch("bot.message_handler._handle_message_body", side_effect=_body_spy) as mock_body:
         from bot.message_handler import handle_message
         await handle_message("hi", lambda m: None, object(), "user-123", vault=vault)
 
     assert "user-123" in vault.lock_acquired_for
     assert "user-123" in vault.materialized_for
     mock_body.assert_called_once()
+    # Verify _llm_creds_dir ContextVar was set to the materialized creds path inside the body
+    assert len(observed_creds_dir) == 1
+    assert observed_creds_dir[0] == str(tmp_path / "creds")
 
 
 # ---------------------------------------------------------------------------
