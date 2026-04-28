@@ -237,12 +237,13 @@ async function onTimedAreaDrop(e: DragEvent) {
 
 function onEventDragstart(event: CalendarEvent, dragEvent: DragEvent) {
   dragEvent.dataTransfer!.effectAllowed = 'move'
-  // Write as both formats: text/plain for broadest compatibility, application/json for type safety
+  // Include anchor_id so the drop target can return the task to its original anchor
   const payload = JSON.stringify({
     type: 'calendar-event',
     eventId: event.id,
     taskId: event.task_id,
     title: event.title,
+    anchorId: event.anchor_id,
   })
   dragEvent.dataTransfer!.setData('application/json', payload)
   dragEvent.dataTransfer!.setData('text/plain', payload)
@@ -376,8 +377,9 @@ function timedEventStyle(event: CalendarEvent) {
 
     <!-- Recurrence edit dialog -->
     <RecurrenceEditDialog
-      :open="showRecurrenceDialog"
-      title="Edit recurring event"
+      :visible="showRecurrenceDialog"
+      mode="event"
+      action="move"
       @confirm="onRecurrenceConfirm"
       @cancel="onRecurrenceCancel"
     />

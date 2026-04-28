@@ -57,6 +57,7 @@ const mockEvents: CalendarEvent[] = [
     is_occurrence: false,
     rrule: null,
     is_all_day: false,
+    context_subject: null,
   },
   {
     id: 'ev-allday',
@@ -72,6 +73,7 @@ const mockEvents: CalendarEvent[] = [
     is_occurrence: false,
     rrule: null,
     is_all_day: true,
+    context_subject: null,
   },
 ]
 
