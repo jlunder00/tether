@@ -41,41 +41,101 @@ class TestPipelineBackend:
         b = PipelineBackend()
         assert b.is_available() is True
 
-    def test_complete_raises_on_missing_claude_cli(self, monkeypatch):
-        """complete() should raise RuntimeError if claude binary not found."""
-        from bot.llm import PipelineBackend
-        import subprocess
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("claude not found")),
-        )
+    def test_complete_returns_llm_response(self):
+        from bot.llm import PipelineBackend, LLMResponse
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        from unittest.mock import patch
+        import asyncio
+
+        async def _fake_query(*, prompt, options=None, transport=None):
+            msg = AssistantMessage(
+                content=[TextBlock(text="hello from claude")],
+                model="claude-sonnet-4-6",
+            )
+            yield msg
+
         b = PipelineBackend()
-        with pytest.raises((RuntimeError, FileNotFoundError)):
-            import asyncio
-            asyncio.run(b.complete(
+        with patch("claude_agent_sdk.query", side_effect=_fake_query):
+            resp = asyncio.run(b.complete(
                 messages=[{"role": "user", "content": "hi"}],
                 system="you are helpful",
                 model="claude-haiku-4-5-20251001",
             ))
-
-    def test_complete_returns_llm_response(self, monkeypatch):
-        from bot.llm import PipelineBackend, LLMResponse
-        import subprocess
-
-        fake_result = type("R", (), {"stdout": "hello from claude\n", "returncode": 0})()
-        monkeypatch.setattr("subprocess.run", lambda *a, **kw: fake_result)
-
-        b = PipelineBackend()
-        import asyncio
-        resp = asyncio.run(b.complete(
-            messages=[{"role": "user", "content": "hi"}],
-            system="you are helpful",
-            model="claude-haiku-4-5-20251001",
-        ))
         assert isinstance(resp, LLMResponse)
         assert resp.content == "hello from claude"
         assert resp.tool_calls == []
         assert resp.stop_reason == "end_turn"
+
+
+# ---------------------------------------------------------------------------
+# PipelineBackend — SDK migration
+# ---------------------------------------------------------------------------
+
+class TestPipelineBackendSDKMigration:
+    """PipelineBackend now uses claude_agent_sdk.query(), not subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_complete_uses_sdk_not_subprocess(self, monkeypatch):
+        from bot.llm import PipelineBackend, LLMResponse
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        from unittest.mock import patch
+        import subprocess
+
+        async def _fake_query(*, prompt, options=None, transport=None):
+            msg = AssistantMessage(
+                content=[TextBlock(text="sdk reply")],
+                model="claude-sonnet-4-6",
+            )
+            yield msg
+
+        subprocess_called = []
+        original_run = subprocess.run
+        monkeypatch.setattr(
+            "subprocess.run",
+            lambda *a, **kw: subprocess_called.append(True) or original_run(*a, **kw)
+        )
+
+        b = PipelineBackend()
+        with patch("claude_agent_sdk.query", side_effect=_fake_query):
+            resp = await b.complete(
+                messages=[{"role": "user", "content": "hi"}],
+                system="you are helpful",
+                model="claude-haiku-4-5-20251001",
+            )
+        assert resp.content == "sdk reply"
+        assert not subprocess_called
+
+    @pytest.mark.asyncio
+    async def test_complete_passes_creds_dir_in_env(self, tmp_path):
+        from bot.llm import PipelineBackend, _llm_creds_dir
+        from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
+        from unittest.mock import patch
+
+        captured: list[ClaudeAgentOptions] = []
+
+        async def _fake_query(*, prompt, options=None, transport=None):
+            captured.append(options)
+            msg = AssistantMessage(
+                content=[TextBlock(text="ok")],
+                model="claude-sonnet-4-6",
+            )
+            yield msg
+
+        creds_path = str(tmp_path / "mycreds")
+        token = _llm_creds_dir.set(creds_path)
+        try:
+            b = PipelineBackend()
+            with patch("claude_agent_sdk.query", side_effect=_fake_query):
+                await b.complete(
+                    messages=[{"role": "user", "content": "hi"}],
+                    system="sys",
+                    model="claude-haiku-4-5-20251001",
+                )
+        finally:
+            _llm_creds_dir.reset(token)
+
+        assert len(captured) == 1
+        assert captured[0].env.get("CLAUDE_CONFIG_DIR") == creds_path
 
 
 # ---------------------------------------------------------------------------

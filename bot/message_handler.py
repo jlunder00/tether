@@ -213,34 +213,44 @@ def get_model(role: str) -> str:
 
 async def call_claude(prompt: str, timeout: int = 180, model_role: str | None = None,
                       stage: str = "") -> str:
-    cmd = ["claude", "-p", "--strict-mcp-config"]
-    if model_role is not None:
-        cmd += ["--model", get_model(model_role)]
-    cmd.append(prompt)
+    from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+    from bot.llm import _llm_creds_dir
+
+    env: dict[str, str] = {}
+    creds_dir_val = _llm_creds_dir.get()
+    if creds_dir_val:
+        env["CLAUDE_CONFIG_DIR"] = creds_dir_val
+
+    model = get_model(model_role) if model_role is not None else None
+    opts = ClaudeAgentOptions(
+        model=model,
+        permission_mode="bypassPermissions",
+        env=env,
+    )
+
+    async def _collect() -> str:
+        parts: list[str] = []
+        async for msg in query(prompt=prompt, options=opts):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        parts.append(block.text)
+        return "".join(parts).strip()
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            if stage:
-                await _log_safe(stage, prompt, "", f"timeout after {timeout}s")
-            raise RuntimeError(f"Claude timed out after {timeout}s. Try a simpler request.")
-        out = stdout.decode().strip()
+        out = await asyncio.wait_for(_collect(), timeout=timeout)
+    except asyncio.TimeoutError:
         if stage:
-            await _log_safe(stage, prompt, out)
-        return out
-    except RuntimeError:
-        raise
+            await _log_safe(stage, prompt, "", f"timeout after {timeout}s")
+        raise RuntimeError(f"Claude timed out after {timeout}s. Try a simpler request.")
     except Exception as e:
         if stage:
             await _log_safe(stage, prompt, "", str(e))
         raise
+
+    if stage:
+        await _log_safe(stage, prompt, out)
+    return out
 
 
 def _parse_json(raw: str) -> dict:
@@ -996,7 +1006,7 @@ def _log_preview(text: str, n: int = 120) -> str:
     return (t[:n] + "…") if len(t) > n else t
 
 
-async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str) -> None:
+async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, user_id: str) -> None:
     today = str(date_type.today())
     logger.info("handle_message: entered, text_len=%d", len(text or ""))
     async with pg.get_conn(pool, user_id) as conn:
@@ -1144,6 +1154,29 @@ async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_i
     async with pg.get_conn(pool, user_id) as conn:
         await insert_conversation_turn(conn, "user", text)
         await insert_conversation_turn(conn, "assistant", final)
+
+
+async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str,
+                         vault=None) -> None:
+    """Public entry point. When a vault is provided, acquires the per-user lock
+    and materializes credentials into a temp directory before calling the pipeline.
+
+    Vault is a duck-typed object with:
+      - with_lock(user_id) -> async context manager
+      - materialize(user_id) -> async context manager yielding a creds_dir path
+    """
+    from bot.llm import _llm_creds_dir
+
+    if vault is not None:
+        async with vault.with_lock(user_id):
+            async with vault.materialize(user_id) as creds_dir:
+                token = _llm_creds_dir.set(str(creds_dir))
+                try:
+                    await _handle_message_body(text, send_fn, pool, user_id)
+                finally:
+                    _llm_creds_dir.reset(token)
+    else:
+        await _handle_message_body(text, send_fn, pool, user_id)
 
 
 # ---------------------------------------------------------------------------
