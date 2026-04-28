@@ -10,6 +10,8 @@ import { useCalendarFocus } from '../composables/useCalendarFocus'
 import { useSlideOver } from '../composables/useSlideOver'
 import CalendarEventBlock from '../components/CalendarEventBlock.vue'
 import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
+import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
+import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
 import { resolveEventColor } from '../composables/useColorResolver'
 import { computeOverlapLayout, type EventLayout } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
@@ -58,9 +60,63 @@ interface DragState {
 }
 const draggingEvent = ref<DragState | null>(null)
 
+const pendingRecurrence = ref<PendingRecurrence>(null)
+
+const recurrenceDialogMode = computed<'event' | 'task'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'event'
+  return p.kind.startsWith('task') ? 'task' : 'event'
+})
+
+const recurrenceDialogAction = computed<'edit' | 'delete' | 'move'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'edit'
+  if (p.kind.endsWith('delete')) return 'delete'
+  if (p.kind.endsWith('move')) return 'move'
+  return 'edit'
+})
+
+async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
+  const pending = pendingRecurrence.value
+  pendingRecurrence.value = null
+  if (!pending) return
+
+  if (pending.kind === 'event-move') {
+    await eventStore.moveEvent(pending.eventId, pending.startTime, pending.endTime, scope, pending.originalStartTime)
+  } else if (pending.kind === 'event-edit') {
+    // Apply patch with scope — PATCH /api/events/:id
+    try {
+      await fetch(`/api/events/${pending.eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...pending.patch, scope, original_start_time: pending.patch.original_start_time }),
+      })
+    } catch { /* ignore */ }
+  } else if (pending.kind === 'event-delete') {
+    await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
+  } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {
+    // TODO: wire recurring task scope API when repeating tasks backend ships
+  }
+}
+
+function onRecurrenceScopeCancel() {
+  pendingRecurrence.value = null
+}
+
+// Distinguish click-as-open from click-and-drag-to-move. A bare click triggers
+// mousedown→mouseup with no movement; without a threshold, mouseup commits a
+// no-op move that still PATCHes the event (and triggers a backend round-trip).
+const DRAG_THRESHOLD_PX = 5
+let dragStartX = 0
+let dragStartY = 0
+let dragIntentConfirmed = false
+
 function onEventMousedown(e: MouseEvent, event: CalendarEvent) {
   e.stopPropagation()
   const colEl = (e.target as HTMLElement).closest('[data-day-col]') as HTMLElement | null
+  dragStartX = e.clientX
+  dragStartY = e.clientY
+  dragIntentConfirmed = false
   draggingEvent.value = {
     eventId: event.id,
     originalStart: event.start_time,
@@ -99,6 +155,12 @@ function onWindowMousemove(e: MouseEvent) {
     return
   }
   if (draggingEvent.value) {
+    if (!dragIntentConfirmed) {
+      const dx = e.clientX - dragStartX
+      const dy = e.clientY - dragStartY
+      if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD_PX) return
+      dragIntentConfirmed = true
+    }
     // Update ghost position — track cursor Y relative to column
     if (draggingEvent.value.columnRect) {
       draggingEvent.value.currentTop = e.clientY - draggingEvent.value.columnRect.top
@@ -122,8 +184,15 @@ async function onWindowMouseup(e: MouseEvent) {
 
   if (draggingEvent.value) {
     const state = draggingEvent.value
+    const wasConfirmedDrag = dragIntentConfirmed
     draggingEvent.value = null
+    dragIntentConfirmed = false
     document.body.style.userSelect = ''
+
+    // Click without drag — bail. The block's own @click handler opens the
+    // event panel. Without this guard, a plain click commits a no-op move
+    // that still fires a PATCH.
+    if (!wasConfirmedDrag) return
 
     // Find which day column the mouse is over
     const el = document.elementFromPoint(e.clientX, e.clientY)
@@ -148,6 +217,21 @@ async function onWindowMouseup(e: MouseEvent) {
     const newStart = new Date(dayStr + 'T00:00:00')
     newStart.setHours(hour, minute, 0, 0)
     const newEnd = new Date(newStart.getTime() + durationMs)
+
+    // Recurring occurrence — defer commit until the user picks an edit scope.
+    // Backend (PR #219) requires {scope, original_start_time} to know whether
+    // to EXDATE this instance, split the series, or move the master.
+    if (existing.is_occurrence) {
+      pendingRecurrence.value = {
+        kind: 'event-move',
+        eventId: state.eventId,
+        startTime: newStart.toISOString(),
+        endTime: newEnd.toISOString(),
+        originalStartTime: state.originalStart,
+      }
+      return
+    }
+
     await eventStore.moveEvent(state.eventId, newStart.toISOString(), newEnd.toISOString())
     return
   }
@@ -328,35 +412,79 @@ const hours = Array.from({ length: END_HOUR - START_HOUR }, (_, i) => START_HOUR
 
 // ─── Filter state ─────────────────────────────────────────────
 const filterOpen = ref(false)
-interface CalendarFilter { milestoneIds: Set<string>; contextNodeIds: Set<string>; kanbanColumnIds: Set<string> }
-const emptyFilter = (): CalendarFilter => ({ milestoneIds: new Set(), contextNodeIds: new Set(), kanbanColumnIds: new Set() })
+interface CalendarFilter {
+  contextNodeIds: Set<string>
+  anchorIds: Set<string>
+  kanbanColumnIds: Set<string>
+}
+const emptyFilter = (): CalendarFilter => ({
+  contextNodeIds: new Set(),
+  anchorIds: new Set(),
+  kanbanColumnIds: new Set(),
+})
 const activeFilter = ref<CalendarFilter>(emptyFilter())
 const activeFilterCount = computed(() =>
-  activeFilter.value.milestoneIds.size + activeFilter.value.contextNodeIds.size + activeFilter.value.kanbanColumnIds.size
+  activeFilter.value.contextNodeIds.size + activeFilter.value.anchorIds.size + activeFilter.value.kanbanColumnIds.size
 )
 
-// Tasks allowed by milestone/context filters (null = no filter active)
-const allowedTaskIds = computed<Set<string> | null>(() => {
-  const { milestoneIds, contextNodeIds } = activeFilter.value
-  if (milestoneIds.size === 0 && contextNodeIds.size === 0) return null
-  const ids = new Set<string>()
-  if (milestoneIds.size > 0) {
-    for (const m of milestoneStore.all) {
-      if (milestoneIds.has(m.id)) for (const tid of m.task_ids) ids.add(tid)
+// Expand a set of context node ids into the union of their subtrees (over the
+// nodes already loaded in the store). Selecting a parent should match events
+// tagged with any descendant.
+function expandSubtree(ids: Set<string>): Set<string> {
+  const result = new Set<string>(ids)
+  const stack = [...ids]
+  const allNodes = Object.values(contextStore.nodes)
+  while (stack.length) {
+    const id = stack.pop()!
+    for (const n of allNodes) {
+      if (n.parent_id === id && !result.has(n.id)) {
+        result.add(n.id)
+        stack.push(n.id)
+      }
     }
   }
-  if (contextNodeIds.size > 0) {
-    // Map selected node ids → their names. event.context_subject matches by name,
-    // so duplicate-named nodes deliberately merge filter behavior (predictable
-    // rather than silently dropping one of the duplicates).
-    const allowedNames = new Set<string>()
-    for (const node of Object.values(contextStore.nodes)) {
-      if (contextNodeIds.has(node.id)) allowedNames.add(node.name)
-    }
-    for (const ev of eventStore.events) {
-      if (ev.context_subject && allowedNames.has(ev.context_subject) && ev.task_id) {
-        ids.add(ev.task_id)
-      }
+  return result
+}
+
+// Anchors define disjoint daily time windows; an event "belongs to" the latest
+// anchor whose time is ≤ the event's local time. Returns the anchor id or null.
+function anchorForEventTime(ev: CalendarEvent): string | null {
+  if (!anchorStore.anchors.length) return null
+  const d = new Date(ev.start_time)
+  const evMin = d.getHours() * 60 + d.getMinutes()
+  const sorted = [...anchorStore.anchors].sort((a, b) => a.time.localeCompare(b.time))
+  let active: Anchor | null = null
+  for (const a of sorted) {
+    const [h, m] = a.time.split(':').map(Number)
+    const aMin = (h || 0) * 60 + (m || 0)
+    if (aMin <= evMin) active = a
+    else break
+  }
+  return active?.id ?? null
+}
+
+// Tasks allowed by context/milestone filter (null = no context filter active)
+const allowedTaskIds = computed<Set<string> | null>(() => {
+  const { contextNodeIds } = activeFilter.value
+  if (contextNodeIds.size === 0) return null
+  const ids = new Set<string>()
+  const expandedNodeIds = expandSubtree(contextNodeIds)
+
+  // Milestone nodes (node_type === 'milestone') own task_ids directly via the
+  // milestone store; selecting them should pull in those tasks.
+  for (const m of milestoneStore.all) {
+    if (expandedNodeIds.has(m.id)) for (const tid of m.task_ids) ids.add(tid)
+  }
+
+  // Context nodes match events by context_subject (name). Duplicate-named nodes
+  // merge filter behavior — predictable rather than silently dropping one.
+  const allowedNames = new Set<string>()
+  for (const node of Object.values(contextStore.nodes)) {
+    if (expandedNodeIds.has(node.id)) allowedNames.add(node.name)
+  }
+  for (const ev of eventStore.events) {
+    if (ev.context_subject && allowedNames.has(ev.context_subject) && ev.task_id) {
+      ids.add(ev.task_id)
     }
   }
   return ids
@@ -381,24 +509,47 @@ function onDocumentKeydown(e: KeyboardEvent) {
 // ─── Events mapped per day (with filter) ─────────────────────
 const filteredEventsByDay = computed(() => {
   const allowed = allowedTaskIds.value
+  const { anchorIds } = activeFilter.value
   const map: Record<string, CalendarEvent[]> = {}
   for (const ev of eventStore.events) {
     const dayKey = ev.start_time.slice(0, 10)
     if (!map[dayKey]) map[dayKey] = []
+
+    // Context/milestone filter
     if (allowed !== null) {
-      // Only include events linked to an allowed task; exclude unlinked standalone events when filter active
       if (ev.task_id === null || !allowed.has(ev.task_id)) continue
     }
+
+    // Anchor filter: map event's local start time to an anchor; skip if not in selected set
+    if (anchorIds.size > 0) {
+      const resolvedAnchor = anchorForEventTime(ev)
+      if (resolvedAnchor === null || !anchorIds.has(resolvedAnchor)) continue
+    }
+
+    // Kanban filter: match via task_id → column not yet available without a task→column index.
+    // The kanban store tracks columns but not task↔column assignments directly.
+    // Skipping kanban filter here until a task→column index is exposed.
+    // TODO: wire kanban column filter once task store exposes column_id
+
     map[dayKey].push(ev)
   }
   return map
 })
 
-// For the week view: only build the map over the visible 7 days
+// For the week view: only timed (non-all-day) events per day
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = filteredEventsByDay.value[key] ?? []
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => !ev.is_all_day)
+  }
+  return map
+})
+
+// All-day events per day (rendered in the band above the timed grid)
+const allDayEventsByDay = computed(() => {
+  const map: Record<string, CalendarEvent[]> = {}
+  for (const key of dayKeys.value) {
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => ev.is_all_day)
   }
   return map
 })
@@ -500,7 +651,17 @@ async function onDrop(e: DragEvent, day: Date) {
   const startDate = new Date(day)
   startDate.setHours(hour, minute, 0, 0)
 
-  // Promoting a sidebar task to an event.
+  // If the dragged task already has a calendar event, move it instead of
+  // promoting again — promoting creates a duplicate event row.
+  const existingEvent = eventStore.events.find(ev => ev.task_id === payload.taskId)
+  if (existingEvent) {
+    const durationMs = new Date(existingEvent.end_time).getTime() - new Date(existingEvent.start_time).getTime()
+    const endDate = new Date(startDate.getTime() + durationMs)
+    await eventStore.moveEvent(existingEvent.id, startDate.toISOString(), endDate.toISOString())
+    return
+  }
+
+  // Promoting a sidebar task (not yet on calendar) to an event.
   let title = 'Task'
   for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
     const found = anchorPlan.tasks.find(t => t.id === payload.taskId)
@@ -657,8 +818,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             >
               <CalendarFilterPanel
                 v-model="activeFilter"
-                :milestones="milestoneStore.all"
-                :context-nodes="Object.values(contextStore.nodes)"
+                :root-nodes="contextStore.rootNodes"
+                :children-of="contextStore.childrenOf"
+                :fetch-children="contextStore.fetchChildren"
+                :anchors="anchorStore.anchors"
                 :kanban-columns="kanbanStore.columns"
                 @close="filterOpen = false"
               />
@@ -742,6 +905,27 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               @click="focusDay(dayKeys[i])"
             >
               {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+            </div>
+          </div>
+
+          <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
+          <div data-testid="all-day-band" class="flex border-b border-white/10 bg-gray-900/80 pl-12">
+            <div
+              v-for="(_, i) in days"
+              :key="dayKeys[i]"
+              class="flex-1 min-h-[24px] flex flex-wrap gap-0.5 px-1 py-0.5 border-l border-white/5"
+            >
+              <div
+                v-for="ev in allDayEventsByDay[dayKeys[i]]"
+                :key="ev.id"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none cursor-pointer"
+                :style="{ backgroundColor: resolveColor(ev) }"
+                data-event-block
+                @click="openEventPanel(ev)"
+                @mousedown.stop="(e: MouseEvent) => onEventMousedown(e, ev)"
+              >
+                {{ ev.title }}
+              </div>
             </div>
           </div>
 
@@ -833,5 +1017,13 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     </div>
 
     <router-view />
+
+    <RecurrenceEditDialog
+      :visible="pendingRecurrence !== null"
+      :mode="recurrenceDialogMode"
+      :action="recurrenceDialogAction"
+      @confirm="onRecurrenceScopeConfirm"
+      @cancel="onRecurrenceScopeCancel"
+    />
   </div>
 </template>

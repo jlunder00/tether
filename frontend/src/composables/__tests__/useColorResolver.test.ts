@@ -10,7 +10,7 @@ function makeEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
     start_time: '2026-04-27T09:00:00', end_time: '2026-04-27T10:00:00',
     source: 'tether', external_id: null, task_id: 'task-1',
     anchor_id: null, color: null,
-    is_recurring: false, is_occurrence: false, rrule: null,
+    is_recurring: false, is_occurrence: false, is_all_day: false, rrule: null,
     context_subject: null,
     ...overrides,
   }

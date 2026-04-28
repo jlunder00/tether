@@ -28,6 +28,8 @@ export interface CalendarEvent {
   is_occurrence: boolean
   /** RRULE string (e.g. "FREQ=WEEKLY;BYDAY=MO"). Non-null only on master events (is_recurring === true). */
   rrule: string | null
+  /** True when this event spans the full day and has no specific start/end time. */
+  is_all_day: boolean
   /** context_subject of the linked task, if any. Populated by backend (get_events_for_range). */
   context_subject: string | null
 }

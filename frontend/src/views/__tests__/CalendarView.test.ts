@@ -128,9 +128,10 @@ describe('CalendarView', () => {
     expect(focusedHeader.attributes('data-day')).toBe(dayKey)
   })
 
-  it('tag filter: eventsByDay excludes events for tasks not matching selected milestone', async () => {
+  it('tag filter: eventsByDay excludes events not matching selected context node', async () => {
     const { useEventStore } = await import('../../stores/events')
     const { useMilestoneStore } = await import('../../stores/milestones')
+    const { useContextStore } = await import('../../stores/context')
     const { default: CalendarView } = await import('../CalendarView.vue')
 
     const wrapper = mount(CalendarView)
@@ -139,8 +140,23 @@ describe('CalendarView', () => {
 
     const eventStore = useEventStore()
     const milestoneStore = useMilestoneStore()
+    const contextStore = useContextStore()
 
-    // Seed a milestone that owns task-a
+    // Seed a milestone context node (node_type='milestone') that owns task-a
+    contextStore.nodes['ms-1'] = {
+      id: 'ms-1',
+      parent_id: null,
+      name: 'Sprint 1',
+      description: null,
+      node_type: 'milestone',
+      archived: false,
+      target_date: null,
+      status: 'pending',
+      status_override: false,
+      color: '#6366f1',
+      created_at: '',
+      updated_at: '',
+    }
     milestoneStore.all.push({
       id: 'ms-1',
       context_subject: 'project-x',
@@ -176,6 +192,7 @@ describe('CalendarView', () => {
         color: null,
         is_recurring: false,
         is_occurrence: false,
+        is_all_day: false,
         rrule: null,
         context_subject: null,
       },
@@ -191,6 +208,7 @@ describe('CalendarView', () => {
         color: null,
         is_recurring: false,
         is_occurrence: false,
+        is_all_day: false,
         rrule: null,
         context_subject: null,
       },
@@ -201,21 +219,85 @@ describe('CalendarView', () => {
     expect(wrapper.text()).toContain('Event A (in milestone)')
     expect(wrapper.text()).toContain('Event B (no milestone)')
 
-    // Open filter dropdown and activate milestone filter
+    // Open filter dropdown and activate context node filter for Sprint 1
     await wrapper.find('[data-testid="filter-button"]').trigger('click')
     await nextTick()
-    // Find and click the milestone toggle button (rendered in Teleport — query from document)
-    const allButtons = document.querySelectorAll('button')
-    let milestoneBtn: Element | null = null
-    allButtons.forEach(btn => {
-      if (btn.textContent?.trim().includes('Sprint 1')) milestoneBtn = btn
-    })
-    expect(milestoneBtn).not.toBeNull()
-    ;(milestoneBtn as unknown as HTMLElement).click()
+    // Sprint 1 is rendered via ContextTreeFilterNode in Teleport — use data-testid
+    const sprintBtn = document.querySelector('[data-testid="filter-item-context-ms-1"]') as HTMLElement | null
+    expect(sprintBtn).not.toBeNull()
+    sprintBtn!.click()
     await nextTick()
 
     // After filter: only Event A should appear in the week grid
     expect(wrapper.text()).toContain('Event A (in milestone)')
     expect(wrapper.text()).not.toContain('Event B (no milestone)')
+  })
+
+  it('drag threshold no-op: mouseup with <5px movement does not call moveEvent', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    mount(CalendarView)
+    await flushPromises()
+
+    const eventStore = useEventStore()
+    const moveSpy = vi.spyOn(eventStore, 'moveEvent')
+
+    // Seed an event block
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    eventStore.events.push({
+      id: 'ev-drag',
+      title: 'Drag test',
+      start_time: `${TODAY}T09:00:00`,
+      end_time: `${TODAY}T10:00:00`,
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    // Simulate mousedown then mouseup with no movement (below threshold)
+    window.dispatchEvent(new MouseEvent('mousedown', { clientX: 100, clientY: 200 }))
+    window.dispatchEvent(new MouseEvent('mouseup', { clientX: 101, clientY: 201 })) // <5px
+    await nextTick()
+
+    expect(moveSpy).not.toHaveBeenCalled()
+  })
+
+  it('all-day band renders when is_all_day events exist', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    useEventStore().events.push({
+      id: 'ev-allday',
+      title: 'All Day Event',
+      start_time: `${TODAY}T00:00:00`,
+      end_time: `${TODAY}T23:59:59`,
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: true,
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="all-day-band"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('All Day Event')
   })
 })

@@ -56,6 +56,7 @@ export const useEventStore = defineStore('events', () => {
       color: null,
       is_recurring: false,
       is_occurrence: false,
+      is_all_day: false,
       rrule: null,
       context_subject: null,
     }
@@ -65,19 +66,34 @@ export const useEventStore = defineStore('events', () => {
 
   /**
    * Move an existing event to a new time slot (drag-to-reposition).
-   * PATCH /api/events/:id — not yet implemented; updates optimistically.
+   * For recurring occurrences, scope chooses whether the move applies to just
+   * this occurrence ('this'), this and all future ('this_and_future'), or the
+   * whole series ('all'). When scope is provided, the original_start_time of
+   * the occurrence must accompany it so the backend can identify which
+   * instance to split.
    */
-  async function moveEvent(eventId: string, startTime: string, endTime: string): Promise<void> {
+  async function moveEvent(
+    eventId: string,
+    startTime: string,
+    endTime: string,
+    scope?: 'this' | 'this_and_future' | 'all',
+    originalStartTime?: string,
+  ): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
     if (!ev) return
     // Optimistic update
     ev.start_time = startTime
     ev.end_time = endTime
+    const body: Record<string, unknown> = { start_time: startTime, end_time: endTime }
+    if (scope) {
+      body.scope = scope
+      if (originalStartTime) body.original_start_time = originalStartTime
+    }
     try {
       await api(`/api/events/${eventId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_time: startTime, end_time: endTime }),
+        body: JSON.stringify(body),
       })
     } catch { /* ignore — optimistic update stays */ }
   }
@@ -120,14 +136,43 @@ export const useEventStore = defineStore('events', () => {
   }
 
   /**
-   * Demote a calendar event back to a plain task (removes time constraint).
-   * DELETE /api/events/:id/time-constraint
+   * Demote a calendar event to a plain anchor-bound task.
+   * Finds the linked task_id and PATCHes it with null times + anchorId + planDate.
+   * Optimistic: removes the event locally first.
    */
-  async function demoteEvent(eventId: string) {
-    try {
-      await api(`/api/events/${eventId}/time-constraint`, { method: 'DELETE' })
-    } catch { /* ignore */ }
+  async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
+    if (!ev?.task_id) {
+      console.warn('Cannot demote event with no task_id — skipping')
+      return
+    }
     events.value = events.value.filter(e => e.id !== eventId)
+    try {
+      await api(`/api/tasks/${ev.task_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ start_time: null, end_time: null, anchor_id: anchorId, plan_date: planDate }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
+  }
+
+  /**
+   * Delete a calendar event, optionally targeting a specific occurrence scope.
+   * When scope is provided, original_start_time identifies which instance.
+   */
+  async function deleteEvent(
+    eventId: string,
+    scope?: 'this' | 'this_and_future' | 'all',
+    originalStartTime?: string,
+  ): Promise<void> {
+    events.value = events.value.filter(e => e.id !== eventId)
+    try {
+      const params = new URLSearchParams()
+      if (scope) params.set('scope', scope)
+      if (originalStartTime) params.set('original_start_time', originalStartTime)
+      const qs = params.toString() ? `?${params.toString()}` : ''
+      await api(`/api/events/${eventId}${qs}`, { method: 'DELETE' })
+    } catch { /* ignore — optimistic update stays */ }
   }
 
   /**
@@ -137,6 +182,23 @@ export const useEventStore = defineStore('events', () => {
    */
   function removeEventsForTask(taskId: string) {
     events.value = events.value.filter(e => e.task_id !== taskId)
+  }
+
+  /**
+   * Update the color of a calendar event. Pass null to reset to default.
+   * PATCH /api/events/:id with { color } — updates optimistically.
+   */
+  async function updateEventColor(eventId: string, color: string | null): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
+    if (!ev) return
+    ev.color = color
+    try {
+      await api(`/api/events/${eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
   }
 
   /**
@@ -161,5 +223,5 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* ignore — optimistic update stays */ }
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask, setRecurrence }
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor }
 })

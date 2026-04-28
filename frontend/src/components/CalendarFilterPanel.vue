@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { Milestone } from '../stores/milestones'
 import type { ContextNode } from '../stores/context'
+import type { Anchor } from '../stores/anchors'
 import type { KanbanColumn } from '../stores/kanban'
+import ContextTreeFilterNode from './ContextTreeFilterNode.vue'
 
 export interface CalendarFilter {
-  milestoneIds: Set<string>
   contextNodeIds: Set<string>
+  anchorIds: Set<string>
   kanbanColumnIds: Set<string>
 }
 
 const props = defineProps<{
   modelValue: CalendarFilter
-  milestones: Milestone[]
-  contextNodes: ContextNode[]
+  rootNodes: ContextNode[]
+  childrenOf: (parentId: string) => ContextNode[]
+  fetchChildren?: (parentId: string) => Promise<unknown>
+  anchors: Anchor[]
   kanbanColumns: KanbanColumn[]
 }>()
 
@@ -23,43 +26,28 @@ const emit = defineEmits<{
 }>()
 
 const search = ref('')
-const collapsed = ref<Record<string, boolean>>({ milestones: false, context: false, kanban: false })
-
+const collapsed = ref<Record<string, boolean>>({ categories: false, anchors: false, kanban: false })
 const searchLower = computed(() => search.value.toLowerCase())
-
-const filteredMilestones = computed(() =>
-  props.milestones.filter(m => m.name.toLowerCase().includes(searchLower.value))
-)
-const filteredContextNodes = computed(() =>
-  props.contextNodes.filter(n => n.name.toLowerCase().includes(searchLower.value))
-)
-const filteredKanbanColumns = computed(() =>
-  props.kanbanColumns.filter(c => c.name.toLowerCase().includes(searchLower.value))
-)
-
-function toggleGroup(key: string) {
-  collapsed.value[key] = !collapsed.value[key]
-}
 
 function clone(): CalendarFilter {
   return {
-    milestoneIds: new Set(props.modelValue.milestoneIds),
     contextNodeIds: new Set(props.modelValue.contextNodeIds),
+    anchorIds: new Set(props.modelValue.anchorIds),
     kanbanColumnIds: new Set(props.modelValue.kanbanColumnIds),
   }
-}
-
-function toggleMilestone(id: string) {
-  const f = clone()
-  if (f.milestoneIds.has(id)) f.milestoneIds.delete(id)
-  else f.milestoneIds.add(id)
-  emit('update:modelValue', f)
 }
 
 function toggleContextNode(id: string) {
   const f = clone()
   if (f.contextNodeIds.has(id)) f.contextNodeIds.delete(id)
   else f.contextNodeIds.add(id)
+  emit('update:modelValue', f)
+}
+
+function toggleAnchor(id: string) {
+  const f = clone()
+  if (f.anchorIds.has(id)) f.anchorIds.delete(id)
+  else f.anchorIds.add(id)
   emit('update:modelValue', f)
 }
 
@@ -70,20 +58,29 @@ function toggleKanban(id: string) {
   emit('update:modelValue', f)
 }
 
+function toggleGroup(key: string) { collapsed.value[key] = !collapsed.value[key] }
+
 function onKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') emit('close')
 }
 
 const totalActive = computed(() =>
-  props.modelValue.milestoneIds.size +
   props.modelValue.contextNodeIds.size +
+  props.modelValue.anchorIds.size +
   props.modelValue.kanbanColumnIds.size
+)
+
+const filteredAnchors = computed(() =>
+  props.anchors.filter(a => a.name.toLowerCase().includes(searchLower.value))
+)
+const filteredKanban = computed(() =>
+  props.kanbanColumns.filter(c => c.name.toLowerCase().includes(searchLower.value))
 )
 </script>
 
 <template>
   <div
-    class="w-72 bg-gray-800 border border-white/20 rounded-xl shadow-xl p-3 space-y-1"
+    class="w-72 max-h-[70vh] overflow-y-auto bg-gray-800 border border-white/20 rounded-xl shadow-xl p-3 space-y-1"
     tabindex="0"
     @keydown="onKeydown"
   >
@@ -99,65 +96,65 @@ const totalActive = computed(() =>
       <button
         v-if="totalActive > 0"
         class="text-[10px] text-indigo-400 hover:text-indigo-300"
-        @click="emit('update:modelValue', { milestoneIds: new Set(), contextNodeIds: new Set(), kanbanColumnIds: new Set() })"
+        @click="emit('update:modelValue', { contextNodeIds: new Set(), anchorIds: new Set(), kanbanColumnIds: new Set() })"
       >Clear all ({{ totalActive }})</button>
     </div>
 
-    <!-- Milestones group -->
+    <!-- Categories (context tree, milestones included) -->
     <div>
       <button
-        data-testid="filter-group-milestones"
+        data-testid="filter-group-categories"
         class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
-        @click="toggleGroup('milestones')"
+        @click="toggleGroup('categories')"
       >
-        <span class="transition-transform" :class="collapsed.milestones ? '-rotate-90' : ''">▾</span>
-        Milestones
-        <span v-if="modelValue.milestoneIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.milestoneIds.size }}</span>
-      </button>
-      <div v-if="!collapsed.milestones" class="space-y-0.5 pl-2">
-        <div v-if="!filteredMilestones.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
-        <button
-          v-for="m in filteredMilestones"
-          :key="m.id"
-          :data-testid="`filter-item-milestone-${m.id}`"
-          class="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors"
-          :class="modelValue.milestoneIds.has(m.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
-          @click="toggleMilestone(m.id)"
-        >
-          <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: m.color ?? '#6366f1' }" />
-          {{ m.name }}
-        </button>
-      </div>
-    </div>
-
-    <!-- Context Nodes group -->
-    <div>
-      <button
-        data-testid="filter-group-context"
-        class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
-        @click="toggleGroup('context')"
-      >
-        <span class="transition-transform" :class="collapsed.context ? '-rotate-90' : ''">▾</span>
-        Context Nodes
+        <span class="transition-transform" :class="collapsed.categories ? '-rotate-90' : ''">▾</span>
+        Categories
         <span v-if="modelValue.contextNodeIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.contextNodeIds.size }}</span>
       </button>
-      <div v-if="!collapsed.context" class="space-y-0.5 pl-2">
-        <div v-if="!filteredContextNodes.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
-        <button
-          v-for="n in filteredContextNodes"
+      <div v-if="!collapsed.categories" class="pl-1">
+        <div v-if="!rootNodes.length" class="text-[11px] text-white/20 py-0.5">No categories</div>
+        <ContextTreeFilterNode
+          v-for="n in rootNodes"
           :key="n.id"
-          :data-testid="`filter-item-context-${n.id}`"
+          :node="n"
+          :selected="modelValue.contextNodeIds"
+          :children-of="childrenOf"
+          :fetch-children="fetchChildren"
+          :search="searchLower"
+          @toggle="toggleContextNode"
+        />
+      </div>
+    </div>
+
+    <!-- Anchors -->
+    <div>
+      <button
+        data-testid="filter-group-anchors"
+        class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
+        @click="toggleGroup('anchors')"
+      >
+        <span class="transition-transform" :class="collapsed.anchors ? '-rotate-90' : ''">▾</span>
+        Anchors
+        <span v-if="modelValue.anchorIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.anchorIds.size }}</span>
+      </button>
+      <div v-if="!collapsed.anchors" class="space-y-0.5 pl-2">
+        <div v-if="!filteredAnchors.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
+        <button
+          v-for="a in filteredAnchors"
+          :key="a.id"
+          :data-testid="`filter-item-anchor-${a.id}`"
           class="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors"
-          :class="modelValue.contextNodeIds.has(n.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
-          @click="toggleContextNode(n.id)"
+          :class="modelValue.anchorIds.has(a.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
+          @click="toggleAnchor(a.id)"
         >
-          <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: n.color ?? '#6366f1' }" />
-          {{ n.name }}
+          <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: a.color || '#6366f1' }" />
+          <span class="flex-1 truncate">{{ a.name }}</span>
+          <span class="text-[10px] text-white/30">{{ a.time }}</span>
         </button>
       </div>
     </div>
 
-    <!-- Kanban Columns group -->
+    <!-- Kanban Columns -->
     <div>
       <button
         data-testid="filter-group-kanban"
@@ -169,9 +166,9 @@ const totalActive = computed(() =>
         <span v-if="modelValue.kanbanColumnIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.kanbanColumnIds.size }}</span>
       </button>
       <div v-if="!collapsed.kanban" class="space-y-0.5 pl-2">
-        <div v-if="!filteredKanbanColumns.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
+        <div v-if="!filteredKanban.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
         <button
-          v-for="c in filteredKanbanColumns"
+          v-for="c in filteredKanban"
           :key="c.id"
           :data-testid="`filter-item-kanban-${c.id}`"
           class="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors"
