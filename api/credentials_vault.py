@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import secrets
 import shutil
 from contextlib import asynccontextmanager
@@ -79,7 +80,10 @@ class CredentialsVault:
                 raise ValueError(f"No credentials_blob found for user {user_id}")
 
             plaintext = self._fernet.decrypt(blob)
-            creds_file.write_bytes(plaintext)
+            # Write with mode 0o600 — credentials must not be world-readable
+            fd = os.open(str(creds_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(plaintext)
             original_bytes = plaintext
 
             yield subdir

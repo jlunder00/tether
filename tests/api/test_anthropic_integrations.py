@@ -52,7 +52,7 @@ async def auth_app_client():
 @pytest.fixture(autouse=True)
 def clear_pending_setups():
     """Clear module-level _pending_setups before each test."""
-    import api.routes.anthropic_integrations as ant_routes
+    import api.routes.integrations as ant_routes
     ant_routes._pending_setups.clear()
     yield
     ant_routes._pending_setups.clear()
@@ -79,7 +79,7 @@ async def test_start_returns_url(auth_app_client):
     mock_proc.wait = AsyncMock(return_value=None)
 
     with patch(
-        "api.routes.anthropic_integrations.asyncio.create_subprocess_exec",
+        "api.routes.integrations.asyncio.create_subprocess_exec",
         return_value=mock_proc,
     ):
         resp = await client.post("/api/integrations/anthropic/start")
@@ -110,7 +110,7 @@ async def test_start_no_url_returns_502(auth_app_client):
     mock_proc.wait = AsyncMock(return_value=None)
 
     with patch(
-        "api.routes.anthropic_integrations.asyncio.create_subprocess_exec",
+        "api.routes.integrations.asyncio.create_subprocess_exec",
         return_value=mock_proc,
     ):
         resp = await client.post("/api/integrations/anthropic/start")
@@ -125,7 +125,7 @@ async def test_start_no_url_returns_502(auth_app_client):
 @pytest.mark.asyncio
 async def test_complete_success(auth_app_client, tmp_path):
     """Stash a fake pending entry; complete succeeds and calls vault.store_initial."""
-    import api.routes.anthropic_integrations as ant_routes
+    import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
     # Create a fake credentials.json in a temp dir
@@ -182,18 +182,16 @@ async def test_complete_no_pending_returns_404(auth_app_client):
 @pytest.mark.asyncio
 async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
     """If asyncio.wait_for times out on proc.wait(), endpoint returns 504."""
-    import api.routes.anthropic_integrations as ant_routes
+    import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
     mock_proc = AsyncMock()
     mock_proc.stdin = AsyncMock()
     mock_proc.stdin.write = MagicMock()
     mock_proc.stdin.drain = AsyncMock()
-
-    async def never_returns():
-        await asyncio.sleep(9999)
-
-    mock_proc.wait = never_returns
+    # wait() returns 0 immediately; asyncio.wait_for is patched below to raise TimeoutError
+    # so the direct await proc.wait() after kill() won't hang
+    mock_proc.wait = AsyncMock(return_value=0)
     mock_proc.kill = MagicMock()
 
     ant_routes._pending_setups[TEST_USER_ID] = {
@@ -202,7 +200,7 @@ async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
         "started_at": time.time(),
     }
 
-    with patch("api.routes.anthropic_integrations.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+    with patch("api.routes.integrations.asyncio.wait_for", side_effect=asyncio.TimeoutError):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "code"},

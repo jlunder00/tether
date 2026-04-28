@@ -238,6 +238,43 @@ async def test_materialize_rmtree_on_exception(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 5b. materialize writes credentials file with mode 0o600
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_materialize_credentials_file_mode(tmp_path):
+    """Materialized .credentials.json must be owner-read-write only (0o600)."""
+    from api.credentials_vault import CredentialsVault
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key()
+    vault = CredentialsVault(pool=None, encryption_key=key, creds_dir=tmp_path)
+
+    original = {"token": "secret"}
+    f = Fernet(key)
+    original_blob = f.encrypt(json.dumps(original).encode())
+
+    async def fake_get(conn, user_id):
+        return original_blob
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        yield AsyncMock()
+
+    captured_file: list[Path] = []
+
+    with patch("api.credentials_vault.get_credentials_blob", side_effect=fake_get), \
+         patch("api.credentials_vault.store_credentials_blob", new=AsyncMock()), \
+         patch("api.credentials_vault.db_pg.get_conn", fake_get_conn):
+
+        async with vault.materialize("user1") as creds_dir:
+            creds_file = creds_dir / ".credentials.json"
+            captured_file.append(creds_file)
+            mode = creds_file.stat().st_mode & 0o777
+            assert mode == 0o600, f"Expected 0o600, got 0o{mode:o}"
+
+
+# ---------------------------------------------------------------------------
 # 6. disconnect calls delete_credentials_blob
 # ---------------------------------------------------------------------------
 
