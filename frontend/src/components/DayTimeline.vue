@@ -11,6 +11,7 @@ import {
   eventHeightPx,
   anchorBandTopPx,
   anchorBandHeightPx,
+  computeAnchorOverlapLayout,
   AXIS_START_HOUR,
   AXIS_END_HOUR,
   AXIS_TOTAL_PX,
@@ -56,6 +57,12 @@ const timedEvents = computed(() =>
 // --- Overlap layout for timed events ---
 
 const overlapLayout = computed(() => computeOverlapLayout(timedEvents.value))
+
+// --- Anchor band overlap layout ---
+
+const anchorOverlapLayouts = computed(() =>
+  computeAnchorOverlapLayout(anchorStore.anchors, dateObj.value)
+)
 
 // --- Hour labels (6am..11pm) ---
 
@@ -281,11 +288,14 @@ function onDragover(e: DragEvent) {
 
 function anchorBandStyle(anchor: { color: string; id: string }) {
   const color = anchor.color ?? '#6366f1'
+  const layout = anchorOverlapLayouts.value[anchor.id] ?? { leftPercent: 0, widthPercent: 100 }
   return {
     backgroundColor: color + '44',  // ~26% opacity
     borderLeft: '2px solid ' + color,
     top: `${anchorBandTopPx(anchor as Parameters<typeof anchorBandTopPx>[0], dateObj.value)}px`,
     height: `${anchorBandHeightPx(anchor as Parameters<typeof anchorBandHeightPx>[0], dateObj.value)}px`,
+    left: `${layout.leftPercent}%`,
+    width: `${layout.widthPercent}%`,
   }
 }
 
@@ -350,7 +360,7 @@ function timedEventStyle(event: CalendarEvent) {
           v-for="anchor in anchorStore.anchors"
           :key="anchor.id"
           :data-testid="`anchor-band-${anchor.id}`"
-          class="absolute inset-x-0 pointer-events-none rounded-sm"
+          class="absolute pointer-events-none rounded-sm"
           :style="anchorBandStyle(anchor)"
         />
 

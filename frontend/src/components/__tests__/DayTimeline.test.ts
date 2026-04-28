@@ -7,6 +7,7 @@ import {
   eventHeightPx,
   anchorBandTopPx,
   anchorBandHeightPx,
+  computeAnchorOverlapLayout,
   AXIS_START_HOUR,
   AXIS_END_HOUR,
   PX_PER_MINUTE,
@@ -355,5 +356,51 @@ describe('DayTimeline component', () => {
     const band = wrapper.find('[data-testid="anchor-band-a1"]')
     const style = band.attributes('style') ?? ''
     expect(style).toContain('border-left')
+  })
+
+  it('overlap-background strips appear when two events overlap', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    // mockEvents has only one timed event so no overlap strip expected
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(false)
+  })
+})
+
+// --- computeAnchorOverlapLayout pure function tests ---
+
+describe('computeAnchorOverlapLayout', () => {
+  const testDate = new Date('2024-06-10T12:00:00')
+
+  it('non-overlapping anchors each get leftPercent=0 and widthPercent=100', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'Morning', time: '08:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'Afternoon', time: '14:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].leftPercent).toBe(0)
+    expect(layout['a1'].widthPercent).toBe(100)
+    expect(layout['a2'].leftPercent).toBe(0)
+    expect(layout['a2'].widthPercent).toBe(100)
+  })
+
+  it('two overlapping anchors get different leftPercent values', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'Morning', time: '08:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'Mid', time: '09:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].leftPercent).not.toBe(layout['a2'].leftPercent)
+    expect(layout['a1'].widthPercent).toBeLessThan(100)
+    expect(layout['a2'].widthPercent).toBeLessThan(100)
+  })
+
+  it('two overlapping anchors each get widthPercent=50', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'A', time: '09:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'B', time: '10:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].widthPercent).toBe(50)
+    expect(layout['a2'].widthPercent).toBe(50)
   })
 })

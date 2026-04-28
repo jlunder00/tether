@@ -55,3 +55,34 @@ export function anchorBandHeightPx(anchor: Anchor, date: Date): number {
 }
 
 export const AXIS_TOTAL_PX = (AXIS_END_HOUR - AXIS_START_HOUR) * 60 * PX_PER_MINUTE
+
+/**
+ * Compute column layout for anchor bands when anchors overlap.
+ * Returns a map from anchor id → { leftPercent, widthPercent }.
+ * Non-overlapping anchors get leftPercent=0, widthPercent=100.
+ * Overlapping anchors in a group of N are split into N equal columns.
+ */
+export function computeAnchorOverlapLayout(
+  anchors: Anchor[],
+  date: Date,
+): Record<string, { leftPercent: number; widthPercent: number }> {
+  const result: Record<string, { leftPercent: number; widthPercent: number }> = {}
+
+  // Build time windows for each anchor
+  const windows = anchors.map(a => ({ anchor: a, ...anchorWindow(a, date) }))
+
+  // For each anchor, find all anchors it overlaps with (including itself)
+  for (const w of windows) {
+    const group = windows.filter(other =>
+      w.start < other.end && w.end > other.start
+    )
+    const idx = group.findIndex(g => g.anchor.id === w.anchor.id)
+    const n = group.length
+    result[w.anchor.id] = {
+      leftPercent: (idx / n) * 100,
+      widthPercent: (1 / n) * 100,
+    }
+  }
+
+  return result
+}
