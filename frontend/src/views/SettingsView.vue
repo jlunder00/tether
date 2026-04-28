@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { api } from '../lib/api'
 import GoogleCalendarSection from '../components/GoogleCalendarSection.vue'
+import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
 
 const auth = useAuthStore()
@@ -265,6 +266,9 @@ async function linkTelegram() {
 
       <!-- Google Calendar Integration -->
       <GoogleCalendarSection />
+
+      <!-- Anthropic Account Integration -->
+      <AnthropicAccountSection />
 
       <!-- OAuth Connections -->
       <section class="mb-8">
