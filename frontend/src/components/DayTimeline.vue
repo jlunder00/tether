@@ -184,12 +184,19 @@ function onTimedAreaClick(e: MouseEvent) {
 
 async function onTimedAreaDrop(e: DragEvent) {
   e.preventDefault()
-  const raw = e.dataTransfer?.getData('application/json')
+  // AnchorBlock writes 'text/plain'; we also accept 'application/json' for future-proofing.
+  // Try application/json first, fall back to text/plain.
+  const rawJson = e.dataTransfer?.getData('application/json')
+  const rawText = e.dataTransfer?.getData('text/plain')
+  const raw = rawJson || rawText
   if (!raw) return
   try {
     const data = JSON.parse(raw)
-    if (data.type === 'task' && data.taskId) {
-      // Compute drop time
+    // AnchorBlock drag payload: { taskId, fromAnchorId, fromDate }
+    // Check for taskId directly (AnchorBlock format) or type:'task' (application/json format)
+    const isTask = data.taskId && (data.type === 'task' || data.fromAnchorId !== undefined)
+    if (isTask) {
+      // Compute drop time from cursor position
       const target = e.currentTarget as HTMLElement
       const rect = target.getBoundingClientRect()
       const offsetY = e.clientY - rect.top + target.scrollTop
@@ -208,6 +215,21 @@ async function onTimedAreaDrop(e: DragEvent) {
   } catch {
     // ignore malformed drag data
   }
+}
+
+// --- Drag event block (for demote: drag to left anchor column) ---
+
+function onEventDragstart(event: CalendarEvent, dragEvent: DragEvent) {
+  dragEvent.dataTransfer!.effectAllowed = 'move'
+  // Write as both formats: text/plain for broadest compatibility, application/json for type safety
+  const payload = JSON.stringify({
+    type: 'calendar-event',
+    eventId: event.id,
+    taskId: event.task_id,
+    title: event.title,
+  })
+  dragEvent.dataTransfer!.setData('application/json', payload)
+  dragEvent.dataTransfer!.setData('text/plain', payload)
 }
 
 function onDragover(e: DragEvent) {
@@ -296,17 +318,27 @@ function timedEventStyle(event: CalendarEvent) {
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         />
 
-        <!-- Timed events -->
-        <CalendarEventBlock
+        <!-- Timed events — draggable for vertical move and demote to anchor column -->
+        <div
           v-for="ev in timedEvents"
           :key="ev.id"
-          :event="ev"
-          :top-px="eventTopPx(ev.start_time)"
-          :height-px="eventHeightPx(ev.start_time, ev.end_time)"
-          :style="timedEventStyle(ev)"
-          @click="emit('open-event', ev)"
-          @mousedown="(me) => onEventMousedown(ev, me)"
-        />
+          class="absolute"
+          :style="{
+            top: `${eventTopPx(ev.start_time)}px`,
+            left: timedEventStyle(ev).left,
+            width: timedEventStyle(ev).width,
+          }"
+          draggable="true"
+          @dragstart="(de) => onEventDragstart(ev, de)"
+        >
+          <CalendarEventBlock
+            :event="ev"
+            :top-px="0"
+            :height-px="eventHeightPx(ev.start_time, ev.end_time)"
+            @click="emit('open-event', ev)"
+            @mousedown="(me) => onEventMousedown(ev, me)"
+          />
+        </div>
       </div>
     </div>
 

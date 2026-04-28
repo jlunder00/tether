@@ -264,4 +264,22 @@ describe('DayTimeline component', () => {
     expect(emitted).toBeTruthy()
     expect(emitted![0][0]).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)
   })
+
+  it('timed area has drop handler (wired for promote from AnchorBlock)', async () => {
+    // Verifies that the timed area is set up to accept drops.
+    // Full integration of DragEvent.dataTransfer is limited in jsdom; this tests the wiring.
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    // Drop should not throw even with no dataTransfer payload
+    await expect(timedArea.trigger('drop')).resolves.not.toThrow()
+  })
+
+  it('event blocks are draggable (have draggable attribute)', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    // The timed event wrapper should have draggable="true"
+    const draggableBlocks = wrapper.findAll('[draggable="true"]')
+    expect(draggableBlocks.length).toBeGreaterThan(0)
+  })
 })

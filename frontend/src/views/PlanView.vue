@@ -86,13 +86,17 @@ function onOpenEvent(event: CalendarEvent) {
 
 /** Handle drop of a calendar event onto the anchor column — demotes it back to a plain task. */
 async function onAnchorColumnDrop(e: DragEvent) {
-  const raw = e.dataTransfer?.getData('application/json')
+  // DayTimeline writes both application/json and text/plain; prefer application/json
+  const rawJson = e.dataTransfer?.getData('application/json')
+  const rawText = e.dataTransfer?.getData('text/plain')
+  const raw = rawJson || rawText
   if (!raw) return
   try {
     const data = JSON.parse(raw)
     if (data.type === 'calendar-event' && data.eventId) {
       await eventStore.demoteEvent(data.eventId)
-      // planStore will refresh on next fetch; tasks will appear in anchor blocks
+      // Refresh plan so the demoted task appears in anchor blocks
+      await planStore.fetchPlan(activeDate.value)
     }
   } catch {
     // ignore malformed drag data
