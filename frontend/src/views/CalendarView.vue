@@ -95,7 +95,7 @@ async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
   } else if (pending.kind === 'event-delete') {
     await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
   } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {
-    // TODO(fe-teammate-2): wire when repeating tasks backend ships
+    // TODO: wire recurring task scope API when repeating tasks backend ships
   }
 }
 
@@ -529,7 +529,7 @@ const filteredEventsByDay = computed(() => {
     // Kanban filter: match via task_id → column not yet available without a task→column index.
     // The kanban store tracks columns but not task↔column assignments directly.
     // Skipping kanban filter here until a task→column index is exposed.
-    // TODO(fe-teammate-2): wire kanban column filter when task store exposes column_id
+    // TODO: wire kanban column filter once task store exposes column_id
 
     map[dayKey].push(ev)
   }
