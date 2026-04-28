@@ -13,6 +13,7 @@ const BASE_EVENT_FIELDS = {
   color: null,
   is_recurring: false,
   is_occurrence: false,
+  is_all_day: false,
   rrule: null,
   context_subject: null,
 }

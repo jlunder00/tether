@@ -11,7 +11,7 @@ import { useSlideOver } from '../composables/useSlideOver'
 import CalendarEventBlock from '../components/CalendarEventBlock.vue'
 import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
-import type { RecurrenceEditScope } from '../types/recurrence'
+import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
 import { resolveEventColor } from '../composables/useColorResolver'
 import { computeOverlapLayout, type EventLayout } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
@@ -60,32 +60,47 @@ interface DragState {
 }
 const draggingEvent = ref<DragState | null>(null)
 
-interface PendingRecurrenceEdit {
-  eventId: string
-  startTime: string
-  endTime: string
-  originalStartTime: string
-}
-const pendingRecurrenceEdit = ref<PendingRecurrenceEdit | null>(null)
+const pendingRecurrence = ref<PendingRecurrence>(null)
+
+const recurrenceDialogMode = computed<'event' | 'task'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'event'
+  return p.kind.startsWith('task') ? 'task' : 'event'
+})
+
+const recurrenceDialogAction = computed<'edit' | 'delete' | 'move'>(() => {
+  const p = pendingRecurrence.value
+  if (!p) return 'edit'
+  if (p.kind.endsWith('delete')) return 'delete'
+  if (p.kind.endsWith('move')) return 'move'
+  return 'edit'
+})
 
 async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
-  const pending = pendingRecurrenceEdit.value
-  pendingRecurrenceEdit.value = null
+  const pending = pendingRecurrence.value
+  pendingRecurrence.value = null
   if (!pending) return
-  await eventStore.moveEvent(
-    pending.eventId,
-    pending.startTime,
-    pending.endTime,
-    scope,
-    pending.originalStartTime,
-  )
+
+  if (pending.kind === 'event-move') {
+    await eventStore.moveEvent(pending.eventId, pending.startTime, pending.endTime, scope, pending.originalStartTime)
+  } else if (pending.kind === 'event-edit') {
+    // Apply patch with scope — PATCH /api/events/:id
+    try {
+      await fetch(`/api/events/${pending.eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...pending.patch, scope, original_start_time: pending.patch.original_start_time }),
+      })
+    } catch { /* ignore */ }
+  } else if (pending.kind === 'event-delete') {
+    await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
+  } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {
+    // TODO(fe-teammate-2): wire when repeating tasks backend ships
+  }
 }
 
 function onRecurrenceScopeCancel() {
-  // Revert optimistic — restore the original times since we already updated them
-  // visually during the drag. Actually we haven't yet; moveEvent is the only path
-  // that mutates. So just clear the pending state.
-  pendingRecurrenceEdit.value = null
+  pendingRecurrence.value = null
 }
 
 // Distinguish click-as-open from click-and-drag-to-move. A bare click triggers
@@ -207,7 +222,8 @@ async function onWindowMouseup(e: MouseEvent) {
     // Backend (PR #219) requires {scope, original_start_time} to know whether
     // to EXDATE this instance, split the series, or move the master.
     if (existing.is_occurrence) {
-      pendingRecurrenceEdit.value = {
+      pendingRecurrence.value = {
+        kind: 'event-move',
         eventId: state.eventId,
         startTime: newStart.toISOString(),
         endTime: newEnd.toISOString(),
@@ -493,24 +509,47 @@ function onDocumentKeydown(e: KeyboardEvent) {
 // ─── Events mapped per day (with filter) ─────────────────────
 const filteredEventsByDay = computed(() => {
   const allowed = allowedTaskIds.value
+  const { anchorIds } = activeFilter.value
   const map: Record<string, CalendarEvent[]> = {}
   for (const ev of eventStore.events) {
     const dayKey = ev.start_time.slice(0, 10)
     if (!map[dayKey]) map[dayKey] = []
+
+    // Context/milestone filter
     if (allowed !== null) {
-      // Only include events linked to an allowed task; exclude unlinked standalone events when filter active
       if (ev.task_id === null || !allowed.has(ev.task_id)) continue
     }
+
+    // Anchor filter: map event's local start time to an anchor; skip if not in selected set
+    if (anchorIds.size > 0) {
+      const resolvedAnchor = anchorForEventTime(ev)
+      if (resolvedAnchor === null || !anchorIds.has(resolvedAnchor)) continue
+    }
+
+    // Kanban filter: match via task_id → column not yet available without a task→column index.
+    // The kanban store tracks columns but not task↔column assignments directly.
+    // Skipping kanban filter here until a task→column index is exposed.
+    // TODO(fe-teammate-2): wire kanban column filter when task store exposes column_id
+
     map[dayKey].push(ev)
   }
   return map
 })
 
-// For the week view: only build the map over the visible 7 days
+// For the week view: only timed (non-all-day) events per day
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = filteredEventsByDay.value[key] ?? []
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => !ev.is_all_day)
+  }
+  return map
+})
+
+// All-day events per day (rendered in the band above the timed grid)
+const allDayEventsByDay = computed(() => {
+  const map: Record<string, CalendarEvent[]> = {}
+  for (const key of dayKeys.value) {
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => ev.is_all_day)
   }
   return map
 })
@@ -779,8 +818,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             >
               <CalendarFilterPanel
                 v-model="activeFilter"
-                :milestones="milestoneStore.all"
-                :context-nodes="Object.values(contextStore.nodes)"
+                :root-nodes="contextStore.rootNodes"
+                :children-of="contextStore.childrenOf"
+                :fetch-children="contextStore.fetchChildren"
+                :anchors="anchorStore.anchors"
                 :kanban-columns="kanbanStore.columns"
                 @close="filterOpen = false"
               />
@@ -864,6 +905,27 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               @click="focusDay(dayKeys[i])"
             >
               {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+            </div>
+          </div>
+
+          <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
+          <div data-testid="all-day-band" class="flex border-b border-white/10 bg-gray-900/80 pl-12">
+            <div
+              v-for="(_, i) in days"
+              :key="dayKeys[i]"
+              class="flex-1 min-h-[24px] flex flex-wrap gap-0.5 px-1 py-0.5 border-l border-white/5"
+            >
+              <div
+                v-for="ev in allDayEventsByDay[dayKeys[i]]"
+                :key="ev.id"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none cursor-pointer"
+                :style="{ backgroundColor: resolveColor(ev) }"
+                data-event-block
+                @click="openEventPanel(ev)"
+                @mousedown.stop="(e: MouseEvent) => onEventMousedown(e, ev)"
+              >
+                {{ ev.title }}
+              </div>
             </div>
           </div>
 
@@ -957,8 +1019,9 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     <router-view />
 
     <RecurrenceEditDialog
-      :open="pendingRecurrenceEdit !== null"
-      title="Move recurring event"
+      :visible="pendingRecurrence !== null"
+      :mode="recurrenceDialogMode"
+      :action="recurrenceDialogAction"
       @confirm="onRecurrenceScopeConfirm"
       @cancel="onRecurrenceScopeCancel"
     />

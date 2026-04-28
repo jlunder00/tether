@@ -111,6 +111,7 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
       color: null,
       is_recurring: false,
       is_occurrence: false,
+      is_all_day: false,
       rrule: null,
       context_subject: null,
     })
