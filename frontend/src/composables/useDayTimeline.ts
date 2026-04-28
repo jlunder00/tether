@@ -1,4 +1,5 @@
 import type { Anchor } from '../stores/anchors'
+import { computeOverlapLayout } from './useOverlapLayout'
 
 // Configurable axis
 export const AXIS_START_HOUR = 6   // 6am
@@ -57,32 +58,22 @@ export function anchorBandHeightPx(anchor: Anchor, date: Date): number {
 export const AXIS_TOTAL_PX = (AXIS_END_HOUR - AXIS_START_HOUR) * 60 * PX_PER_MINUTE
 
 /**
- * Compute column layout for anchor bands when anchors overlap.
+ * Compute column layout for anchor bands when anchors overlap in time.
  * Returns a map from anchor id → { leftPercent, widthPercent }.
  * Non-overlapping anchors get leftPercent=0, widthPercent=100.
- * Overlapping anchors in a group of N are split into N equal columns.
+ *
+ * Delegates to computeOverlapLayout (connected-components + lane-greedy)
+ * so that transitive overlaps (A∩B, B∩C, A!∩C) get a consistent 3-column
+ * layout instead of each anchor sizing itself by its own pairwise count.
  */
 export function computeAnchorOverlapLayout(
   anchors: Anchor[],
   date: Date,
 ): Record<string, { leftPercent: number; widthPercent: number }> {
-  const result: Record<string, { leftPercent: number; widthPercent: number }> = {}
-
-  // Build time windows for each anchor
-  const windows = anchors.map(a => ({ anchor: a, ...anchorWindow(a, date) }))
-
-  // For each anchor, find all anchors it overlaps with (including itself)
-  for (const w of windows) {
-    const group = windows.filter(other =>
-      w.start < other.end && w.end > other.start
-    )
-    const idx = group.findIndex(g => g.anchor.id === w.anchor.id)
-    const n = group.length
-    result[w.anchor.id] = {
-      leftPercent: (idx / n) * 100,
-      widthPercent: (1 / n) * 100,
-    }
-  }
-
-  return result
+  // Convert anchors to LayoutEvent shape (ISO strings) for computeOverlapLayout
+  const layoutEvents = anchors.map(a => {
+    const { start, end } = anchorWindow(a, date)
+    return { id: a.id, start_time: start.toISOString(), end_time: end.toISOString() }
+  })
+  return computeOverlapLayout(layoutEvents)
 }

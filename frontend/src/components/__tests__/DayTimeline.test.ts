@@ -432,4 +432,29 @@ describe('computeAnchorOverlapLayout', () => {
     expect(layout['a1'].widthPercent).toBe(50)
     expect(layout['a2'].widthPercent).toBe(50)
   })
+
+  it('chained transitive overlaps (A∩B, B∩C, A!∩C) use 2-column layout — no visual overlap', () => {
+    // A: 08:00–10:00, B: 09:00–11:00, C: 10:30–12:00
+    // A overlaps B, B overlaps C, A does NOT overlap C.
+    // At most 2 anchors are co-visible at any instant (9–10 and 10:30–11).
+    // Lane-greedy assigns: A→lane 0, B→lane 1, C→lane 0 (reuses after A ends).
+    // maxLane = 1 → 2 columns, each 50% wide. No visual overlap between any pair.
+    //
+    // Old pairwise approach gave B width=33% and placed B (33–66%) inside A (0–50%)
+    // → visual overlap. New connected-components approach fixes this.
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'A', time: '08:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'B', time: '09:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+      { id: 'a3', name: 'C', time: '10:30', duration_minutes: 90, flexibility: 'moderate', strictness: 2, color: '#22c55e', position: 3, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    // All three get equal 50% width (2-column layout, NOT 33% which old code gave B)
+    expect(layout['a1'].widthPercent).toBe(50)
+    expect(layout['a2'].widthPercent).toBe(50)
+    expect(layout['a3'].widthPercent).toBe(50)
+    // A and C share lane 0 (sequential, non-overlapping), B is in lane 1
+    expect(layout['a1'].leftPercent).toBe(0)
+    expect(layout['a3'].leftPercent).toBe(0)
+    expect(layout['a2'].leftPercent).toBe(50)
+  })
 })
