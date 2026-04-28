@@ -251,6 +251,62 @@ def test_recurring_event_from_gcal_expands_correctly_after_dst():
     )
 
 
+# ---------------------------------------------------------------------------
+# _rewrite_dtstart_in_rrule — unit tests for the DTSTART rewriter
+# ---------------------------------------------------------------------------
+
+def test_rewrite_dtstart_shifts_wall_clock_time():
+    """Applying a +5h delta to DTSTART;TZID rewrites the embedded local time.
+
+    This is the critical fix for the Bug 1 × Bug 2 interaction: dateutil prefers
+    embedded DTSTART over the dtstart= kwarg, so scope=all must rewrite the line.
+    """
+    from datetime import timedelta
+    from db.pg_queries.tasks import _rewrite_dtstart_in_rrule
+
+    rrule = "DTSTART;TZID=America/New_York:20260209T090000\nRRULE:FREQ=WEEKLY"
+    result = _rewrite_dtstart_in_rrule(rrule, timedelta(hours=5))
+    assert "DTSTART;TZID=America/New_York:20260209T140000" in result
+    assert "RRULE:FREQ=WEEKLY" in result
+
+
+def test_rewrite_dtstart_bare_rrule_unchanged():
+    """A bare RRULE without embedded DTSTART is returned unchanged (no-op)."""
+    from datetime import timedelta
+    from db.pg_queries.tasks import _rewrite_dtstart_in_rrule
+
+    rrule = "RRULE:FREQ=WEEKLY"
+    assert _rewrite_dtstart_in_rrule(rrule, timedelta(hours=5)) == rrule
+
+
+def test_rewrite_dtstart_preserves_dst_semantics_after_shift():
+    """After rewriting DTSTART, rrulestr expands at the new wall-clock time.
+
+    Regression for: scope=all on a GCal-synced recurring event appeared to
+    succeed (update returned) but get_events_for_range still showed original time
+    because rrulestr ignored the updated start_time and used the stale DTSTART.
+    """
+    from datetime import timedelta
+    from dateutil.rrule import rrulestr
+    from db.pg_queries.tasks import _rewrite_dtstart_in_rrule
+
+    original_rrule = "DTSTART;TZID=America/New_York:20260209T090000\nRRULE:FREQ=WEEKLY"
+    # Move from 9am to 2pm (+5h)
+    shifted_rrule = _rewrite_dtstart_in_rrule(original_rrule, timedelta(hours=5))
+
+    window_start = datetime(2026, 4, 6, tzinfo=timezone.utc)
+    window_end   = datetime(2026, 4, 6, 23, 59, tzinfo=timezone.utc)
+    rule = rrulestr(shifted_rrule, ignoretz=False)
+    occs = list(rule.between(window_start, window_end, inc=True))
+
+    assert len(occs) == 1
+    utc_hour = occs[0].astimezone(timezone.utc).hour
+    # 2pm EDT = 18:00 UTC; if still 13:00 UTC the DTSTART was not rewritten
+    assert utc_hour == 18, (
+        f"Expected 2pm EDT (18:00 UTC) after +5h shift; got UTC hour {utc_hour}"
+    )
+
+
 def test_expand_recurring_all_day_exdate_suppresses_occurrence():
     """EXDATE with bare date token (all-day, no time) suppresses the matching occurrence.
 
