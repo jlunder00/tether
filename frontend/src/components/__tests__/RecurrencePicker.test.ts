@@ -16,7 +16,7 @@ describe('RecurrencePicker', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders a select with preset options', async () => {
+  it('renders a select with frequency options', async () => {
     const { default: RecurrencePicker } = await import('../RecurrencePicker.vue')
     const wrapper = mount(RecurrencePicker, {
       props: { modelValue: null, startTime: '2024-06-10T09:00:00Z' },
@@ -28,8 +28,8 @@ describe('RecurrencePicker', () => {
     expect(values).toContain('none')
     expect(values).toContain('daily')
     expect(values).toContain('weekly')
-    expect(values).toContain('weekdays')
     expect(values).toContain('monthly')
+    expect(values).toContain('yearly')
     expect(values).toContain('custom')
   })
 
@@ -77,14 +77,14 @@ describe('RecurrencePicker', () => {
     expect(emitted![0][0]).toBe('FREQ=WEEKLY;BYDAY=TU')
   })
 
-  it('emits FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR for weekdays preset', async () => {
+  it('emits FREQ=YEARLY for yearly preset', async () => {
     const { default: RecurrencePicker } = await import('../RecurrencePicker.vue')
     const wrapper = mount(RecurrencePicker, {
       props: { modelValue: null, startTime: '2024-06-10T09:00:00Z' },
     })
-    await wrapper.find('select').setValue('weekdays')
+    await wrapper.find('select').setValue('yearly')
     const emitted = wrapper.emitted('update:modelValue')
-    expect(emitted![0][0]).toBe('FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR')
+    expect(emitted![0][0]).toBe('FREQ=YEARLY')
   })
 
   it('emits FREQ=MONTHLY for monthly preset', async () => {
@@ -142,7 +142,7 @@ describe('RecurrencePicker', () => {
   it('selects "custom" when modelValue is an unrecognized rrule', async () => {
     const { default: RecurrencePicker } = await import('../RecurrencePicker.vue')
     const wrapper = mount(RecurrencePicker, {
-      props: { modelValue: 'FREQ=YEARLY', startTime: '2024-06-10T09:00:00Z' },
+      props: { modelValue: 'FREQ=HOURLY;INTERVAL=2', startTime: '2024-06-10T09:00:00Z' },
     })
     const select = wrapper.find('select')
     expect((select.element as HTMLSelectElement).value).toBe('custom')

@@ -177,6 +177,7 @@ describe('CalendarView', () => {
         is_recurring: false,
         is_occurrence: false,
         rrule: null,
+        context_subject: null,
       },
       {
         id: 'ev-b',
@@ -191,6 +192,7 @@ describe('CalendarView', () => {
         is_recurring: false,
         is_occurrence: false,
         rrule: null,
+        context_subject: null,
       },
     )
     await nextTick()
