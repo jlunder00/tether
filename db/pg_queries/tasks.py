@@ -793,7 +793,12 @@ def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime)
     else:
         duration = _timedelta(hours=1)
 
-    # Build excluded dates set (date-only comparison for flexibility)
+    # Build excluded dates set — date-only comparison (year, month, day).
+    # NOTE: This correctly suppresses one occurrence per day for daily/weekly series.
+    # Known limitation: sub-daily recurrences (FREQ=HOURLY etc.) with multiple occurrences
+    # on the same calendar date will have ALL same-day occurrences suppressed by a single
+    # EXDATE. Tether doesn't currently produce hourly series, so this is acceptable.
+    # Track separately if sub-daily support is added.
     exdate_dates: set[tuple[int, int, int]] = set()
     for exdate_line in (task.get("exdates") or []):
         for dt in _parse_exdate(exdate_line):
@@ -833,7 +838,7 @@ async def promote_task_to_event(
             source     = COALESCE(source, 'tether'),
             version    = version + 1
         WHERE uuid = $3
-        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id, context_subject
         """,
         _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(task_uuid),
     )
@@ -976,7 +981,7 @@ async def update_event_time(
             version    = version + 1
         WHERE uuid = $3
           AND start_time IS NOT NULL
-        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id, context_subject
         """,
         _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(event_uuid),
     )
@@ -1004,8 +1009,11 @@ def _rrule_set_until(rrule_str: str, until_dt: _datetime) -> str:
     # Remove existing UNTIL= and COUNT= clauses (case-insensitive)
     value = re.sub(r";?UNTIL=[^;]*", "", value, flags=re.IGNORECASE)
     value = re.sub(r";?COUNT=[^;]*", "", value, flags=re.IGNORECASE)
-    value = value.strip(";")
-    return f"{prefix}{value};UNTIL={until_str}"
+    # Build the new value then strip stray leading/trailing semicolons.
+    # Doing it this way prevents "RRULE:;UNTIL=..." when value is empty
+    # (e.g. the RRULE contained only a UNTIL or COUNT clause).
+    value = (value + ";UNTIL=" + until_str).strip(";")
+    return f"{prefix}{value}"
 
 
 async def patch_recurring_this(
@@ -1069,7 +1077,10 @@ async def patch_recurring_this(
 
         # 4. INSERT standalone exception event (tether-native — source/external_id are nulled
         # to avoid the partial unique index on (user_id, source, external_id) WHERE source IS NOT NULL.
-        # The recurrence_id still links this row to the master for ghost-suppression logic.)
+        # recurrence_id is set to master["external_id"] so get_events_for_range exception lookup
+        # can suppress the ghost occurrence. For tether-native series (external_id IS NULL),
+        # recurrence_id would also be NULL — exception suppression would not work in that case.
+        # Known limitation: track separately when tether-native recurring series support is added.)
         new_row = await conn.fetchrow(
             """
             INSERT INTO tasks (

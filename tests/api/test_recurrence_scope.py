@@ -257,3 +257,54 @@ async def test_patch_recurring_this_and_future_raises_for_non_recurring():
             new_start_time="2026-05-11T14:00:00+00:00",
             new_end_time="2026-05-11T14:30:00+00:00",
         )
+
+
+# ---------------------------------------------------------------------------
+# _rrule_set_until edge case tests
+# ---------------------------------------------------------------------------
+
+from db.pg_queries.tasks import _rrule_set_until
+from datetime import datetime, timezone
+
+
+def test_rrule_set_until_basic():
+    """Basic weekly RRULE gets UNTIL appended correctly."""
+    dt = datetime(2026, 5, 10, 8, 59, 59, tzinfo=timezone.utc)
+    result = _rrule_set_until("RRULE:FREQ=WEEKLY", dt)
+    assert result == "RRULE:FREQ=WEEKLY;UNTIL=20260510T085959Z"
+    assert ";;" not in result
+    assert not result.startswith("RRULE:;")
+
+
+def test_rrule_set_until_replaces_existing_until():
+    """Existing UNTIL is replaced, not duplicated."""
+    dt = datetime(2026, 5, 10, 8, 59, 59, tzinfo=timezone.utc)
+    result = _rrule_set_until("RRULE:FREQ=WEEKLY;UNTIL=20260101T000000Z", dt)
+    assert "20260101T000000Z" not in result
+    assert "UNTIL=20260510T085959Z" in result
+    assert result.count("UNTIL") == 1
+
+
+def test_rrule_set_until_strips_count():
+    """COUNT is removed and replaced with UNTIL."""
+    dt = datetime(2026, 5, 10, 8, 59, 59, tzinfo=timezone.utc)
+    result = _rrule_set_until("RRULE:FREQ=WEEKLY;COUNT=10", dt)
+    assert "COUNT" not in result
+    assert "UNTIL=20260510T085959Z" in result
+
+
+def test_rrule_set_until_no_leading_trailing_semicolons():
+    """Output must not have leading or trailing semicolons in the value part."""
+    dt = datetime(2026, 5, 10, 8, 59, 59, tzinfo=timezone.utc)
+    # A pathological RRULE that is only UNTIL (no FREQ) — after stripping, value is empty
+    result = _rrule_set_until("RRULE:UNTIL=20260101T000000Z", dt)
+    assert not result.startswith("RRULE:;"), f"Leading semicolon in: {result!r}"
+    assert ";;" not in result, f"Double semicolon in: {result!r}"
+    assert result.endswith("UNTIL=20260510T085959Z")
+
+
+def test_rrule_set_until_without_prefix():
+    """Works on bare value strings (no RRULE: prefix)."""
+    dt = datetime(2026, 5, 10, 8, 59, 59, tzinfo=timezone.utc)
+    result = _rrule_set_until("FREQ=WEEKLY", dt)
+    assert result == "FREQ=WEEKLY;UNTIL=20260510T085959Z"
