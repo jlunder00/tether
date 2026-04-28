@@ -344,10 +344,16 @@ const allowedTaskIds = computed<Set<string> | null>(() => {
     }
   }
   if (contextNodeIds.size > 0) {
+    // Map selected node ids → their names. event.context_subject matches by name,
+    // so duplicate-named nodes deliberately merge filter behavior (predictable
+    // rather than silently dropping one of the duplicates).
+    const allowedNames = new Set<string>()
+    for (const node of Object.values(contextStore.nodes)) {
+      if (contextNodeIds.has(node.id)) allowedNames.add(node.name)
+    }
     for (const ev of eventStore.events) {
-      if (ev.context_subject) {
-        const node = Object.values(contextStore.nodes).find(n => n.name === ev.context_subject)
-        if (node && contextNodeIds.has(node.id) && ev.task_id) ids.add(ev.task_id)
+      if (ev.context_subject && allowedNames.has(ev.context_subject) && ev.task_id) {
+        ids.add(ev.task_id)
       }
     }
   }

@@ -43,18 +43,51 @@ export function computeOverlapLayout(events: LayoutEvent[]): Record<string, Even
     }
   }
 
+  // Group events by connected overlap component (transitive overlap).
+  // Column count = max lane index + 1 within that component, so chained
+  // overlaps (A∩B, B∩C, A!∩C) get a consistent 3-column layout instead of
+  // each event sizing itself by its own neighbor count.
+  const adj = new Map<string, string[]>()
+  for (const ev of sorted) adj.set(ev.id, [])
+  for (let i = 0; i < sorted.length; i++) {
+    const a = sorted[i]
+    const aStart = new Date(a.start_time).getTime()
+    const aEnd = new Date(a.end_time).getTime()
+    for (let j = i + 1; j < sorted.length; j++) {
+      const b = sorted[j]
+      const bStart = new Date(b.start_time).getTime()
+      const bEnd = new Date(b.end_time).getTime()
+      if (bStart < aEnd && bEnd > aStart) {
+        adj.get(a.id)!.push(b.id)
+        adj.get(b.id)!.push(a.id)
+      }
+    }
+  }
+
+  const componentColumns = new Map<string, number>()
+  const visited = new Set<string>()
+  for (const ev of sorted) {
+    if (visited.has(ev.id)) continue
+    const stack = [ev.id]
+    const component: string[] = []
+    while (stack.length) {
+      const id = stack.pop()!
+      if (visited.has(id)) continue
+      visited.add(id)
+      component.push(id)
+      for (const nb of adj.get(id) ?? []) if (!visited.has(nb)) stack.push(nb)
+    }
+    let maxLane = 0
+    for (const id of component) maxLane = Math.max(maxLane, eventLane.get(id) ?? 0)
+    const columns = maxLane + 1
+    for (const id of component) componentColumns.set(id, columns)
+  }
+
   const result: Record<string, EventLayout> = {}
   for (const ev of sorted) {
-    const evStart = new Date(ev.start_time).getTime()
-    const evEnd = new Date(ev.end_time).getTime()
-    const overlapping = sorted.filter(other => {
-      const s = new Date(other.start_time).getTime()
-      const e = new Date(other.end_time).getTime()
-      return s < evEnd && e > evStart
-    })
-    const groupSize = overlapping.length
     const lane = eventLane.get(ev.id) ?? 0
-    const widthPercent = 100 / groupSize
+    const columns = componentColumns.get(ev.id) ?? 1
+    const widthPercent = 100 / columns
     const leftPercent = lane * widthPercent
     result[ev.id] = { leftPercent, widthPercent }
   }
