@@ -148,7 +148,7 @@ async def delete_tasks_by_source(
         WHERE (blocker_type = 'task' AND blocker_id IN ({task_id_subquery}))
            OR (blocked_type = 'task' AND blocked_id IN ({task_id_subquery}))
         """,
-        user_id, source, user_id, source,
+        user_id, source,
     )
     await conn.execute(
         f"DELETE FROM milestone_tasks WHERE task_id IN ({task_id_subquery})", user_id, source

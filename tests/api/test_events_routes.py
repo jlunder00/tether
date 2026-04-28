@@ -457,3 +457,57 @@ async def test_delete_event_scope_all_default_when_omitted(api_client, conn):
 
     resp = await api_client.delete(f"/api/events/{task_id}")
     assert resp.status_code == 204, resp.text
+
+
+async def test_delete_scope_this_on_non_recurring_returns_400(api_client, conn):
+    """scope=this on a non-recurring event returns 400 — no rrule to append EXDATE to."""
+    task_id = await _insert_task(conn, "Non-recurring scope=this target")
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-05-10T09:00:00Z",
+        "end_time": "2026-05-10T10:00:00Z",
+    })
+
+    resp = await api_client.delete(
+        f"/api/events/{task_id}?scope=this&original_start_time=2026-05-10T09:00:00Z"
+    )
+    assert resp.status_code == 400, (
+        f"scope=this on a non-recurring event must return 400, got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_delete_scope_this_and_future_on_non_recurring_returns_400(api_client, conn):
+    """scope=this_and_future on a non-recurring event returns 400 — no rrule to truncate."""
+    task_id = await _insert_task(conn, "Non-recurring scope=this_and_future target")
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-05-10T09:00:00Z",
+        "end_time": "2026-05-10T10:00:00Z",
+    })
+
+    resp = await api_client.delete(
+        f"/api/events/{task_id}?scope=this_and_future&original_start_time=2026-05-10T09:00:00Z"
+    )
+    assert resp.status_code == 400, (
+        f"scope=this_and_future on a non-recurring event must return 400, got {resp.status_code}: {resp.text}"
+    )
+
+
+async def test_delete_scope_this_repeated_does_not_duplicate_exdate(api_client, conn):
+    """Deleting the same occurrence twice via scope=this does not produce duplicate EXDATEs."""
+    master_id = await _insert_recurring_master(conn, "RRULE:FREQ=WEEKLY")
+    original_start = "2026-05-11T09:00:00Z"
+
+    await api_client.delete(
+        f"/api/events/{master_id}?scope=this&original_start_time={original_start}"
+    )
+    await api_client.delete(
+        f"/api/events/{master_id}?scope=this&original_start_time={original_start}"
+    )
+
+    row = await conn.fetchrow("SELECT exdates FROM tasks WHERE uuid = $1::uuid", master_id)
+    exdates = row["exdates"] or []
+    matching = [e for e in exdates if "20260511" in e or "2026-05-11" in e]
+    assert len(matching) == 1, (
+        f"EXDATE for 2026-05-11 must appear exactly once, got: {exdates}"
+    )

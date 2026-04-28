@@ -1182,19 +1182,22 @@ async def delete_recurring_occurrence(
     """
     master = await conn.fetchrow(
         """
-        SELECT uuid, exdates FROM tasks
+        SELECT uuid, rrule, exdates FROM tasks
         WHERE uuid = $1 AND start_time IS NOT NULL
         """,
         _uuid.UUID(event_uuid),
     )
     if master is None:
         return False
+    if not master["rrule"]:
+        raise ValueError(f"Task {event_uuid} is not a recurring event")
 
     dt = _parse_ts(original_start_time)
     # Write compact iCalendar EXDATE;VALUE=DATE token
     exdate_token = f"EXDATE;VALUE=DATE:{dt.year:04d}{dt.month:02d}{dt.day:02d}"
     existing = list(master["exdates"] or [])
-    existing.append(exdate_token)
+    if exdate_token not in existing:
+        existing.append(exdate_token)
 
     await conn.execute(
         "UPDATE tasks SET exdates = $1, version = version + 1 WHERE uuid = $2",
@@ -1224,6 +1227,8 @@ async def delete_recurring_from(
     )
     if master is None:
         return False
+    if not master["rrule"]:
+        raise ValueError(f"Task {event_uuid} is not a recurring event")
 
     cutoff = _parse_ts(original_start_time)
     # UNTIL is exclusive — set to one second before the first deleted occurrence
@@ -1281,29 +1286,6 @@ async def update_event_time(
 # ---------------------------------------------------------------------------
 # Recurrence scope edit DB functions
 # ---------------------------------------------------------------------------
-
-def _rrule_set_until(rrule_str: str, until_dt: _datetime) -> str:
-    """Return a new RRULE string with UNTIL set to *until_dt* (UTC, second precision).
-
-    Removes any existing UNTIL or COUNT clause before appending the new UNTIL.
-    *until_dt* is formatted as iCal compact UTC: YYYYMMDDTHHMMSSZ.
-    """
-    import re
-    until_str = until_dt.strftime("%Y%m%dT%H%M%SZ")
-    # Strip RRULE: prefix if present, work on the property value only
-    prefix = ""
-    value = rrule_str
-    if rrule_str.upper().startswith("RRULE:"):
-        prefix = rrule_str[:6]
-        value = rrule_str[6:]
-    # Remove existing UNTIL= and COUNT= clauses (case-insensitive)
-    value = re.sub(r";?UNTIL=[^;]*", "", value, flags=re.IGNORECASE)
-    value = re.sub(r";?COUNT=[^;]*", "", value, flags=re.IGNORECASE)
-    # Build the new value then strip stray leading/trailing semicolons.
-    # Doing it this way prevents "RRULE:;UNTIL=..." when value is empty
-    # (e.g. the RRULE contained only a UNTIL or COUNT clause).
-    value = (value + ";UNTIL=" + until_str).strip(";")
-    return f"{prefix}{value}"
 
 
 async def patch_recurring_this(
