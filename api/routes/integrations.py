@@ -23,6 +23,7 @@ import api.config as cfg
 from api.auth import auth_dependency
 from db.pg_queries.integrations import (
     delete_integration,
+    delete_tasks_by_source,
     get_integration,
     upsert_integration,
 )
@@ -193,7 +194,11 @@ async def google_disconnect(
     except Exception:
         logger.exception("Token revocation failed for user %s", user_id)
 
-    # Ensure deletion even if revoke had an error
+    # Delete all tasks synced from this integration before removing the row
+    deleted = await delete_tasks_by_source(conn, user_id, _PROVIDER)
+    logger.info("disconnect: deleted %d synced tasks for user %s", deleted, user_id)
+
+    # Ensure integration row deletion even if revoke had an error
     await delete_integration(conn, user_id, _PROVIDER)
     return {"ok": True}
 

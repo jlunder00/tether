@@ -1,13 +1,14 @@
 import logging
 
 from typing import Literal
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import asyncpg
 
 from db.pg_queries.tasks import (
     promote_task_to_event, get_events_for_range, update_event_time,
     patch_recurring_this, patch_recurring_this_and_future,
+    delete_event, delete_recurring_occurrence, delete_recurring_from,
 )
 from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency
@@ -89,3 +90,41 @@ async def get_events(
 ):
     """Return all calendar events (promoted tasks) whose start_time falls in [start, end]."""
     return await get_events_for_range(conn, start, end)
+
+
+@router.delete("/events/{event_id}", status_code=204)
+async def delete_event_route(
+    event_id: str,
+    scope: Literal["all", "this", "this_and_future"] = Query(default="all"),
+    original_start_time: str | None = Query(default=None),
+    _auth=Depends(auth_dependency),
+    conn: asyncpg.Connection = Depends(get_db_conn),
+):
+    """Delete a calendar event or recurring occurrence.
+
+    scope=all (default): hard-delete the event/master + all orphan exceptions.
+    scope=this: append an EXDATE to suppress this occurrence only; master persists.
+    scope=this_and_future: set UNTIL on the master to truncate future occurrences.
+
+    original_start_time (ISO 8601) is required for scope=this and scope=this_and_future.
+    """
+    if scope != "all" and original_start_time is None:
+        raise HTTPException(
+            status_code=422,
+            detail="original_start_time is required when scope is not 'all'",
+        )
+
+    try:
+        if scope == "this":
+            found = await delete_recurring_occurrence(conn, event_id, original_start_time)
+        elif scope == "this_and_future":
+            found = await delete_recurring_from(conn, event_id, original_start_time)
+        else:
+            found = await delete_event(conn, event_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not found:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    logger.info("events: deleted event %s scope=%s", event_id, scope)

@@ -155,6 +155,14 @@ async def patch_task_fields(
         val = fields["anchor_id"]
         params.append(_uuid.UUID(val) if val is not None else None)
         set_parts.append(f"anchor_id = ${len(params)}")
+    if "start_time" in fields:
+        val = fields["start_time"]
+        params.append(_parse_ts(val) if val is not None else None)
+        set_parts.append(f"start_time = ${len(params)}")
+    if "end_time" in fields:
+        val = fields["end_time"]
+        params.append(_parse_ts(val) if val is not None else None)
+        set_parts.append(f"end_time = ${len(params)}")
 
     if not set_parts:
         return None
@@ -842,6 +850,114 @@ def expand_recurring(task: dict, window_start: _datetime, window_end: _datetime)
     return occurrences
 
 
+def _rrule_set_until(rrule_str: str, until_dt: _datetime) -> str:
+    """Return a new RRULE string with UNTIL set to *until_dt* (UTC, second precision).
+
+    Removes any existing UNTIL or COUNT clause before appending the new UNTIL.
+    *until_dt* is formatted as iCal compact UTC: YYYYMMDDTHHMMSSZ.
+    """
+    import re
+    until_str = until_dt.strftime("%Y%m%dT%H%M%SZ")
+    # Strip RRULE: prefix if present, work on the property value only
+    prefix = ""
+    value = rrule_str
+    if rrule_str.upper().startswith("RRULE:"):
+        prefix = rrule_str[:6]
+        value = rrule_str[6:]
+    # Remove existing UNTIL= and COUNT= clauses (case-insensitive)
+    value = re.sub(r";?UNTIL=[^;]*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r";?COUNT=[^;]*", "", value, flags=re.IGNORECASE)
+    # Build the new value then strip stray leading/trailing semicolons.
+    # Prevents "RRULE:;UNTIL=..." when value is empty.
+    value = (value + ";UNTIL=" + until_str).strip(";")
+    return f"{prefix}{value}"
+
+
+def assign_event_anchor(
+    event: dict,
+    anchors: list[dict],
+    now_utc: "datetime",  # noqa: F821 — datetime imported at module level as _datetime
+) -> str | None:
+    """Return the anchor_id best matching an event for the dashboard now-view.
+
+    All time comparison is done in server-local (naive) time so anchor HH:MM
+    strings are directly comparable to event times.  now_utc is converted with
+    ``astimezone()`` which reads the system timezone (Pi local == user local).
+
+    Priority rules (evaluated in order):
+      1. Currently-active anchor (whose window contains now) overlaps event → return it.
+      2. No active-anchor overlap, but a future anchor will → return next upcoming.
+      3. Active anchor has moved past event end → return last overlapping anchor.
+      4. now is before all anchor windows → return first anchor.
+      5. No anchors overlap at all → return first anchor (fallback).
+
+    Returns None only when anchors is empty.
+    """
+    if not anchors:
+        return None
+
+    now_local = now_utc.astimezone().replace(tzinfo=None)
+    today = now_local.date()
+
+    def _anchor_window(a: dict) -> tuple["datetime", "datetime"]:  # noqa: F821
+        h, m = map(int, a["time"].split(":"))
+        start = _datetime(today.year, today.month, today.day, h, m)
+        return start, start + _timedelta(minutes=a.get("duration_minutes", 0))
+
+    def _event_times() -> tuple["datetime", "datetime"]:  # noqa: F821
+        raw_start = event.get("start_time") or ""
+        raw_end = event.get("end_time") or ""
+        # Parse UTC ISO → local naive
+        def _to_naive_local(s: str) -> "_datetime":  # noqa: F821
+            dt = _parse_ts(s)
+            return dt.astimezone().replace(tzinfo=None)
+        return _to_naive_local(raw_start), _to_naive_local(raw_end)
+
+    def _overlaps(a_start, a_end, e_start, e_end) -> bool:
+        return a_start < e_end and a_end > e_start
+
+    ev_start, ev_end = _event_times()
+
+    # Rule 4: before all anchors
+    first_window_start, _ = _anchor_window(anchors[0])
+    if now_local < first_window_start:
+        return anchors[0]["id"]
+
+    # Classify each anchor
+    active_anchor = None
+    overlapping: list[dict] = []
+    for a in anchors:
+        a_start, a_end = _anchor_window(a)
+        if a_start <= now_local < a_end:
+            active_anchor = a
+        if _overlaps(a_start, a_end, ev_start, ev_end):
+            overlapping.append(a)
+
+    # Rule 1: active anchor overlaps event
+    if active_anchor and any(a["id"] == active_anchor["id"] for a in overlapping):
+        return active_anchor["id"]
+
+    # Rule 3: active anchor moved past event end — find last overlapping
+    if active_anchor:
+        past_overlapping = [
+            a for a in overlapping
+            if _anchor_window(a)[1] <= now_local
+        ]
+        if past_overlapping:
+            return past_overlapping[-1]["id"]
+
+    # Rule 2: future anchor will overlap event
+    future_overlapping = [
+        a for a in overlapping
+        if _anchor_window(a)[0] > now_local
+    ]
+    if future_overlapping:
+        return future_overlapping[0]["id"]
+
+    # Rule 5: no anchors overlap at all — first anchor fallback
+    return anchors[0]["id"]
+
+
 async def promote_task_to_event(
     conn: asyncpg.Connection,
     task_uuid: str,
@@ -984,6 +1100,163 @@ async def get_events_for_range(
     return sorted(results, key=lambda e: e["start_time"] or "")
 
 
+async def delete_event(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+) -> bool:
+    """Hard-delete a single event (or recurring master + its orphan exceptions).
+
+    For a recurring master (rrule IS NOT NULL), also deletes all exception rows
+    whose recurrence_id matches the master's external_id.
+
+    Returns True if a row was deleted, False if not found.
+    """
+    async with conn.transaction():
+        # Check if this is a recurring master with an external_id
+        master = await conn.fetchrow(
+            "SELECT external_id FROM tasks WHERE uuid = $1 AND start_time IS NOT NULL",
+            _uuid.UUID(event_uuid),
+        )
+        if master is None:
+            return False
+
+        external_id = master["external_id"]
+        if external_id:
+            # Collect exception UUIDs so child-table cleanup can reference them by text ID.
+            # task_id columns in subtasks/links/dependencies/milestone_tasks/followup_state
+            # have no FK REFERENCES tasks(uuid) ON DELETE CASCADE — cleanup must be explicit.
+            exc_uuids = await conn.fetch(
+                "SELECT uuid FROM tasks WHERE recurrence_id = $1",
+                str(external_id),
+            )
+            for row in exc_uuids:
+                exc_id = str(row["uuid"])
+                await conn.execute("DELETE FROM subtasks WHERE task_id = $1", exc_id)
+                await conn.execute(
+                    "DELETE FROM links WHERE parent_type = 'tasks' AND parent_id = $1", exc_id
+                )
+                await conn.execute(
+                    "DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=$1)"
+                    " OR (blocked_type='task' AND blocked_id=$1)",
+                    exc_id,
+                )
+                await conn.execute("DELETE FROM milestone_tasks WHERE task_id = $1", exc_id)
+                await conn.execute("DELETE FROM followup_state WHERE task_id = $1", exc_id)
+
+            await conn.execute(
+                "DELETE FROM tasks WHERE recurrence_id = $1",
+                str(external_id),
+            )
+
+        # Clean child tables for the master row before deleting it
+        await conn.execute("DELETE FROM subtasks WHERE task_id = $1", event_uuid)
+        await conn.execute(
+            "DELETE FROM links WHERE parent_type = 'tasks' AND parent_id = $1", event_uuid
+        )
+        await conn.execute(
+            "DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=$1)"
+            " OR (blocked_type='task' AND blocked_id=$1)",
+            event_uuid,
+        )
+        await conn.execute("DELETE FROM milestone_tasks WHERE task_id = $1", event_uuid)
+        await conn.execute("DELETE FROM followup_state WHERE task_id = $1", event_uuid)
+
+        result = await conn.execute(
+            "DELETE FROM tasks WHERE uuid = $1",
+            _uuid.UUID(event_uuid),
+        )
+        return result == "DELETE 1"
+
+
+async def delete_recurring_occurrence(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    original_start_time: str,
+) -> bool:
+    """Suppress a single occurrence of a recurring event by appending an EXDATE.
+
+    Mutates the master row's exdates array in place — does NOT delete any row.
+    The date token written is ISO compact (e.g. "20260511") for iCalendar compatibility.
+
+    Returns True if the master was found and updated, False if not found.
+    """
+    master = await conn.fetchrow(
+        """
+        SELECT uuid, rrule, exdates FROM tasks
+        WHERE uuid = $1 AND start_time IS NOT NULL
+        """,
+        _uuid.UUID(event_uuid),
+    )
+    if master is None:
+        return False
+    if not master["rrule"]:
+        raise ValueError(f"Task {event_uuid} is not a recurring event")
+
+    dt = _parse_ts(original_start_time)
+    # Write compact iCalendar EXDATE;VALUE=DATE token
+    exdate_token = f"EXDATE;VALUE=DATE:{dt.year:04d}{dt.month:02d}{dt.day:02d}"
+    existing = list(master["exdates"] or [])
+    if exdate_token not in existing:
+        existing.append(exdate_token)
+
+    await conn.execute(
+        "UPDATE tasks SET exdates = $1, version = version + 1 WHERE uuid = $2",
+        existing, _uuid.UUID(event_uuid),
+    )
+    return True
+
+
+async def delete_recurring_from(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    original_start_time: str,
+) -> bool:
+    """Truncate a recurring series by setting UNTIL one instant before original_start_time.
+
+    Mutates the master's rrule in place — does NOT create a new master.
+    Also hard-deletes any exception rows that fall on or after original_start_time.
+
+    Returns True if the master was found and updated, False if not found.
+    """
+    master = await conn.fetchrow(
+        """
+        SELECT uuid, rrule, external_id FROM tasks
+        WHERE uuid = $1 AND start_time IS NOT NULL
+        """,
+        _uuid.UUID(event_uuid),
+    )
+    if master is None:
+        return False
+    if not master["rrule"]:
+        raise ValueError(f"Task {event_uuid} is not a recurring event")
+
+    cutoff = _parse_ts(original_start_time)
+    # UNTIL is exclusive — set to one second before the first deleted occurrence
+    until_dt = cutoff - _timedelta(seconds=1)
+
+    new_rrule = _rrule_set_until(master["rrule"] or "", until_dt)
+
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE tasks SET rrule = $1, version = version + 1 WHERE uuid = $2",
+            new_rrule, _uuid.UUID(event_uuid),
+        )
+
+        # Remove exceptions on or after the cutoff date
+        external_id = master["external_id"]
+        if external_id:
+            await conn.execute(
+                """
+                DELETE FROM tasks
+                WHERE recurrence_id = $1
+                  AND original_start_time >= $2
+                """,
+                str(external_id), cutoff,
+            )
+
+    return True
+
+
 async def update_event_time(
     conn: asyncpg.Connection,
     event_uuid: str,
@@ -1013,29 +1286,6 @@ async def update_event_time(
 # ---------------------------------------------------------------------------
 # Recurrence scope edit DB functions
 # ---------------------------------------------------------------------------
-
-def _rrule_set_until(rrule_str: str, until_dt: _datetime) -> str:
-    """Return a new RRULE string with UNTIL set to *until_dt* (UTC, second precision).
-
-    Removes any existing UNTIL or COUNT clause before appending the new UNTIL.
-    *until_dt* is formatted as iCal compact UTC: YYYYMMDDTHHMMSSZ.
-    """
-    import re
-    until_str = until_dt.strftime("%Y%m%dT%H%M%SZ")
-    # Strip RRULE: prefix if present, work on the property value only
-    prefix = ""
-    value = rrule_str
-    if rrule_str.upper().startswith("RRULE:"):
-        prefix = rrule_str[:6]
-        value = rrule_str[6:]
-    # Remove existing UNTIL= and COUNT= clauses (case-insensitive)
-    value = re.sub(r";?UNTIL=[^;]*", "", value, flags=re.IGNORECASE)
-    value = re.sub(r";?COUNT=[^;]*", "", value, flags=re.IGNORECASE)
-    # Build the new value then strip stray leading/trailing semicolons.
-    # Doing it this way prevents "RRULE:;UNTIL=..." when value is empty
-    # (e.g. the RRULE contained only a UNTIL or COUNT clause).
-    value = (value + ";UNTIL=" + until_str).strip(";")
-    return f"{prefix}{value}"
 
 
 async def patch_recurring_this(

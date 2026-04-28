@@ -115,3 +115,70 @@ async def test_subtasks(conn, task_uuid):
     await delete_subtask(conn, sid)
     subtasks = await get_subtasks(conn, task_uuid)
     assert not any(s["id"] == sid for s in subtasks)
+
+
+# ─── patch_task_fields: start_time / end_time null passthrough ────────────────
+
+@pytest.fixture
+async def event_task_uuid(conn, anchor_id):
+    """A task that has already been promoted to an event (has start_time/end_time)."""
+    await upsert_plan(conn, DATE)
+    # Insert directly so we can set start_time/end_time
+    row = await conn.fetchrow(
+        """
+        INSERT INTO tasks (uuid, user_id, text, status, start_time, end_time)
+        VALUES (
+            gen_random_uuid(),
+            current_setting('app.current_user_id', true)::uuid,
+            'Promoted event task',
+            'pending',
+            '2026-05-01T09:00:00Z',
+            '2026-05-01T10:00:00Z'
+        )
+        RETURNING uuid
+        """
+    )
+    return str(row["uuid"])
+
+
+@pytest.mark.asyncio
+async def test_patch_task_fields_sets_start_end_time(conn, event_task_uuid):
+    """patch_task_fields can set start_time and end_time to new values."""
+    result = await patch_task_fields(conn, event_task_uuid, {
+        "start_time": "2026-05-02T14:00:00Z",
+        "end_time": "2026-05-02T15:00:00Z",
+    })
+    # Verify via direct DB read since patch_task_fields SELECT may not return these cols
+    row = await conn.fetchrow(
+        "SELECT start_time, end_time FROM tasks WHERE uuid = $1::uuid",
+        event_task_uuid,
+    )
+    assert row["start_time"] is not None
+    assert "14" in str(row["start_time"]) or "14:00" in str(row["start_time"])
+
+
+@pytest.mark.asyncio
+async def test_patch_task_fields_clears_start_end_time_with_null(conn, event_task_uuid):
+    """patch_task_fields with start_time=None and end_time=None demotes event back to task."""
+    result = await patch_task_fields(conn, event_task_uuid, {
+        "start_time": None,
+        "end_time": None,
+    })
+    row = await conn.fetchrow(
+        "SELECT start_time, end_time FROM tasks WHERE uuid = $1::uuid",
+        event_task_uuid,
+    )
+    assert row["start_time"] is None, "start_time should be cleared to NULL"
+    assert row["end_time"] is None, "end_time should be cleared to NULL"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_fields_omitting_start_time_does_not_clear_it(conn, event_task_uuid):
+    """Omitting start_time from the patch dict must NOT clear the existing value."""
+    # Patch only the status — start_time should remain
+    await patch_task_fields(conn, event_task_uuid, {"status": "in_progress"})
+    row = await conn.fetchrow(
+        "SELECT start_time FROM tasks WHERE uuid = $1::uuid",
+        event_task_uuid,
+    )
+    assert row["start_time"] is not None, "start_time must not be cleared when not in patch dict"
