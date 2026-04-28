@@ -701,6 +701,7 @@ def _row_to_event(row, *, is_recurring: bool = False, is_occurrence: bool = Fals
         "task_id": uid,
         "anchor_id": str(r["anchor_id"]) if r.get("anchor_id") else None,
         "color": None,
+        "context_subject": r.get("context_subject"),
         "is_recurring": is_recurring,
         "is_occurrence": is_occurrence,
     }
@@ -862,7 +863,7 @@ async def get_events_for_range(
     single_rows = await conn.fetch(
         """
         SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
-               rrule, recurrence_id, exdates, original_start_time
+               rrule, recurrence_id, exdates, original_start_time, context_subject
         FROM tasks
         WHERE start_time IS NOT NULL
           AND rrule IS NULL
@@ -879,7 +880,7 @@ async def get_events_for_range(
     recurring_rows = await conn.fetch(
         """
         SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
-               rrule, recurrence_id, exdates, original_start_time
+               rrule, recurrence_id, exdates, original_start_time, context_subject
         FROM tasks
         WHERE rrule IS NOT NULL
           AND start_time IS NOT NULL
@@ -899,7 +900,7 @@ async def get_events_for_range(
         exception_rows = await conn.fetch(
             """
             SELECT uuid, text, start_time, end_time, source, external_id, anchor_id,
-                   rrule, recurrence_id, exdates, original_start_time
+                   rrule, recurrence_id, exdates, original_start_time, context_subject
             FROM tasks
             WHERE recurrence_id = ANY($1::text[])
               AND (source_status IS NULL OR source_status != 'cancelled')
@@ -980,3 +981,216 @@ async def update_event_time(
         _parse_ts(start_time), _parse_ts(end_time), _uuid.UUID(event_uuid),
     )
     return _row_to_event(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Recurrence scope edit DB functions
+# ---------------------------------------------------------------------------
+
+def _rrule_set_until(rrule_str: str, until_dt: _datetime) -> str:
+    """Return a new RRULE string with UNTIL set to *until_dt* (UTC, second precision).
+
+    Removes any existing UNTIL or COUNT clause before appending the new UNTIL.
+    *until_dt* is formatted as iCal compact UTC: YYYYMMDDTHHMMSSZ.
+    """
+    import re
+    until_str = until_dt.strftime("%Y%m%dT%H%M%SZ")
+    # Strip RRULE: prefix if present, work on the property value only
+    prefix = ""
+    value = rrule_str
+    if rrule_str.upper().startswith("RRULE:"):
+        prefix = rrule_str[:6]
+        value = rrule_str[6:]
+    # Remove existing UNTIL= and COUNT= clauses (case-insensitive)
+    value = re.sub(r";?UNTIL=[^;]*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r";?COUNT=[^;]*", "", value, flags=re.IGNORECASE)
+    value = value.strip(";")
+    return f"{prefix}{value};UNTIL={until_str}"
+
+
+async def patch_recurring_this(
+    conn,
+    event_id: str,
+    original_start_time: str,
+    new_start_time: str,
+    new_end_time: str,
+) -> dict | None:
+    """Edit a single occurrence of a recurring event ('this' scope).
+
+    Steps (atomic):
+    1. Fetch the master task row.  Return None if not found.
+    2. Raise ValueError if the master has no rrule (not a recurring event).
+    3. Append an EXDATE to the master's exdates[] to suppress the original slot.
+    4. INSERT a new standalone event (no rrule) at the new time slot.
+    5. Return the new standalone event as a CalendarEvent dict.
+
+    *event_id* is the UUID of the recurring master.
+    *original_start_time* is the ISO datetime of the occurrence being replaced
+    (used to build the EXDATE token).
+    """
+    from datetime import timezone as _tz
+    master_uuid = _uuid.UUID(event_id)
+    original_dt = _parse_ts(original_start_time)
+    new_start_dt = _parse_ts(new_start_time)
+    new_end_dt = _parse_ts(new_end_time)
+
+    async with conn.transaction():
+        master = await conn.fetchrow(
+            """
+            SELECT uuid, text, start_time, end_time, source, external_id,
+                   anchor_id, rrule, exdates, context_subject
+            FROM tasks
+            WHERE uuid = $1
+              AND start_time IS NOT NULL
+            """,
+            master_uuid,
+        )
+        if master is None:
+            return None
+
+        if not master["rrule"]:
+            raise ValueError(f"Task {event_id} is not a recurring event (rrule IS NULL)")
+
+        # Build the EXDATE token for the suppressed occurrence
+        if original_dt.tzinfo is None:
+            original_dt = original_dt.replace(tzinfo=_tz.utc)
+        exdate_token = "EXDATE:" + original_dt.strftime("%Y%m%dT%H%M%SZ")
+
+        # 3. Append EXDATE to master
+        await conn.execute(
+            """
+            UPDATE tasks
+            SET exdates = array_append(exdates, $1),
+                version = version + 1
+            WHERE uuid = $2
+            """,
+            exdate_token, master_uuid,
+        )
+
+        # 4. INSERT standalone exception event
+        new_row = await conn.fetchrow(
+            """
+            INSERT INTO tasks (
+                uuid, user_id, text, status,
+                start_time, end_time, source, external_id,
+                anchor_id, context_subject,
+                recurrence_id, original_start_time
+            )
+            VALUES (
+                gen_random_uuid(),
+                current_setting('app.current_user_id', true)::uuid,
+                $1, 'pending',
+                $2, $3, $4, $5,
+                $6, $7,
+                $8, $9
+            )
+            RETURNING uuid, text, start_time, end_time, source, external_id,
+                      anchor_id, context_subject
+            """,
+            master["text"], new_start_dt, new_end_dt,
+            master["source"], master["external_id"],
+            master["anchor_id"], master["context_subject"],
+            master["external_id"], original_dt,
+        )
+
+    return _row_to_event(new_row, is_recurring=False, is_occurrence=True) if new_row else None
+
+
+async def patch_recurring_this_and_future(
+    conn,
+    event_id: str,
+    original_start_time: str,
+    new_start_time: str,
+    new_end_time: str,
+) -> dict | None:
+    """Edit this and all future occurrences of a recurring event.
+
+    Steps (atomic):
+    1. Fetch the master task row.  Return None if not found.
+    2. Raise ValueError if the master has no rrule.
+    3. Truncate the master series: set UNTIL = original_dt - 1 second on its rrule.
+    4. INSERT a new master task with the same rrule (stripped of UNTIL/COUNT)
+       starting at new_start_time, with the series continuing from there.
+    5. Return the new master as a CalendarEvent dict.
+
+    *original_start_time* is the first occurrence being moved — the cutoff point.
+    """
+    from datetime import timezone as _tz
+    master_uuid = _uuid.UUID(event_id)
+    original_dt = _parse_ts(original_start_time)
+    new_start_dt = _parse_ts(new_start_time)
+    new_end_dt = _parse_ts(new_end_time)
+
+    async with conn.transaction():
+        master = await conn.fetchrow(
+            """
+            SELECT uuid, text, start_time, end_time, source, external_id,
+                   anchor_id, rrule, exdates, context_subject
+            FROM tasks
+            WHERE uuid = $1
+              AND start_time IS NOT NULL
+            """,
+            master_uuid,
+        )
+        if master is None:
+            return None
+
+        if not master["rrule"]:
+            raise ValueError(f"Task {event_id} is not a recurring event (rrule IS NULL)")
+
+        if original_dt.tzinfo is None:
+            original_dt = original_dt.replace(tzinfo=_tz.utc)
+
+        # 3. Set UNTIL = original_dt - 1 second on master (exclusive cutoff)
+        until_dt = original_dt - _timedelta(seconds=1)
+        truncated_rrule = _rrule_set_until(master["rrule"], until_dt)
+        await conn.execute(
+            """
+            UPDATE tasks
+            SET rrule = $1,
+                version = version + 1
+            WHERE uuid = $2
+            """,
+            truncated_rrule, master_uuid,
+        )
+
+        # 4. INSERT new master starting at new_start_time
+        duration = (master["end_time"] - master["start_time"]) if (
+            master["end_time"] and master["start_time"]
+        ) else _timedelta(0)
+
+        # Strip UNTIL/COUNT from the new master's rrule (open-ended series)
+        import re as _re
+        new_rrule = master["rrule"]
+        prefix = ""
+        value = new_rrule
+        if new_rrule.upper().startswith("RRULE:"):
+            prefix = new_rrule[:6]
+            value = new_rrule[6:]
+        value = _re.sub(r";?UNTIL=[^;]*", "", value, flags=_re.IGNORECASE)
+        value = _re.sub(r";?COUNT=[^;]*", "", value, flags=_re.IGNORECASE)
+        new_rrule = f"{prefix}{value.strip(';')}"
+
+        new_row = await conn.fetchrow(
+            """
+            INSERT INTO tasks (
+                uuid, user_id, text, status,
+                start_time, end_time, source, external_id,
+                anchor_id, context_subject, rrule
+            )
+            VALUES (
+                gen_random_uuid(),
+                current_setting('app.current_user_id', true)::uuid,
+                $1, 'pending',
+                $2, $3, $4, $5,
+                $6, $7, $8
+            )
+            RETURNING uuid, text, start_time, end_time, source, external_id,
+                      anchor_id, context_subject
+            """,
+            master["text"], new_start_dt, new_end_dt,
+            master["source"], master["external_id"],
+            master["anchor_id"], master["context_subject"], new_rrule,
+        )
+
+    return _row_to_event(new_row, is_recurring=True, is_occurrence=False) if new_row else None

@@ -28,6 +28,7 @@ def _master_row(
     start: datetime,
     end: datetime,
     rrule: str = "RRULE:FREQ=WEEKLY",
+    context_subject: str | None = None,
 ) -> dict:
     return {
         "uuid": uuid.UUID("aaaaaaaa-0000-0000-0000-000000000001"),
@@ -41,6 +42,7 @@ def _master_row(
         "recurrence_id": None,
         "exdates": [],
         "original_start_time": None,
+        "context_subject": context_subject,
     }
 
 
@@ -50,6 +52,7 @@ def _exception_row(
     start: datetime,
     end: datetime,
     original_start_time: datetime,
+    context_subject: str | None = None,
 ) -> dict:
     return {
         "uuid": uuid.UUID("bbbbbbbb-0000-0000-0000-000000000002"),
@@ -63,6 +66,29 @@ def _exception_row(
         "recurrence_id": recurrence_id,
         "exdates": [],
         "original_start_time": original_start_time,
+        "context_subject": context_subject,
+    }
+
+
+def _single_row(
+    start: datetime,
+    end: datetime,
+    context_subject: str | None = None,
+    text: str = "Team call",
+) -> dict:
+    return {
+        "uuid": uuid.UUID("cccccccc-0000-0000-0000-000000000001"),
+        "text": text,
+        "start_time": start,
+        "end_time": end,
+        "source": "tether",
+        "external_id": None,
+        "anchor_id": None,
+        "rrule": None,
+        "recurrence_id": None,
+        "exdates": [],
+        "original_start_time": None,
+        "context_subject": context_subject,
     }
 
 
@@ -246,3 +272,70 @@ async def test_cancelled_exception_instance_not_returned():
     assert all(e.get("source_status") != "cancelled" for e in events), (
         "No cancelled events should appear in results"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task A: context_subject must be present in all event result shapes
+# ---------------------------------------------------------------------------
+
+async def test_context_subject_in_single_event_result():
+    """context_subject from the tasks table must be included for single (non-recurring) events."""
+    tz = timezone.utc
+    row = _single_row(
+        start=datetime(2026, 5, 10, 9, 0, tzinfo=tz),
+        end=datetime(2026, 5, 10, 9, 30, tzinfo=tz),
+        context_subject="work",
+    )
+    conn = _conn_with_fetch(
+        [row],  # single events
+        [],     # recurring masters — none
+    )
+    events = await get_events_for_range(
+        conn, "2026-05-01T00:00:00+00:00", "2026-05-31T23:59:59+00:00"
+    )
+    assert len(events) == 1
+    assert events[0].get("context_subject") == "work", (
+        "context_subject must be forwarded from the tasks row to the CalendarEvent dict"
+    )
+
+
+async def test_context_subject_none_when_unset():
+    """context_subject is None for tasks without a context_subject (e.g. tether native tasks)."""
+    tz = timezone.utc
+    row = _single_row(
+        start=datetime(2026, 5, 10, 9, 0, tzinfo=tz),
+        end=datetime(2026, 5, 10, 9, 30, tzinfo=tz),
+        context_subject=None,
+    )
+    conn = _conn_with_fetch([row], [])
+    events = await get_events_for_range(
+        conn, "2026-05-01T00:00:00+00:00", "2026-05-31T23:59:59+00:00"
+    )
+    assert len(events) == 1
+    # Key must exist in the dict even when None
+    assert "context_subject" in events[0]
+    assert events[0]["context_subject"] is None
+
+
+async def test_context_subject_propagates_to_recurring_occurrences():
+    """context_subject from the master row must appear on all expanded occurrences."""
+    tz = timezone.utc
+    master = _master_row(
+        external_id="gcal-cs-test",
+        start=datetime(2026, 5, 4, 9, 0, tzinfo=tz),
+        end=datetime(2026, 5, 4, 9, 30, tzinfo=tz),
+        context_subject="deep-work",
+    )
+    conn = _conn_with_fetch(
+        [],       # single events — none
+        [master], # recurring masters
+        [],       # exceptions — none
+    )
+    events = await get_events_for_range(
+        conn, "2026-05-01T00:00:00+00:00", "2026-05-31T23:59:59+00:00"
+    )
+    assert len(events) == 4  # weekly x4 in May
+    for occ in events:
+        assert occ.get("context_subject") == "deep-work", (
+            f"Occurrence at {occ['start_time']} missing context_subject"
+        )
