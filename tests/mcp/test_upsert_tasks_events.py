@@ -48,6 +48,13 @@ async def run_upsert(conn, tasks, mocks):
         return await execute_upsert_tasks(conn, tasks)
 
 
+def _patch_dict_for(call):
+    """Pull the fields dict out of a patch_task_fields call, positional or kw."""
+    if len(call.args) > 2:
+        return call.args[2]
+    return call.kwargs.get("patch") or call.kwargs.get("fields") or {}
+
+
 @pytest.mark.asyncio
 async def test_create_task_with_event_times_promotes(conn, mocks):
     mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
@@ -100,9 +107,9 @@ async def test_rrule_field_patched_on_task(conn, mocks):
     }], mocks)
 
     calls = mocks["patch_task_fields"].call_args_list
-    rrule_call = next((c for c in calls if "rrule" in c.args[2]), None)
+    rrule_call = next((c for c in calls if "rrule" in _patch_dict_for(c)), None)
     assert rrule_call is not None
-    assert rrule_call.args[2]["rrule"] == "FREQ=WEEKLY;BYDAY=MO"
+    assert _patch_dict_for(rrule_call)["rrule"] == "FREQ=WEEKLY;BYDAY=MO"
 
 
 @pytest.mark.asyncio
@@ -118,9 +125,9 @@ async def test_color_field_patched_on_task(conn, mocks):
     }], mocks)
 
     calls = mocks["patch_task_fields"].call_args_list
-    color_call = next((c for c in calls if "color" in c.args[2]), None)
+    color_call = next((c for c in calls if "color" in _patch_dict_for(c)), None)
     assert color_call is not None
-    assert color_call.args[2]["color"] == "#ff0000"
+    assert _patch_dict_for(color_call)["color"] == "#ff0000"
 
 
 @pytest.mark.asyncio
@@ -150,3 +157,140 @@ async def test_no_event_times_does_not_call_promote(conn, mocks):
     await run_upsert(conn, [{"text": "Plain task"}], mocks)
 
     mocks["promote_task_to_event"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_after_end_raises(conn, mocks):
+    """start_time must be strictly before end_time."""
+    mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
+
+    with pytest.raises(ValueError, match="before end_time"):
+        await run_upsert(conn, [{
+            "text": "Bad meeting",
+            "start_time": "2026-04-27T11:00:00",
+            "end_time": "2026-04-27T10:00:00",
+        }], mocks)
+
+
+@pytest.mark.asyncio
+async def test_start_equal_end_raises(conn, mocks):
+    """Zero-length events are rejected."""
+    mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
+
+    with pytest.raises(ValueError, match="before end_time"):
+        await run_upsert(conn, [{
+            "text": "Zero meeting",
+            "start_time": "2026-04-27T10:00:00",
+            "end_time": "2026-04-27T10:00:00",
+        }], mocks)
+
+
+@pytest.mark.asyncio
+async def test_update_start_without_end_raises(conn, mocks):
+    """Validation fires on the UPDATE path too."""
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    with pytest.raises(ValueError, match="end_time"):
+        await run_upsert(conn, [{
+            "task_uuid": "task-1",
+            "start_time": "2026-04-27T09:00:00",
+        }], mocks)
+
+
+@pytest.mark.asyncio
+async def test_update_rrule_none_clears(conn, mocks):
+    """Explicit rrule=None on update should be patched (to clear the field)."""
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    await run_upsert(conn, [{
+        "task_uuid": "task-1",
+        "rrule": None,
+    }], mocks)
+
+    calls = mocks["patch_task_fields"].call_args_list
+    rrule_call = next((c for c in calls if "rrule" in _patch_dict_for(c)), None)
+    assert rrule_call is not None
+    assert _patch_dict_for(rrule_call)["rrule"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_color_none_clears(conn, mocks):
+    """Explicit color=None on update should be patched (to clear the field)."""
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    await run_upsert(conn, [{
+        "task_uuid": "task-1",
+        "color": None,
+    }], mocks)
+
+    calls = mocks["patch_task_fields"].call_args_list
+    color_call = next((c for c in calls if "color" in _patch_dict_for(c)), None)
+    assert color_call is not None
+    assert _patch_dict_for(color_call)["color"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_with_rrule_patches(conn, mocks):
+    """rrule on a new task should be patched after create."""
+    mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    await run_upsert(conn, [{
+        "text": "Meeting",
+        "rrule": "FREQ=DAILY",
+    }], mocks)
+
+    calls = mocks["patch_task_fields"].call_args_list
+    rrule_call = next((c for c in calls if "rrule" in _patch_dict_for(c)), None)
+    assert rrule_call is not None
+    assert _patch_dict_for(rrule_call)["rrule"] == "FREQ=DAILY"
+
+
+@pytest.mark.asyncio
+async def test_create_with_color_patches(conn, mocks):
+    """color on a new task should be patched after create."""
+    mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    await run_upsert(conn, [{
+        "text": "Meeting",
+        "color": "#00ff00",
+    }], mocks)
+
+    calls = mocks["patch_task_fields"].call_args_list
+    color_call = next((c for c in calls if "color" in _patch_dict_for(c)), None)
+    assert color_call is not None
+    assert _patch_dict_for(color_call)["color"] == "#00ff00"
+
+
+@pytest.mark.asyncio
+async def test_create_with_rrule_none_does_not_patch(conn, mocks):
+    """rrule=None on CREATE is a no-op (no need to clear a brand-new field)."""
+    mocks["create_unscheduled_task"].return_value = {"id": "task-1"}
+    mocks["get_task_by_uuid"].return_value = {
+        "id": "task-1", "text": "Meeting", "status": "pending",
+        "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
+    }
+
+    await run_upsert(conn, [{
+        "text": "Meeting",
+        "rrule": None,
+    }], mocks)
+
+    calls = mocks["patch_task_fields"].call_args_list
+    assert not any("rrule" in _patch_dict_for(c) for c in calls)

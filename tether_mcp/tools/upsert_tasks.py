@@ -74,6 +74,8 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             raise ValueError(
                 f"upsert_tasks: {missing} is required when the other event time field is provided"
             )
+        if start_time and end_time and start_time >= end_time:
+            raise ValueError("upsert_tasks: start_time must be before end_time")
 
         if task_uuid:
             # --- UPDATE path ---
