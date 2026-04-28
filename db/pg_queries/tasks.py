@@ -1122,11 +1122,44 @@ async def delete_event(
 
         external_id = master["external_id"]
         if external_id:
-            # Delete orphan exception rows first (FK-safe ordering)
+            # Collect exception UUIDs so child-table cleanup can reference them by text ID.
+            # task_id columns in subtasks/links/dependencies/milestone_tasks/followup_state
+            # have no FK REFERENCES tasks(uuid) ON DELETE CASCADE — cleanup must be explicit.
+            exc_uuids = await conn.fetch(
+                "SELECT uuid FROM tasks WHERE recurrence_id = $1",
+                str(external_id),
+            )
+            for row in exc_uuids:
+                exc_id = str(row["uuid"])
+                await conn.execute("DELETE FROM subtasks WHERE task_id = $1", exc_id)
+                await conn.execute(
+                    "DELETE FROM links WHERE parent_type = 'tasks' AND parent_id = $1", exc_id
+                )
+                await conn.execute(
+                    "DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=$1)"
+                    " OR (blocked_type='task' AND blocked_id=$1)",
+                    exc_id,
+                )
+                await conn.execute("DELETE FROM milestone_tasks WHERE task_id = $1", exc_id)
+                await conn.execute("DELETE FROM followup_state WHERE task_id = $1", exc_id)
+
             await conn.execute(
                 "DELETE FROM tasks WHERE recurrence_id = $1",
                 str(external_id),
             )
+
+        # Clean child tables for the master row before deleting it
+        await conn.execute("DELETE FROM subtasks WHERE task_id = $1", event_uuid)
+        await conn.execute(
+            "DELETE FROM links WHERE parent_type = 'tasks' AND parent_id = $1", event_uuid
+        )
+        await conn.execute(
+            "DELETE FROM dependencies WHERE (blocker_type='task' AND blocker_id=$1)"
+            " OR (blocked_type='task' AND blocked_id=$1)",
+            event_uuid,
+        )
+        await conn.execute("DELETE FROM milestone_tasks WHERE task_id = $1", event_uuid)
+        await conn.execute("DELETE FROM followup_state WHERE task_id = $1", event_uuid)
 
         result = await conn.execute(
             "DELETE FROM tasks WHERE uuid = $1",

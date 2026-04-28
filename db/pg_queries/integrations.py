@@ -131,11 +131,33 @@ async def delete_tasks_by_source(
 
     Returns the number of tasks deleted.
     """
-    result = await conn.execute(
-        """
-        DELETE FROM tasks
-        WHERE user_id = $1::uuid AND source = $2
+    # task_id columns in child tables have no FK REFERENCES tasks(uuid) ON DELETE CASCADE —
+    # cleanup must be explicit. Use a subquery to batch-clean all child rows in one statement
+    # before deleting the tasks themselves.
+    task_id_subquery = "SELECT uuid::text FROM tasks WHERE user_id = $1::uuid AND source = $2"
+    await conn.execute(
+        f"DELETE FROM subtasks WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    await conn.execute(
+        f"DELETE FROM links WHERE parent_type = 'tasks' AND parent_id IN ({task_id_subquery})",
+        user_id, source,
+    )
+    await conn.execute(
+        f"""
+        DELETE FROM dependencies
+        WHERE (blocker_type = 'task' AND blocker_id IN ({task_id_subquery}))
+           OR (blocked_type = 'task' AND blocked_id IN ({task_id_subquery}))
         """,
+        user_id, source, user_id, source,
+    )
+    await conn.execute(
+        f"DELETE FROM milestone_tasks WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    await conn.execute(
+        f"DELETE FROM followup_state WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    result = await conn.execute(
+        "DELETE FROM tasks WHERE user_id = $1::uuid AND source = $2",
         user_id, source,
     )
     # asyncpg returns "DELETE N" as the command tag
