@@ -69,6 +69,11 @@ describe('buildRrule', () => {
     expect(r).toContain('COUNT=10')
   })
 
+  it('emits COUNT=1 (does not silently drop "after 1 occurrence")', () => {
+    const r = buildRrule({ freq: 'daily', interval: 1, byday: [], monthlyMode: 'date', nthWeekday: 1, endMode: 'count', count: 1, until: '' })
+    expect(r).toContain('COUNT=1')
+  })
+
   it('appends UNTIL', () => {
     const r = buildRrule({ freq: 'daily', interval: 1, byday: [], monthlyMode: 'date', nthWeekday: 1, endMode: 'until', count: 1, until: '2026-12-31' })
     expect(r).toContain('UNTIL=20261231')

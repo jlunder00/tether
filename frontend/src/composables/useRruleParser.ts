@@ -67,7 +67,7 @@ export function buildRrule(s: RruleState): string | null {
     parts.push(`BYDAY=${s.nthWeekday}${s.byday[0]}`)
   }
 
-  if (s.endMode === 'count' && s.count > 1) {
+  if (s.endMode === 'count') {
     parts.push(`COUNT=${s.count}`)
   } else if (s.endMode === 'until' && s.until) {
     const d = s.until.replace(/-/g, '')

@@ -202,6 +202,7 @@ onMounted(() => {
   kanbanStore.fetchColumns()
   contextStore.fetchRootNodes().catch(() => {})
   document.addEventListener('click', onDocumentClick)
+  document.addEventListener('keydown', onDocumentKeydown)
   loadEvents()
 })
 
@@ -209,6 +210,7 @@ onUnmounted(() => {
   window.removeEventListener('mousemove', onWindowMousemove)
   window.removeEventListener('mouseup', onWindowMouseup)
   document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('keydown', onDocumentKeydown)
 })
 
 // ─── Week date range ──────────────────────────────────────────
@@ -368,6 +370,12 @@ function onDocumentClick(e: MouseEvent) {
   if (!panel?.contains(e.target as Node) && !button?.contains(e.target as Node)) {
     filterOpen.value = false
   }
+}
+
+// Escape closes the filter regardless of focus (the panel's own keydown
+// handler only fires when the panel is focused, which it isn't on open).
+function onDocumentKeydown(e: KeyboardEvent) {
+  if (filterOpen.value && e.key === 'Escape') filterOpen.value = false
 }
 
 // ─── Events mapped per day (with filter) ─────────────────────
