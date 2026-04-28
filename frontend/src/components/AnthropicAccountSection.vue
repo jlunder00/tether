@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useIntegrationsStore } from '../stores/integrations'
 
 const store = useIntegrationsStore()
@@ -17,6 +17,8 @@ const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | null = null
 
 async function handleConnect() {
+  if (modalPhase.value !== 'idle') return
+  store.clearAnthropicFlowState()
   modalPhase.value = 'starting'
   const url = await store.startAnthropicConnect()
   if (url) {
@@ -27,11 +29,13 @@ async function handleConnect() {
 }
 
 async function handleSubmit() {
+  if (modalPhase.value === 'completing') return
   if (!codeInput.value.trim()) return
   modalPhase.value = 'completing'
   await store.completeAnthropicConnect(codeInput.value.trim())
   if (store.anthropicConnected) {
     // Success — close modal
+    store.clearAnthropicFlowState()
     modalPhase.value = 'idle'
     codeInput.value = ''
   } else {
@@ -41,6 +45,7 @@ async function handleSubmit() {
 }
 
 function handleCancel() {
+  store.clearAnthropicFlowState()
   modalPhase.value = 'idle'
   codeInput.value = ''
 }
@@ -55,8 +60,14 @@ function handleDisconnectCancel() {
 
 async function handleDisconnectConfirm() {
   await store.disconnectAnthropic()
-  showConfirmDisconnect.value = false
+  if (!store.anthropicError) {
+    showConfirmDisconnect.value = false
+  }
 }
+
+onUnmounted(() => {
+  if (copiedTimer) clearTimeout(copiedTimer)
+})
 
 async function copyUrl() {
   if (!store.anthropicAuthUrl) return
@@ -136,6 +147,9 @@ async function copyUrl() {
         </button>
       </div>
 
+      <!-- Error shown in connected view (e.g. disconnect failure) -->
+      <p v-if="store.anthropicConnected && store.anthropicError" class="text-xs text-red-400 mt-2">{{ store.anthropicError }}</p>
+
       <!-- Info text when not connected and modal not open -->
       <p v-if="!store.anthropicConnected && modalPhase === 'idle'" class="text-xs text-white/40">
         Connect your Anthropic account to use Claude-powered features in Tether.
@@ -157,6 +171,7 @@ async function copyUrl() {
         <div v-if="modalPhase === 'starting'" class="flex items-center gap-2 text-sm text-white/50">
           <span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
           <span>Starting connection...</span>
+          <button @click="handleCancel" class="ml-auto text-xs text-white/40 hover:text-white/70 transition-colors" data-testid="anthropic-cancel-starting">Cancel</button>
         </div>
 
         <!-- Awaiting code phase -->
@@ -230,6 +245,7 @@ async function copyUrl() {
           </p>
           <div class="flex gap-2">
             <button
+              data-testid="anthropic-retry"
               @click="handleConnect"
               class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3 py-1.5 transition-colors"
             >
