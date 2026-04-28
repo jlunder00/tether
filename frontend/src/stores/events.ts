@@ -65,19 +65,34 @@ export const useEventStore = defineStore('events', () => {
 
   /**
    * Move an existing event to a new time slot (drag-to-reposition).
-   * PATCH /api/events/:id — not yet implemented; updates optimistically.
+   * For recurring occurrences, scope chooses whether the move applies to just
+   * this occurrence ('this'), this and all future ('this_and_future'), or the
+   * whole series ('all'). When scope is provided, the original_start_time of
+   * the occurrence must accompany it so the backend can identify which
+   * instance to split.
    */
-  async function moveEvent(eventId: string, startTime: string, endTime: string): Promise<void> {
+  async function moveEvent(
+    eventId: string,
+    startTime: string,
+    endTime: string,
+    scope?: 'this' | 'this_and_future' | 'all',
+    originalStartTime?: string,
+  ): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
     if (!ev) return
     // Optimistic update
     ev.start_time = startTime
     ev.end_time = endTime
+    const body: Record<string, unknown> = { start_time: startTime, end_time: endTime }
+    if (scope) {
+      body.scope = scope
+      if (originalStartTime) body.original_start_time = originalStartTime
+    }
     try {
       await api(`/api/events/${eventId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ start_time: startTime, end_time: endTime }),
+        body: JSON.stringify(body),
       })
     } catch { /* ignore — optimistic update stays */ }
   }
@@ -140,6 +155,23 @@ export const useEventStore = defineStore('events', () => {
   }
 
   /**
+   * Update the color of a calendar event. Pass null to reset to default.
+   * PATCH /api/events/:id with { color } — updates optimistically.
+   */
+  async function updateEventColor(eventId: string, color: string | null): Promise<void> {
+    const ev = events.value.find(e => e.id === eventId)
+    if (!ev) return
+    ev.color = color
+    try {
+      await api(`/api/events/${eventId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ color }),
+      })
+    } catch { /* ignore — optimistic update stays */ }
+  }
+
+  /**
    * Set or clear the recurrence rule for a calendar event.
    * Pass null to remove the recurrence entirely.
    * PATCH /api/events/:id with { rrule } — updates optimistically.
@@ -161,5 +193,5 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* ignore — optimistic update stays */ }
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask, setRecurrence }
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, removeEventsForTask, setRecurrence, updateEventColor }
 })

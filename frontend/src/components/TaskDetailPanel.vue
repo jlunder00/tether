@@ -314,6 +314,11 @@ async function onRecurrenceChange(rrule: string | null) {
   await eventStore.setRecurrence(taskEvent.value.id, rrule)
 }
 
+async function onEventColorChange(color: string | null) {
+  if (!taskEvent.value) return
+  await eventStore.updateEventColor(taskEvent.value.id, color)
+}
+
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
@@ -394,6 +399,23 @@ onMounted(async () => {
                   @change="onCalendarEndChange"
                   class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
               </label>
+              <!-- Color picker — overrides milestone/context-node color -->
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-white/40 w-20">Color</span>
+                <input
+                  type="color"
+                  data-testid="event-color-input"
+                  :value="taskEvent.color ?? '#6366f1'"
+                  class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
+                  @change="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
+                />
+                <button
+                  v-if="taskEvent.color"
+                  data-testid="event-color-reset"
+                  class="text-[10px] text-white/30 hover:text-white/60"
+                  @click="onEventColorChange(null)"
+                >Reset</button>
+              </div>
               <!-- Recurrence picker — shown only when event exists -->
               <RecurrencePicker
                 :model-value="taskEvent.rrule"
