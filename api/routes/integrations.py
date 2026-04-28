@@ -434,7 +434,23 @@ async def patch_calendars(
 
 
 # ---------------------------------------------------------------------------
-# 8. POST /integrations/anthropic/start
+# 8. GET /integrations/anthropic — connection status
+# ---------------------------------------------------------------------------
+
+@router.get("/integrations/anthropic")
+async def anthropic_status(
+    request: Request,
+    _auth: dict = Depends(auth_dependency),
+):
+    """Return whether the authenticated user has Anthropic credentials stored."""
+    user_id = request.state.user_id
+    vault = request.app.state.vault
+    connected = await vault.is_connected(user_id) if vault is not None else False
+    return {"connected": connected}
+
+
+# ---------------------------------------------------------------------------
+# 9. POST /integrations/anthropic/start
 # ---------------------------------------------------------------------------
 
 @router.post("/integrations/anthropic/start")

@@ -233,6 +233,47 @@ async def test_disconnect_calls_vault(auth_app_client):
 
 
 # ---------------------------------------------------------------------------
+# GET /api/integrations/anthropic — connection status
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_status_connected(auth_app_client):
+    """GET /integrations/anthropic returns {connected: true} when vault.is_connected is True."""
+    client, mock_vault, app = auth_app_client
+    mock_vault.is_connected = AsyncMock(return_value=True)
+
+    resp = await client.get("/api/integrations/anthropic")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": True}
+    mock_vault.is_connected.assert_called_once_with(TEST_USER_ID)
+
+
+@pytest.mark.asyncio
+async def test_status_not_connected(auth_app_client):
+    """GET /integrations/anthropic returns {connected: false} when vault.is_connected is False."""
+    client, mock_vault, app = auth_app_client
+    mock_vault.is_connected = AsyncMock(return_value=False)
+
+    resp = await client.get("/api/integrations/anthropic")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": False}
+
+
+@pytest.mark.asyncio
+async def test_status_no_vault_returns_not_connected(auth_app_client):
+    """GET /integrations/anthropic returns {connected: false} gracefully when vault is None."""
+    client, mock_vault, app = auth_app_client
+    app.state.vault = None
+
+    resp = await client.get("/api/integrations/anthropic")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": False}
+
+
+# ---------------------------------------------------------------------------
 # 7. POST /api/integrations/anthropic/start -- requires auth
 # ---------------------------------------------------------------------------
 
