@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { RecurrenceEditScope } from '../types/recurrence'
 
-defineProps<{
-  open: boolean
-  title?: string
+const props = defineProps<{
+  visible: boolean
+  mode: 'event' | 'task'
+  action: 'edit' | 'delete' | 'move'
 }>()
 
 const emit = defineEmits<{
@@ -13,6 +14,32 @@ const emit = defineEmits<{
 }>()
 
 const scope = ref<RecurrenceEditScope>('this')
+
+const noun = computed(() => props.mode === 'event' ? 'event' : 'task')
+
+const heading = computed(() => {
+  if (props.action === 'edit') return `Edit recurring ${noun.value}`
+  if (props.action === 'delete') return `Delete recurring ${noun.value}`
+  return `Move recurring ${noun.value}`
+})
+
+const optionLabels = computed(() => {
+  const verb = props.action === 'edit' ? 'Edit'
+             : props.action === 'delete' ? 'Delete'
+             : 'Move'
+  return {
+    this: `${verb} just this occurrence`,
+    this_and_future: `This and future occurrences`,
+    all: `All occurrences`,
+  }
+})
+
+const confirmLabel = computed(() => props.action === 'delete' ? 'Delete' : 'Confirm')
+const confirmClass = computed(() =>
+  props.action === 'delete'
+    ? 'px-3 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-400'
+    : 'px-3 py-1 text-xs rounded bg-indigo-500 text-white hover:bg-indigo-400'
+)
 
 function onConfirm() { emit('confirm', scope.value) }
 function onCancel() { emit('cancel') }
@@ -24,7 +51,7 @@ function onKeydown(e: KeyboardEvent) {
 <template>
   <Teleport to="body">
     <div
-      v-if="open"
+      v-if="visible"
       data-testid="recurrence-edit-dialog"
       class="fixed inset-0 z-[200] flex items-center justify-center bg-black/60"
       @click.self="onCancel"
@@ -32,19 +59,19 @@ function onKeydown(e: KeyboardEvent) {
       tabindex="0"
     >
       <div class="w-80 bg-gray-800 border border-white/20 rounded-xl shadow-xl p-4 space-y-3">
-        <h3 class="text-sm font-medium text-white">{{ title ?? 'Edit recurring event' }}</h3>
+        <h3 class="text-sm font-medium text-white">{{ heading }}</h3>
         <div class="flex flex-col gap-1.5">
           <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
             <input type="radio" v-model="scope" value="this" data-testid="scope-this" />
-            <span>Just this event</span>
+            <span>{{ optionLabels.this }}</span>
           </label>
           <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
             <input type="radio" v-model="scope" value="this_and_future" data-testid="scope-future" />
-            <span>This and future events</span>
+            <span>{{ optionLabels.this_and_future }}</span>
           </label>
           <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
             <input type="radio" v-model="scope" value="all" data-testid="scope-all" />
-            <span>All events</span>
+            <span>{{ optionLabels.all }}</span>
           </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">
@@ -55,9 +82,9 @@ function onKeydown(e: KeyboardEvent) {
           >Cancel</button>
           <button
             data-testid="recurrence-edit-confirm"
-            class="px-3 py-1 text-xs rounded bg-indigo-500 text-white hover:bg-indigo-400"
+            :class="confirmClass"
             @click="onConfirm"
-          >Confirm</button>
+          >{{ confirmLabel }}</button>
         </div>
       </div>
     </div>
