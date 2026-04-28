@@ -25,71 +25,171 @@ def test_parse_claude_response_plain_text_fallback():
 
 
 # ---------------------------------------------------------------------------
-# call_claude — async, uses asyncio.create_subprocess_exec
+# call_claude — SDK migration tests
 # ---------------------------------------------------------------------------
 
-def _make_proc(stdout: bytes = b"response", returncode: int = 0):
-    proc = AsyncMock()
-    proc.communicate = AsyncMock(return_value=(stdout, b""))
-    proc.kill = AsyncMock()
-    proc.wait = AsyncMock()
-    proc.returncode = returncode
-    return proc
+@pytest.mark.asyncio
+async def test_call_claude_uses_sdk_not_subprocess():
+    """call_claude() no longer uses subprocess — it uses claude_agent_sdk.query()."""
+    from bot.message_handler import call_claude
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    from unittest.mock import AsyncMock, patch
+
+    async def _fake_query(*, prompt, options=None, transport=None):
+        msg = AssistantMessage(
+            content=[TextBlock(text="sdk response")],
+            model="claude-sonnet-4-6",
+        )
+        yield msg
+
+    with patch("claude_agent_sdk.query", side_effect=_fake_query), \
+         patch("asyncio.create_subprocess_exec") as mock_sub:
+        result = await call_claude("test prompt")
+    assert result == "sdk response"
+    mock_sub.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_call_claude_returns_stdout():
+async def test_call_claude_returns_text_from_sdk():
     from bot.message_handler import call_claude
-    proc = _make_proc(b"hello world")
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+    from claude_agent_sdk import AssistantMessage, TextBlock
+
+    async def _fake_query(*, prompt, options=None, transport=None):
+        msg = AssistantMessage(
+            content=[TextBlock(text="hello world")],
+            model="claude-sonnet-4-6",
+        )
+        yield msg
+
+    with patch("claude_agent_sdk.query", side_effect=_fake_query):
         result = await call_claude("test prompt")
     assert result == "hello world"
 
 
 @pytest.mark.asyncio
-async def test_call_claude_no_model_role_omits_model_flag():
+async def test_call_claude_passes_creds_dir_to_sdk_env(tmp_path):
+    """When _llm_creds_dir ContextVar is set, call_claude passes CLAUDE_CONFIG_DIR in env."""
     from bot.message_handler import call_claude
-    proc = _make_proc(b"hi")
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as mock_exec:
-        await call_claude("test prompt")
-    cmd = mock_exec.call_args[0]
-    assert "--model" not in cmd
-    assert "claude" == cmd[0]
-    assert "--strict-mcp-config" in cmd
-    assert "test prompt" in cmd
+    from bot.llm import _llm_creds_dir
+    from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
+
+    captured_opts: list[ClaudeAgentOptions] = []
+
+    async def _fake_query(*, prompt, options=None, transport=None):
+        captured_opts.append(options)
+        msg = AssistantMessage(
+            content=[TextBlock(text="ok")],
+            model="claude-sonnet-4-6",
+        )
+        yield msg
+
+    creds_dir = str(tmp_path / "creds")
+    token = _llm_creds_dir.set(creds_dir)
+    try:
+        with patch("claude_agent_sdk.query", side_effect=_fake_query):
+            await call_claude("prompt")
+    finally:
+        _llm_creds_dir.reset(token)
+
+    assert len(captured_opts) == 1
+    assert captured_opts[0].env.get("CLAUDE_CONFIG_DIR") == creds_dir
 
 
 @pytest.mark.asyncio
-async def test_call_claude_with_model_role_injects_model_flag():
+async def test_call_claude_no_creds_dir_no_env_key():
+    """When _llm_creds_dir is not set, CLAUDE_CONFIG_DIR is not added to env."""
+    from bot.message_handler import call_claude
+    from bot.llm import _llm_creds_dir
+    from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
+
+    captured_opts: list[ClaudeAgentOptions] = []
+
+    async def _fake_query(*, prompt, options=None, transport=None):
+        captured_opts.append(options)
+        msg = AssistantMessage(
+            content=[TextBlock(text="ok")],
+            model="claude-sonnet-4-6",
+        )
+        yield msg
+
+    token = _llm_creds_dir.set(None)
+    try:
+        with patch("claude_agent_sdk.query", side_effect=_fake_query):
+            await call_claude("prompt")
+    finally:
+        _llm_creds_dir.reset(token)
+
+    assert "CLAUDE_CONFIG_DIR" not in (captured_opts[0].env if captured_opts else {})
+
+
+@pytest.mark.asyncio
+async def test_call_claude_with_model_role_passes_model_to_sdk():
+    """When model_role is given, the resolved model is passed to ClaudeAgentOptions."""
     from bot.message_handler import call_claude, _MODEL_DEFAULTS
-    proc = _make_proc(b"hi")
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as mock_exec, \
+    from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
+
+    captured_opts: list[ClaudeAgentOptions] = []
+
+    async def _fake_query(*, prompt, options=None, transport=None):
+        captured_opts.append(options)
+        msg = AssistantMessage(
+            content=[TextBlock(text="hi")],
+            model="claude-sonnet-4-6",
+        )
+        yield msg
+
+    with patch("claude_agent_sdk.query", side_effect=_fake_query), \
          patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
         await call_claude("test prompt", model_role="orchestrator")
-    cmd = mock_exec.call_args[0]
-    assert "--model" in cmd
-    assert _MODEL_DEFAULTS["orchestrator"] in cmd
+
+    assert len(captured_opts) == 1
+    assert captured_opts[0].model == _MODEL_DEFAULTS["orchestrator"]
 
 
 @pytest.mark.asyncio
 async def test_call_claude_raises_on_timeout():
     from bot.message_handler import call_claude
-    proc = AsyncMock()
-    proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-    proc.kill = AsyncMock()
-    proc.wait = AsyncMock()
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)):
+
+    async def _slow_query(*, prompt, options=None, transport=None):
+        await asyncio.sleep(999)
+        yield None
+
+    with patch("claude_agent_sdk.query", side_effect=_slow_query):
         with pytest.raises(RuntimeError, match="timed out"):
-            await call_claude("some prompt", timeout=1)
+            await call_claude("some prompt", timeout=0.01)
 
 
 @pytest.mark.asyncio
-async def test_call_claude_includes_strict_mcp_config():
-    from bot.message_handler import call_claude
-    proc = _make_proc(b"hi")
-    with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as mock_exec:
-        await call_claude("test prompt", model_role="orchestrator")
-    assert "--strict-mcp-config" in mock_exec.call_args[0]
+async def test_handle_message_acquires_vault_lock(tmp_path, monkeypatch):
+    """handle_message() acquires the vault lock for user_id before any LLM calls."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock, patch
+
+    class StubVault:
+        def __init__(self):
+            self.lock_acquired_for: list[str] = []
+            self.materialized_for: list[str] = []
+
+        @asynccontextmanager
+        async def with_lock(self, user_id: str):
+            self.lock_acquired_for.append(user_id)
+            yield
+
+        @asynccontextmanager
+        async def materialize(self, user_id: str):
+            self.materialized_for.append(user_id)
+            yield str(tmp_path / "creds")
+
+    vault = StubVault()
+
+    # Patch away all DB and LLM calls
+    with patch("bot.message_handler._handle_message_body", AsyncMock()) as mock_body:
+        from bot.message_handler import handle_message
+        await handle_message("hi", lambda m: None, object(), "user-123", vault=vault)
+
+    assert "user-123" in vault.lock_acquired_for
+    assert "user-123" in vault.materialized_for
+    mock_body.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

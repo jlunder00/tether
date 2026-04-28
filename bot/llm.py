@@ -2,19 +2,26 @@
 
 Provides a vendor-agnostic interface for LLM completions.
 Base types (LLMBackend, LLMResponse, ToolCall) and backend implementations
-for Anthropic, OpenAI, OpenRouter, Bedrock, and Pipeline (claude -p).
+for Anthropic, OpenAI, OpenRouter, Bedrock, and Pipeline (claude agent SDK).
 
 Advanced features (LLMRouter with fallback chains, AgentSDKBackend,
 multi-turn sessions) are available via tether-premium.
 """
 import asyncio
+import contextvars
 import os
 import json
 import time
-import subprocess
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+
+# Per-request credentials directory — set by handle_message() when a vault is
+# provided so that all LLM calls in the same request use the correct per-user
+# Claude config. Never set this at module level; always use .set()/.reset().
+_llm_creds_dir: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_llm_creds_dir", default=None
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +66,7 @@ class LLMBackend(ABC):
 # ---------------------------------------------------------------------------
 
 class PipelineBackend(LLMBackend):
-    """Invokes claude -p as a subprocess. Always available as fallback."""
+    """Invokes the Claude agent SDK. Always available as fallback."""
 
     def is_available(self) -> bool:
         return True
@@ -74,6 +81,8 @@ class PipelineBackend(LLMBackend):
         thinking_budget: int = 8000,
         max_tokens: int = 8096,
     ) -> LLMResponse:
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
         prompt_parts = []
         if isinstance(system, list):
             prompt_parts.append("\n".join(system))
@@ -85,16 +94,27 @@ class PipelineBackend(LLMBackend):
             prompt_parts.append(f"\n[{role}]\n{content}")
         prompt = "\n".join(prompt_parts)
 
-        cmd = ["claude", "-p", "--strict-mcp-config", "--model", model, prompt]
-        result = await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, check=True, timeout=180
+        env: dict[str, str] = {}
+        creds_dir_val = _llm_creds_dir.get()
+        if creds_dir_val:
+            env["CLAUDE_CONFIG_DIR"] = creds_dir_val
+
+        opts = ClaudeAgentOptions(
+            model=model,
+            permission_mode="bypassPermissions",
+            env=env,
         )
-        output = result.stdout.strip()
-        if "Not logged in" in output or "Please run /login" in output:
-            logger.error("Claude CLI session expired: %s", output[:200])
-            raise RuntimeError(
-                "Claude session expired. Please re-run /login on the Pi."
-            )
+
+        async def _collect() -> str:
+            parts: list[str] = []
+            async for msg in query(prompt=prompt, options=opts):
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            parts.append(block.text)
+            return "".join(parts).strip()
+
+        output = await asyncio.wait_for(_collect(), timeout=180)
         return LLMResponse(
             content=output,
             tool_calls=[],
