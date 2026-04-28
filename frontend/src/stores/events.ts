@@ -142,8 +142,11 @@ export const useEventStore = defineStore('events', () => {
    */
   async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
+    if (!ev?.task_id) {
+      console.warn('Cannot demote event with no task_id — skipping')
+      return
+    }
     events.value = events.value.filter(e => e.id !== eventId)
-    if (!ev?.task_id) return
     try {
       await api(`/api/tasks/${ev.task_id}`, {
         method: 'PATCH',
