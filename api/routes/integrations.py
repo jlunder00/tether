@@ -25,6 +25,7 @@ import re
 import shutil
 import tempfile
 import time
+import urllib.parse
 
 import asyncpg
 import httpx
@@ -66,7 +67,24 @@ _pending_setups: dict[str, dict] = {}
 _start_locks: dict[str, asyncio.Lock] = {}
 
 _SETUP_TTL = 600  # seconds
-_ANTHROPIC_URL_RE = re.compile(r"https://console\.anthropic\.com/\S+")
+_ANTHROPIC_URL_RE = re.compile(r"https://\S+")
+_ANTHROPIC_URL_SCHEME = "https"
+_ANTHROPIC_URL_NETLOC = "console.anthropic.com"
+
+
+def _extract_anthropic_url(text: str) -> str | None:
+    """Extract and strictly validate the Anthropic auth URL from subprocess output.
+
+    Uses urlparse to check scheme and netloc exactly — prevents substring-match
+    bypasses where 'console.anthropic.com' appears at an arbitrary position in a
+    crafted URL (e.g. as a query parameter).
+    """
+    for match in _ANTHROPIC_URL_RE.finditer(text):
+        candidate = match.group(0).rstrip(".,;)")  # strip trailing punctuation
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.scheme == _ANTHROPIC_URL_SCHEME and parsed.netloc == _ANTHROPIC_URL_NETLOC:
+            return candidate
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +488,9 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
     )
 
     combined = stdout_bytes.decode(errors="replace") + stderr_bytes.decode(errors="replace")
-    match = _ANTHROPIC_URL_RE.search(combined)
+    url = _extract_anthropic_url(combined)
 
-    if not match:
+    if url is None:
         proc.kill()
         await proc.wait()
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -484,7 +502,7 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
         "started_at": time.time(),
     }
 
-    return {"url": match.group(0), "expires_in": _SETUP_TTL}
+    return {"url": url, "expires_in": _SETUP_TTL}
 
 
 # ---------------------------------------------------------------------------

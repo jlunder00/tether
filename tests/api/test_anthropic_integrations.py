@@ -87,7 +87,11 @@ async def test_start_returns_url(auth_app_client):
     assert resp.status_code == 200
     data = resp.json()
     assert "url" in data
-    assert "console.anthropic.com" in data["url"]
+    # Use startswith to validate exact scheme + netloc — substring 'in' check is
+    # insufficient (CodeQL: incomplete URL substring sanitization)
+    assert data["url"].startswith("https://console.anthropic.com/"), (
+        f"URL must start with exact scheme+netloc, got: {data['url']}"
+    )
     assert data["expires_in"] == 600
 
 
