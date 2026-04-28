@@ -119,6 +119,32 @@ async def upsert_sync_state(
     return _row(row)
 
 
+async def delete_tasks_by_source(
+    conn: asyncpg.Connection,
+    user_id: str,
+    source: str,
+) -> int:
+    """Hard-delete all tasks imported from a given source for this user.
+
+    Called when the user disconnects an integration (e.g. Google Calendar)
+    so that stale synced events don't persist in the calendar or plan view.
+
+    Returns the number of tasks deleted.
+    """
+    result = await conn.execute(
+        """
+        DELETE FROM tasks
+        WHERE user_id = $1::uuid AND source = $2
+        """,
+        user_id, source,
+    )
+    # asyncpg returns "DELETE N" as the command tag
+    try:
+        return int(result.split()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
 async def soft_delete_task_by_external_id(
     conn: asyncpg.Connection,
     user_id: str,
