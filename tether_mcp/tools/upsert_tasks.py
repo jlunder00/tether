@@ -105,6 +105,15 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             if color is not _ABSENT:
                 patch_fields["color"] = color
 
+            # Direct start/end update goes through patch_task_fields (trusted MCP
+            # path) rather than update_event_time.  update_event_time enforces a
+            # recurrence-aware delta for the calendar UI to prevent silent anchor
+            # corruption; the MCP tool is an administrative path that sets times
+            # directly on both recurring and non-recurring tasks.
+            if start_time and end_time:
+                patch_fields["start_time"] = start_time
+                patch_fields["end_time"] = end_time
+
             if patch_fields:
                 await patch_task_fields(conn, task_uuid, patch_fields)
 
@@ -113,9 +122,6 @@ async def execute_upsert_tasks(conn: asyncpg.Connection, tasks: list[dict]) -> l
             elif date and anchor_id:
                 await upsert_plan(conn, date)
                 await move_task_atomic(conn, task_uuid, date, anchor_id)
-
-            if start_time and end_time:
-                await update_event_time(conn, task_uuid, start_time, end_time)
 
             final_task_id = task_uuid
 

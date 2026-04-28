@@ -1257,17 +1257,80 @@ async def delete_recurring_from(
     return True
 
 
+def _rewrite_dtstart_in_rrule(rrule_str: str, delta: _timedelta) -> str:
+    """Shift the wall-clock time in an embedded DTSTART;TZID line by delta.
+
+    When map_event embeds DTSTART;TZID=<tz>:<local> in the stored rrule, dateutil's
+    rrulestr() prefers that DTSTART over the dtstart= kwarg.  After a scope=all move
+    we must rewrite the embedded line so expand_recurring() uses the new time.
+
+    Example:
+        "DTSTART;TZID=America/New_York:20260209T090000\\nRRULE:FREQ=WEEKLY"
+        + delta=timedelta(hours=5)
+        → "DTSTART;TZID=America/New_York:20260209T140000\\nRRULE:FREQ=WEEKLY"
+
+    If no embedded DTSTART;TZID is found the string is returned unchanged (bare
+    RRULE strings — tether-native events or pre-Bug-1-fix GCal events — need no
+    rewrite because expand_recurring() uses master start_time as dtstart).
+    """
+    import re as _re
+    import zoneinfo as _zoneinfo
+
+    m = _re.match(
+        r'^(DTSTART;TZID=([^:]+):)(\d{8}T\d{6})([\s\S]*)$',
+        rrule_str,
+    )
+    if not m:
+        return rrule_str
+
+    _prefix, tzid, dt_compact, rest = m.groups()
+    try:
+        tz = _zoneinfo.ZoneInfo(tzid)
+    except (KeyError, _zoneinfo.ZoneInfoNotFoundError):
+        return rrule_str  # unknown IANA name — leave unchanged
+
+    old_local = _datetime.strptime(dt_compact, "%Y%m%dT%H%M%S").replace(tzinfo=tz)
+    new_local = old_local + delta
+    new_compact = new_local.strftime("%Y%m%dT%H%M%S")
+    return f"DTSTART;TZID={tzid}:{new_compact}{rest}"
+
+
 async def update_event_time(
     conn: asyncpg.Connection,
     event_uuid: str,
     start_time: str,
     end_time: str,
+    original_start_time: str | None = None,
 ) -> dict | None:
     """Reposition a calendar event to a new time slot.
 
     Only updates tasks that already have start_time set (i.e. are promoted events).
     Returns CalendarEvent-shaped dict, or None if not found / not an event.
+
+    For recurring events (rrule IS NOT NULL), original_start_time is required —
+    pass the ISO timestamp of the occurrence being dragged so the delta can be
+    computed and applied to the master's start_time (and embedded DTSTART;TZID
+    if present).  Omitting original_start_time on a recurring event raises
+    ValueError to prevent silent corruption of the recurrence schedule.
     """
+    if original_start_time is not None:
+        return await _update_event_time_all(
+            conn, event_uuid, start_time, end_time, original_start_time
+        )
+
+    # Guard: refuse to directly overwrite a recurring master without a delta.
+    # The direct UPDATE would stamp the occurrence's date+time onto the master,
+    # which destroys the recurrence anchor (Bug 2 original symptom).
+    is_recurring = await conn.fetchval(
+        "SELECT rrule IS NOT NULL FROM tasks WHERE uuid = $1 AND start_time IS NOT NULL",
+        _uuid.UUID(event_uuid),
+    )
+    if is_recurring:
+        raise ValueError(
+            f"Task {event_uuid} is a recurring event — "
+            "pass original_start_time to shift all occurrences safely"
+        )
+
     row = await conn.fetchrow(
         """
         UPDATE tasks
@@ -1479,3 +1542,70 @@ async def patch_recurring_this_and_future(
         )
 
     return _row_to_event(new_row, is_recurring=True, is_occurrence=False) if new_row else None
+
+
+async def _update_event_time_all(
+    conn: asyncpg.Connection,
+    event_uuid: str,
+    start_time: str,
+    end_time: str,
+    original_start_time: str,
+) -> dict | None:
+    """Shift an entire recurring series by the delta between the dragged occurrence
+    and its new position.
+
+    Logic:
+      delta         = new_start − original_start_time (the occurrence being dragged)
+      new_master    = master.start_time + delta
+      new_master_end= master.end_time   + delta  (preserves duration)
+
+    For GCal-synced events the stored rrule may contain an embedded DTSTART;TZID
+    line (prepended by _prepend_dtstart_tzid in the mapping layer).  dateutil's
+    rrulestr() treats that embedded DTSTART as authoritative and ignores the
+    dtstart= kwarg.  We therefore also rewrite the embedded DTSTART by applying
+    delta in the event's IANA timezone so expand_recurring() uses the new
+    wall-clock time.
+
+    Known limitation: the next inbound GCal sync will receive the original rrule
+    from Google and _prepend_dtstart_tzid will rewrite the DTSTART back to the
+    original time.  A scope=all move does not survive a sync cycle without an
+    outbound push to GCal (not implemented — tracked as a follow-up).
+    """
+    occ_start_dt = _parse_ts(original_start_time)
+    new_start_dt = _parse_ts(start_time)
+    new_end_dt = _parse_ts(end_time)
+    delta = new_start_dt - occ_start_dt
+
+    master = await conn.fetchrow(
+        """
+        SELECT start_time, end_time, rrule
+        FROM tasks
+        WHERE uuid = $1
+          AND start_time IS NOT NULL
+        """,
+        _uuid.UUID(event_uuid),
+    )
+    if not master:
+        return None
+
+    new_master_start = master["start_time"] + delta
+    new_master_end = (master["end_time"] + delta) if master["end_time"] else new_end_dt
+
+    # Rewrite any embedded DTSTART;TZID so rrulestr() uses the new wall-clock time.
+    # For bare rrules (no DTSTART;TZID) this is a no-op.
+    new_rrule = _rewrite_dtstart_in_rrule(master["rrule"] or "", delta)
+
+    row = await conn.fetchrow(
+        """
+        UPDATE tasks
+        SET start_time = $1,
+            end_time   = $2,
+            rrule      = $3,
+            version    = version + 1
+        WHERE uuid = $4
+          AND start_time IS NOT NULL
+        RETURNING uuid, text, start_time, end_time, source, external_id, anchor_id, context_subject
+        """,
+        new_master_start, new_master_end, new_rrule, _uuid.UUID(event_uuid),
+    )
+    return _row_to_event(row) if row else None

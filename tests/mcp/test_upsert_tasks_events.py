@@ -76,12 +76,18 @@ async def test_create_task_with_event_times_promotes(conn, mocks):
 
 
 @pytest.mark.asyncio
-async def test_update_task_with_event_times_calls_update_event_time(conn, mocks):
+async def test_update_task_with_event_times_uses_patch_task_fields(conn, mocks):
+    """MCP update of start/end times goes through patch_task_fields (trusted path).
+
+    update_event_time now enforces a recurrence-aware delta for calendar UI moves
+    and raises ValueError for recurring events without original_start_time.  The
+    MCP tool is an administrative path that sets times directly, so it uses
+    patch_task_fields to avoid that guard.
+    """
     mocks["get_task_by_uuid"].return_value = {
         "id": "task-1", "text": "Meeting", "status": "pending",
         "description": None, "context_subject": None, "plan_date": None, "anchor_id": None,
     }
-    mocks["update_event_time"].return_value = {"id": "task-1"}
 
     await run_upsert(conn, [{
         "task_uuid": "task-1",
@@ -89,9 +95,14 @@ async def test_update_task_with_event_times_calls_update_event_time(conn, mocks)
         "end_time": "2026-04-27T11:00:00",
     }], mocks)
 
-    mocks["update_event_time"].assert_called_once_with(
-        conn, "task-1", "2026-04-27T10:00:00", "2026-04-27T11:00:00"
-    )
+    # Time fields must flow through patch_task_fields, not update_event_time
+    mocks["update_event_time"].assert_not_called()
+    calls = mocks["patch_task_fields"].call_args_list
+    time_call = next((c for c in calls if "start_time" in _patch_dict_for(c)), None)
+    assert time_call is not None, "start_time/end_time should be passed to patch_task_fields"
+    patch_dict = _patch_dict_for(time_call)
+    assert patch_dict["start_time"] == "2026-04-27T10:00:00"
+    assert patch_dict["end_time"] == "2026-04-27T11:00:00"
 
 
 @pytest.mark.asyncio

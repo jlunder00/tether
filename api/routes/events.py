@@ -1,6 +1,6 @@
 import logging
-
 from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 import asyncpg
@@ -28,6 +28,8 @@ class MoveEventBody(BaseModel):
     start_time: str
     end_time: str
     scope: Literal["all", "this", "this_and_future"] = "all"
+    # Required for scope="this" and "this_and_future" (identifies the occurrence being moved);
+    # also required for scope="all" on a recurring series (used to compute the time delta).
     original_start_time: str | None = None
 
 
@@ -54,11 +56,20 @@ async def patch_event(
     _auth=Depends(auth_dependency),
     conn: asyncpg.Connection = Depends(get_db_conn),
 ):
-    """Reposition a calendar event to a new time slot (move/resize)."""
+    """Reposition a calendar event to a new time slot (move/resize).
+
+    scope="all" (default): shift the entire recurring series by the time delta
+        between original_start_time and the new slot. For non-recurring events,
+        updates directly. original_start_time is required for recurring events.
+    scope="this": create an exception occurrence at the new slot, suppress the
+        original via EXDATE. Requires original_start_time.
+    scope="this_and_future": truncate the series at original_start_time and start
+        a new series from the new slot. Requires original_start_time.
+    """
     if body.scope != "all" and body.original_start_time is None:
         raise HTTPException(
             status_code=422,
-            detail='original_start_time is required when scope is not all',
+            detail="original_start_time is required when scope is not 'all'",
         )
 
     try:
@@ -71,7 +82,11 @@ async def patch_event(
                 conn, event_id, body.original_start_time, body.start_time, body.end_time,
             )
         else:
-            event = await update_event_time(conn, event_id, body.start_time, body.end_time)
+            # scope="all": use delta logic for recurring series; plain update for single events
+            event = await update_event_time(
+                conn, event_id, body.start_time, body.end_time,
+                original_start_time=body.original_start_time,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
