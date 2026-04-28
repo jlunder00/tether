@@ -1067,12 +1067,14 @@ async def patch_recurring_this(
             exdate_token, master_uuid,
         )
 
-        # 4. INSERT standalone exception event
+        # 4. INSERT standalone exception event (tether-native — source/external_id are nulled
+        # to avoid the partial unique index on (user_id, source, external_id) WHERE source IS NOT NULL.
+        # The recurrence_id still links this row to the master for ghost-suppression logic.)
         new_row = await conn.fetchrow(
             """
             INSERT INTO tasks (
                 uuid, user_id, text, status,
-                start_time, end_time, source, external_id,
+                start_time, end_time,
                 anchor_id, context_subject,
                 recurrence_id, original_start_time
             )
@@ -1080,15 +1082,14 @@ async def patch_recurring_this(
                 gen_random_uuid(),
                 current_setting('app.current_user_id', true)::uuid,
                 $1, 'pending',
-                $2, $3, $4, $5,
-                $6, $7,
-                $8, $9
+                $2, $3,
+                $4, $5,
+                $6, $7
             )
             RETURNING uuid, text, start_time, end_time, source, external_id,
                       anchor_id, context_subject
             """,
             master["text"], new_start_dt, new_end_dt,
-            master["source"], master["external_id"],
             master["anchor_id"], master["context_subject"],
             master["external_id"], original_dt,
         )
@@ -1171,25 +1172,26 @@ async def patch_recurring_this_and_future(
         value = _re.sub(r";?COUNT=[^;]*", "", value, flags=_re.IGNORECASE)
         new_rrule = f"{prefix}{value.strip(';')}"
 
+        # New master is tether-native (source/external_id nulled) to avoid the partial unique
+        # index on (user_id, source, external_id) WHERE source IS NOT NULL.
         new_row = await conn.fetchrow(
             """
             INSERT INTO tasks (
                 uuid, user_id, text, status,
-                start_time, end_time, source, external_id,
+                start_time, end_time,
                 anchor_id, context_subject, rrule
             )
             VALUES (
                 gen_random_uuid(),
                 current_setting('app.current_user_id', true)::uuid,
                 $1, 'pending',
-                $2, $3, $4, $5,
-                $6, $7, $8
+                $2, $3,
+                $4, $5, $6
             )
             RETURNING uuid, text, start_time, end_time, source, external_id,
                       anchor_id, context_subject
             """,
             master["text"], new_start_dt, new_end_dt,
-            master["source"], master["external_id"],
             master["anchor_id"], master["context_subject"], new_rrule,
         )
 

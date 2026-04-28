@@ -60,16 +60,19 @@ async def patch_event(
             detail='original_start_time is required when scope is not all',
         )
 
-    if body.scope == "this":
-        event = await patch_recurring_this(
-            conn, event_id, body.original_start_time, body.start_time, body.end_time,
-        )
-    elif body.scope == "this_and_future":
-        event = await patch_recurring_this_and_future(
-            conn, event_id, body.original_start_time, body.start_time, body.end_time,
-        )
-    else:
-        event = await update_event_time(conn, event_id, body.start_time, body.end_time)
+    try:
+        if body.scope == "this":
+            event = await patch_recurring_this(
+                conn, event_id, body.original_start_time, body.start_time, body.end_time,
+            )
+        elif body.scope == "this_and_future":
+            event = await patch_recurring_this_and_future(
+                conn, event_id, body.original_start_time, body.start_time, body.end_time,
+            )
+        else:
+            event = await update_event_time(conn, event_id, body.start_time, body.end_time)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if event is None:
         raise HTTPException(status_code=404, detail="Event not found")

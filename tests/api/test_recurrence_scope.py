@@ -63,28 +63,33 @@ def _master_fetchrow():
 
 
 def _standalone_fetchrow():
-    """Simulates the new standalone event row returned after INSERT."""
+    """Simulates the new standalone event row returned after INSERT.
+    source and external_id are None — user-created exceptions are tether-native
+    to avoid the partial unique index on (user_id, source, external_id).
+    """
     return {
         "uuid": _NEW_UUID,
         "text": "Weekly standup",
         "start_time": datetime(2026, 5, 11, 14, 0, tzinfo=_TZ),
         "end_time": datetime(2026, 5, 11, 14, 30, tzinfo=_TZ),
-        "source": "google_calendar",
-        "external_id": "gcal-series-123",
+        "source": None,
+        "external_id": None,
         "anchor_id": None,
         "context_subject": "work",
     }
 
 
 def _new_master_fetchrow():
-    """Simulates the new master event row after this_and_future INSERT."""
+    """Simulates the new master event row after this_and_future INSERT.
+    source and external_id are None — tether-native to avoid the unique index.
+    """
     return {
         "uuid": _NEW_UUID,
         "text": "Weekly standup",
         "start_time": datetime(2026, 5, 11, 14, 0, tzinfo=_TZ),
         "end_time": datetime(2026, 5, 11, 14, 30, tzinfo=_TZ),
-        "source": "google_calendar",
-        "external_id": "gcal-series-123",
+        "source": None,
+        "external_id": None,
         "anchor_id": None,
         "context_subject": "work",
     }
