@@ -2,6 +2,8 @@
 import { computed, watch, onMounted, ref, nextTick } from 'vue'
 import { useEventStore } from '../stores/events'
 import { useAnchorStore } from '../stores/anchors'
+import { useMilestoneStore } from '../stores/milestones'
+import { useContextStore } from '../stores/context'
 import CalendarEventBlock from './CalendarEventBlock.vue'
 import RecurrenceEditDialog from './RecurrenceEditDialog.vue'
 import {
@@ -9,12 +11,14 @@ import {
   eventHeightPx,
   anchorBandTopPx,
   anchorBandHeightPx,
+  computeAnchorOverlapLayout,
   AXIS_START_HOUR,
   AXIS_END_HOUR,
   AXIS_TOTAL_PX,
   PX_PER_MINUTE,
 } from '../composables/useDayTimeline'
-import { computeOverlapLayout } from '../composables/useOverlapLayout'
+import { computeOverlapLayout, computeOverlapBands } from '../composables/useOverlapLayout'
+import { resolveEventColor } from '../composables/useColorResolver'
 import type { CalendarEvent } from '../types/events'
 import type { RecurrenceEditScope } from '../types/recurrence'
 
@@ -29,6 +33,12 @@ const emit = defineEmits<{
 
 const eventStore = useEventStore()
 const anchorStore = useAnchorStore()
+const milestoneStore = useMilestoneStore()
+const contextStore = useContextStore()
+
+function resolveColor(ev: CalendarEvent): string {
+  return resolveEventColor(ev, milestoneStore.all, contextStore.nodes)
+}
 
 // --- Date parsing ---
 
@@ -47,6 +57,18 @@ const timedEvents = computed(() =>
 // --- Overlap layout for timed events ---
 
 const overlapLayout = computed(() => computeOverlapLayout(timedEvents.value))
+
+// --- Overlap background bands (time windows with multiple concurrent events) ---
+
+const overlapBands = computed(() =>
+  computeOverlapBands(timedEvents.value, overlapLayout.value, eventTopPx, eventHeightPx)
+)
+
+// --- Anchor band overlap layout ---
+
+const anchorOverlapLayouts = computed(() =>
+  computeAnchorOverlapLayout(anchorStore.anchors, dateObj.value)
+)
 
 // --- Hour labels (6am..11pm) ---
 
@@ -68,10 +90,25 @@ function fetchForDate(date: string) {
   eventStore.fetchEvents(start, end)
 }
 
-onMounted(() => fetchForDate(props.date))
+onMounted(() => {
+  fetchForDate(props.date)
+  // Auto-scroll to current time (100px buffer above)
+  nextTick(() => {
+    if (!timedAreaEl.value) return
+    const now = new Date()
+    const minutesFromAxisStart = (now.getHours() - AXIS_START_HOUR) * 60 + now.getMinutes()
+    if (minutesFromAxisStart > 0) {
+      const topPxNow = minutesFromAxisStart * PX_PER_MINUTE
+      timedAreaEl.value.scrollTop = Math.max(0, topPxNow - 100)
+    }
+  })
+})
 watch(() => props.date, fetchForDate)
 
 // --- Drag / move state ---
+
+// --- Timed area ref for auto-scroll ---
+const timedAreaEl = ref<HTMLElement | null>(null)
 
 const showRecurrenceDialog = ref(false)
 const pendingMove = ref<{ event: CalendarEvent; newStart: string; newEnd: string } | null>(null)
@@ -256,10 +293,15 @@ function onDragover(e: DragEvent) {
 // --- Anchor color helper ---
 
 function anchorBandStyle(anchor: { color: string; id: string }) {
+  const color = anchor.color ?? '#6366f1'
+  const layout = anchorOverlapLayouts.value[anchor.id] ?? { leftPercent: 0, widthPercent: 100 }
   return {
-    backgroundColor: (anchor.color ?? '#6366f1') + '33',  // ~20% opacity
+    backgroundColor: color + '44',  // ~26% opacity
+    borderLeft: '2px solid ' + color,
     top: `${anchorBandTopPx(anchor as Parameters<typeof anchorBandTopPx>[0], dateObj.value)}px`,
     height: `${anchorBandHeightPx(anchor as Parameters<typeof anchorBandHeightPx>[0], dateObj.value)}px`,
+    left: `${layout.leftPercent}%`,
+    width: `${layout.widthPercent}%`,
   }
 }
 
@@ -296,9 +338,10 @@ function timedEventStyle(event: CalendarEvent) {
 
     <!-- Timed area -->
     <div
+      ref="timedAreaEl"
       data-testid="timed-area"
       class="relative flex overflow-y-auto"
-      :style="{ height: '480px' }"
+      :style="{ height: 'calc(100vh - 200px)' }"
       @click="onTimedAreaClick"
       @dragover="onDragover"
       @drop="onTimedAreaDrop"
@@ -323,8 +366,17 @@ function timedEventStyle(event: CalendarEvent) {
           v-for="anchor in anchorStore.anchors"
           :key="anchor.id"
           :data-testid="`anchor-band-${anchor.id}`"
-          class="absolute inset-x-0 pointer-events-none rounded-sm"
+          class="absolute pointer-events-none rounded-sm"
           :style="anchorBandStyle(anchor)"
+        />
+
+        <!-- Overlap background bands — light tint indicating simultaneous events -->
+        <div
+          v-for="(band, bi) in overlapBands"
+          :key="'overlap-' + bi"
+          data-testid="overlap-background"
+          class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+          :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
         />
 
         <!-- Hour grid lines -->
@@ -368,6 +420,7 @@ function timedEventStyle(event: CalendarEvent) {
             :event="ev"
             :top-px="0"
             :height-px="eventHeightPx(ev.start_time, ev.end_time)"
+            :resolved-color="resolveColor(ev)"
             @click="emit('open-event', ev)"
             @mousedown="(me) => onEventMousedown(ev, me)"
           />

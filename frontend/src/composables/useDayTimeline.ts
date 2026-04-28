@@ -1,4 +1,5 @@
 import type { Anchor } from '../stores/anchors'
+import { computeOverlapLayout } from './useOverlapLayout'
 
 // Configurable axis
 export const AXIS_START_HOUR = 6   // 6am
@@ -55,3 +56,24 @@ export function anchorBandHeightPx(anchor: Anchor, date: Date): number {
 }
 
 export const AXIS_TOTAL_PX = (AXIS_END_HOUR - AXIS_START_HOUR) * 60 * PX_PER_MINUTE
+
+/**
+ * Compute column layout for anchor bands when anchors overlap in time.
+ * Returns a map from anchor id → { leftPercent, widthPercent }.
+ * Non-overlapping anchors get leftPercent=0, widthPercent=100.
+ *
+ * Delegates to computeOverlapLayout (connected-components + lane-greedy)
+ * so that transitive overlaps (A∩B, B∩C, A!∩C) get a consistent 3-column
+ * layout instead of each anchor sizing itself by its own pairwise count.
+ */
+export function computeAnchorOverlapLayout(
+  anchors: Anchor[],
+  date: Date,
+): Record<string, { leftPercent: number; widthPercent: number }> {
+  // Convert anchors to LayoutEvent shape (ISO strings) for computeOverlapLayout
+  const layoutEvents = anchors.map(a => {
+    const { start, end } = anchorWindow(a, date)
+    return { id: a.id, start_time: start.toISOString(), end_time: end.toISOString() }
+  })
+  return computeOverlapLayout(layoutEvents)
+}

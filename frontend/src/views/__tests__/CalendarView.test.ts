@@ -300,4 +300,109 @@ describe('CalendarView', () => {
     expect(wrapper.find('[data-testid="all-day-band"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('All Day Event')
   })
+
+  it('all-day band has sticky class so it does not scroll away', async () => {
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    const band = wrapper.find('[data-testid="all-day-band"]')
+    expect(band.exists()).toBe(true)
+    expect(band.classes()).toContain('sticky')
+  })
+
+  it('overlap-background band appears when two timed events overlap in the same day column', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    // Seed two timed events that overlap in the same day
+    useEventStore().events.push(
+      {
+        id: 'ev-ov1',
+        title: 'Event Overlap 1',
+        start_time: `${TODAY}T09:00:00`,
+        end_time: `${TODAY}T10:00:00`,
+        source: 'tether',
+        external_id: null,
+        task_id: null,
+        anchor_id: null,
+        color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        is_all_day: false,
+        rrule: null,
+        context_subject: null,
+      },
+      {
+        id: 'ev-ov2',
+        title: 'Event Overlap 2',
+        start_time: `${TODAY}T09:30:00`,
+        end_time: `${TODAY}T10:30:00`,
+        source: 'tether',
+        external_id: null,
+        task_id: null,
+        anchor_id: null,
+        color: null,
+        is_recurring: false,
+        is_occurrence: false,
+        is_all_day: false,
+        rrule: null,
+        context_subject: null,
+      },
+    )
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(true)
+  })
+
+  it('event block backgroundColor updates reactively when ev.color is mutated in the store', async () => {
+    // Bug 1: color picker in TaskDetailPanel calls updateEventColor which mutates ev.color;
+    // the CalendarView template must re-render and pass the new resolvedColor to CalendarEventBlock.
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    const eventStore = useEventStore()
+    // Seed a tether event with no custom color (will render with default indigo #6366f1)
+    eventStore.events.push({
+      id: 'ev-color-test',
+      title: 'Color Reactive Test',
+      start_time: `${TODAY}T10:00:00`,
+      end_time: `${TODAY}T11:00:00`,
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    // Verify the event block is rendered
+    const block = wrapper.find('[data-event-block]')
+    expect(block.exists()).toBe(true)
+
+    // Mutate the color directly on the reactive store object (as updateEventColor does)
+    const ev = eventStore.events.find(e => e.id === 'ev-color-test')!
+    ev.color = '#ff0000'
+    await nextTick()
+
+    // The CalendarEventBlock's resolvedColor prop is recomputed via the template's
+    // resolveColor(event) call, which reads event.color — a reactive dependency.
+    // Therefore the block's backgroundColor should now be '#ff0000'.
+    // Note: JSDOM preserves hex literals; real browsers normalize to rgb().
+    const updatedBlock = wrapper.find('[data-event-block]')
+    expect(updatedBlock.attributes('style')).toContain('background-color: #ff0000')
+  })
 })

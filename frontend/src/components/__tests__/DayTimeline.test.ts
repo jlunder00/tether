@@ -7,6 +7,7 @@ import {
   eventHeightPx,
   anchorBandTopPx,
   anchorBandHeightPx,
+  computeAnchorOverlapLayout,
   AXIS_START_HOUR,
   AXIS_END_HOUR,
   PX_PER_MINUTE,
@@ -93,6 +94,19 @@ vi.mock('../../stores/events', () => ({
     promoteTask: vi.fn(),
     demoteEvent: vi.fn(),
     createTaskAndPromote: vi.fn(),
+  }),
+}))
+
+vi.mock('../../stores/milestones', () => ({
+  useMilestoneStore: () => ({
+    all: [],
+    fetchAll: vi.fn(),
+  }),
+}))
+
+vi.mock('../../stores/context', () => ({
+  useContextStore: () => ({
+    nodes: {},
   }),
 }))
 
@@ -326,5 +340,121 @@ describe('DayTimeline component', () => {
     expect(emitted).toBeTruthy()
     // Should be local-naive: YYYY-MM-DDTHH:MM (no Z, no +offset)
     expect(emitted![0][0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+  })
+
+  it('timed-area does not have a hardcoded inline style of height: 480px', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    const style = timedArea.attributes('style') ?? ''
+    expect(style).not.toContain('height: 480px')
+  })
+
+  it('anchor band style includes a borderLeft property', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const band = wrapper.find('[data-testid="anchor-band-a1"]')
+    const style = band.attributes('style') ?? ''
+    expect(style).toContain('border-left')
+  })
+
+  it('no overlap-background strip when only one timed event', async () => {
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    // mockEvents has only one timed event — no overlap possible
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(false)
+  })
+
+  it('overlap-background strip appears when two timed events overlap', async () => {
+    // Push a second timed event that overlaps with ev-timed (09:00–09:30)
+    const overlappingEvent: CalendarEvent = {
+      id: 'ev-overlap',
+      title: 'Conflicting meeting',
+      start_time: '2024-06-10T09:15:00',
+      end_time: '2024-06-10T09:45:00',
+      source: 'tether',
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      rrule: null,
+      is_all_day: false,
+      context_subject: null,
+    }
+    mockEvents.push(overlappingEvent)
+
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(true)
+
+    // Restore mockEvents to its original state for subsequent tests
+    const idx = mockEvents.findIndex(e => e.id === 'ev-overlap')
+    if (idx !== -1) mockEvents.splice(idx, 1)
+  })
+})
+
+// --- computeAnchorOverlapLayout pure function tests ---
+
+describe('computeAnchorOverlapLayout', () => {
+  const testDate = new Date('2024-06-10T12:00:00')
+
+  it('non-overlapping anchors each get leftPercent=0 and widthPercent=100', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'Morning', time: '08:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'Afternoon', time: '14:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].leftPercent).toBe(0)
+    expect(layout['a1'].widthPercent).toBe(100)
+    expect(layout['a2'].leftPercent).toBe(0)
+    expect(layout['a2'].widthPercent).toBe(100)
+  })
+
+  it('two overlapping anchors get different leftPercent values', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'Morning', time: '08:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'Mid', time: '09:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].leftPercent).not.toBe(layout['a2'].leftPercent)
+    expect(layout['a1'].widthPercent).toBeLessThan(100)
+    expect(layout['a2'].widthPercent).toBeLessThan(100)
+  })
+
+  it('two overlapping anchors each get widthPercent=50', () => {
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'A', time: '09:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'B', time: '10:00', duration_minutes: 60, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    expect(layout['a1'].widthPercent).toBe(50)
+    expect(layout['a2'].widthPercent).toBe(50)
+  })
+
+  it('chained transitive overlaps (A∩B, B∩C, A!∩C) use 2-column layout — no visual overlap', () => {
+    // A: 08:00–10:00, B: 09:00–11:00, C: 10:30–12:00
+    // A overlaps B, B overlaps C, A does NOT overlap C.
+    // At most 2 anchors are co-visible at any instant (9–10 and 10:30–11).
+    // Lane-greedy assigns: A→lane 0, B→lane 1, C→lane 0 (reuses after A ends).
+    // maxLane = 1 → 2 columns, each 50% wide. No visual overlap between any pair.
+    //
+    // Old pairwise approach gave B width=33% and placed B (33–66%) inside A (0–50%)
+    // → visual overlap. New connected-components approach fixes this.
+    const anchors: Anchor[] = [
+      { id: 'a1', name: 'A', time: '08:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#6366f1', position: 1, followup_config: null },
+      { id: 'a2', name: 'B', time: '09:00', duration_minutes: 120, flexibility: 'moderate', strictness: 2, color: '#ef4444', position: 2, followup_config: null },
+      { id: 'a3', name: 'C', time: '10:30', duration_minutes: 90, flexibility: 'moderate', strictness: 2, color: '#22c55e', position: 3, followup_config: null },
+    ]
+    const layout = computeAnchorOverlapLayout(anchors, testDate)
+    // All three get equal 50% width (2-column layout, NOT 33% which old code gave B)
+    expect(layout['a1'].widthPercent).toBe(50)
+    expect(layout['a2'].widthPercent).toBe(50)
+    expect(layout['a3'].widthPercent).toBe(50)
+    // A and C share lane 0 (sequential, non-overlapping), B is in lane 1
+    expect(layout['a1'].leftPercent).toBe(0)
+    expect(layout['a3'].leftPercent).toBe(0)
+    expect(layout['a2'].leftPercent).toBe(50)
   })
 })

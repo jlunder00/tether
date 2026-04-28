@@ -13,7 +13,7 @@ import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
 import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
 import { resolveEventColor } from '../composables/useColorResolver'
-import { computeOverlapLayout, type EventLayout } from '../composables/useOverlapLayout'
+import { computeOverlapLayout, computeOverlapBands, type EventLayout, type OverlapBand } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
 
@@ -591,6 +591,27 @@ const overlapLayouts = computed<Record<string, Record<string, EventLayout>>>(() 
   return byDay
 })
 
+// ─── Overlap background bands per day ────────────────────────
+// Helpers that match the signature expected by computeOverlapBands
+function _topByTime(startTime: string): number {
+  const d = new Date(startTime)
+  return (d.getHours() + d.getMinutes() / 60 - START_HOUR) * HOUR_HEIGHT
+}
+function _heightByTime(startTime: string, endTime: string): number {
+  const start = new Date(startTime).getTime()
+  const end = new Date(endTime).getTime()
+  const minutes = (end - start) / 60_000
+  return Math.max((minutes / 60) * HOUR_HEIGHT, 20)
+}
+
+const overlapBandsByDay = computed<Record<string, OverlapBand[]>>(() => {
+  const result: Record<string, OverlapBand[]> = {}
+  for (const [dayKey, evs] of Object.entries(eventsByDay.value)) {
+    result[dayKey] = computeOverlapBands(evs, overlapLayouts.value[dayKey] ?? {}, _topByTime, _heightByTime)
+  }
+  return result
+})
+
 // Creation drag selection rect (in px relative to day column)
 const createSelectionStyle = computed(() => {
   if (!creatingEvent.value) return null
@@ -888,28 +909,30 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
              container width even when the scrollbar is visible. -->
         <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
 
-          <!-- Day-of-week header — sticky inside scroll container so it always
-               has the same width context as the day columns beneath it. -->
-          <div class="sticky top-0 z-10 flex border-b border-white/10 bg-gray-900 pl-12">
-            <div
-              v-for="(day, i) in days"
-              :key="dayKeys[i]"
-              :data-testid="`day-header-${i}`"
-              :data-day="dayKeys[i]"
-              :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
-              class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
-              :class="[
-                dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
-                focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-              ]"
-              @click="focusDay(dayKeys[i])"
-            >
-              {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
-            </div>
-          </div>
+          <!-- Sticky header wrapper: day-of-week header + all-day band scroll together -->
+          <div class="sticky top-0 z-10">
 
-          <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
-          <div data-testid="all-day-band" class="flex border-b border-white/10 bg-gray-900/80 pl-12">
+            <!-- Day-of-week header -->
+            <div class="flex border-b border-white/10 bg-gray-900 pl-12">
+              <div
+                v-for="(day, i) in days"
+                :key="dayKeys[i]"
+                :data-testid="`day-header-${i}`"
+                :data-day="dayKeys[i]"
+                :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
+                class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
+                :class="[
+                  dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
+                  focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+                ]"
+                @click="focusDay(dayKeys[i])"
+              >
+                {{ DAY_LABELS[day.getDay()] }} {{ day.getDate() }}
+              </div>
+            </div>
+
+            <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
+            <div data-testid="all-day-band" class="sticky flex border-b border-white/10 bg-gray-900/80 pl-12">
             <div
               v-for="(_, i) in days"
               :key="dayKeys[i]"
@@ -928,6 +951,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               </div>
             </div>
           </div>
+          </div><!-- end sticky header wrapper -->
 
           <div data-testid="week-view" class="flex">
 
@@ -979,6 +1003,15 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-if="focusedDay === dayKeys[i]"
                 class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
+              />
+
+              <!-- Overlap background bands — light tint over time windows with simultaneous events -->
+              <div
+                v-for="(band, bi) in overlapBandsByDay[dayKeys[i]]"
+                :key="'overlap-bg-' + bi"
+                data-testid="overlap-background"
+                class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+                :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
               />
 
               <!-- Event blocks — using CalendarEventBlock component -->

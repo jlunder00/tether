@@ -94,3 +94,48 @@ export function computeOverlapLayout(events: LayoutEvent[]): Record<string, Even
 
   return result
 }
+
+export interface OverlapBand {
+  topPx: number
+  heightPx: number
+}
+
+/**
+ * Given events and their overlap layout, return merged px bands covering all
+ * time windows where multiple events overlap. Only events with widthPercent < 100
+ * (i.e. in an overlap group) contribute to these bands.
+ *
+ * @param events     - The full event list for a column
+ * @param layout     - Output of computeOverlapLayout for the same events
+ * @param topFn      - Maps startTime ISO string → top-px in the column
+ * @param heightFn   - Maps (startTime, endTime) ISO strings → height-px
+ */
+export function computeOverlapBands(
+  events: LayoutEvent[],
+  layout: Record<string, EventLayout>,
+  topFn: (startTime: string) => number,
+  heightFn: (startTime: string, endTime: string) => number,
+): OverlapBand[] {
+  const overlapping = events.filter(ev => (layout[ev.id]?.widthPercent ?? 100) < 100)
+  if (!overlapping.length) return []
+
+  const intervals = overlapping
+    .map(ev => {
+      const top = topFn(ev.start_time)
+      return { top, bottom: top + heightFn(ev.start_time, ev.end_time) }
+    })
+    .sort((a, b) => a.top - b.top)
+
+  const bands: OverlapBand[] = []
+  let cur = intervals[0]
+  for (let i = 1; i < intervals.length; i++) {
+    if (intervals[i].top < cur.bottom) {
+      cur = { top: cur.top, bottom: Math.max(cur.bottom, intervals[i].bottom) }
+    } else {
+      bands.push({ topPx: cur.top, heightPx: cur.bottom - cur.top })
+      cur = intervals[i]
+    }
+  }
+  bands.push({ topPx: cur.top, heightPx: cur.bottom - cur.top })
+  return bands
+}
