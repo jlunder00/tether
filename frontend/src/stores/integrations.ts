@@ -83,6 +83,15 @@ export const useIntegrationsStore = defineStore('integrations', () => {
   }
 
   /**
+   * Clear transient Anthropic flow state (error and auth URL).
+   * Call before starting a new flow, on cancel, and after modal closes on success.
+   */
+  function clearAnthropicFlowState() {
+    anthropicError.value = null
+    anthropicAuthUrl.value = null
+  }
+
+  /**
    * Check Anthropic account connection status.
    * GET /api/integrations/anthropic → { connected: boolean }
    */
@@ -114,10 +123,10 @@ export const useIntegrationsStore = defineStore('integrations', () => {
     anthropicError.value = null
     try {
       const resp = await api('/api/integrations/anthropic/start', { method: 'POST' })
-      if (resp.ok) {
-        const data = await resp.json()
+      const data = await resp.json().catch(() => ({}))
+      if (resp.ok && data.url) {
         anthropicAuthUrl.value = data.url
-        return data.url
+        return data.url as string
       } else {
         anthropicError.value = 'Failed to start connection. Please try again.'
         return null
@@ -143,6 +152,11 @@ export const useIntegrationsStore = defineStore('integrations', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code }),
       })
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}))
+        anthropicError.value = errData.detail ?? errData.error ?? 'Connection failed.'
+        return
+      }
       const data = await resp.json()
       if (data.ok) {
         anthropicConnected.value = true
@@ -191,6 +205,7 @@ export const useIntegrationsStore = defineStore('integrations', () => {
     anthropicLoading,
     anthropicError,
     anthropicAuthUrl,
+    clearAnthropicFlowState,
     fetchAnthropicStatus,
     startAnthropicConnect,
     completeAnthropicConnect,

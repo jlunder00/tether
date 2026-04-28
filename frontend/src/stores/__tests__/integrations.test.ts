@@ -370,6 +370,23 @@ describe('useIntegrationsStore', () => {
       expect(store.anthropicConnected).toBe(false)
     })
 
+    it('handles non-JSON 5xx response gracefully', async () => {
+      const { api } = await import('../../lib/api')
+      vi.mocked(api).mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => { throw new Error('not json') },
+      } as any)
+
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      await store.completeAnthropicConnect('mycode')
+
+      expect(store.anthropicError).toBe('Connection failed.')
+      expect(store.anthropicLoading).toBe(false)
+      expect(store.anthropicConnected).toBe(false)
+    })
+
     it('clears anthropicAuthUrl on success', async () => {
       const { api } = await import('../../lib/api')
       vi.mocked(api).mockResolvedValueOnce({
@@ -383,6 +400,18 @@ describe('useIntegrationsStore', () => {
       store.anthropicAuthUrl = 'https://auth.example.com/oauth'
       await store.completeAnthropicConnect('mycode')
 
+      expect(store.anthropicAuthUrl).toBeNull()
+    })
+  })
+
+  describe('clearAnthropicFlowState', () => {
+    it('clears both anthropicError and anthropicAuthUrl to null', async () => {
+      const { useIntegrationsStore } = await import('../integrations')
+      const store = useIntegrationsStore()
+      store.anthropicError = 'Some previous error'
+      store.anthropicAuthUrl = 'https://auth.example.com/oauth'
+      store.clearAnthropicFlowState()
+      expect(store.anthropicError).toBeNull()
       expect(store.anthropicAuthUrl).toBeNull()
     })
   })
