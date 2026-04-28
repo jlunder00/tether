@@ -155,6 +155,14 @@ async def patch_task_fields(
         val = fields["anchor_id"]
         params.append(_uuid.UUID(val) if val is not None else None)
         set_parts.append(f"anchor_id = ${len(params)}")
+    if "start_time" in fields:
+        val = fields["start_time"]
+        params.append(_parse_ts(val) if val is not None else None)
+        set_parts.append(f"start_time = ${len(params)}")
+    if "end_time" in fields:
+        val = fields["end_time"]
+        params.append(_parse_ts(val) if val is not None else None)
+        set_parts.append(f"end_time = ${len(params)}")
 
     if not set_parts:
         return None
