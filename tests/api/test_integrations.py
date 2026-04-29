@@ -188,6 +188,54 @@ async def test_disconnect_no_integration_returns_ok(api_client):
     assert resp.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_disconnect_deletes_synced_tasks(api_client, conn):
+    """Disconnect hard-deletes all tasks imported from google_calendar.
+
+    Task C scenario 2: when the user unlinks GCal, all tasks created by
+    the sync worker (source='google_calendar') must be removed so stale
+    events don't appear in the calendar or plan.
+    """
+    from db.pg_queries.integrations import upsert_integration
+
+    await upsert_integration(
+        conn, TEST_USER_ID, "google_calendar",
+        access_token="tok", refresh_token="rt",
+    )
+
+    import uuid
+    # Insert two tasks that look like they were synced from GCal
+    for ext_id in ("gcal-evt-1", "gcal-evt-2"):
+        await conn.execute(
+            """
+            INSERT INTO tasks (uuid, user_id, text, status, source, external_id)
+            VALUES ($1, $2::uuid, $3, 'pending', 'google_calendar', $4)
+            """,
+            uuid.uuid4(), TEST_USER_ID, f"GCal event {ext_id}", ext_id,
+        )
+
+    # Verify they exist before disconnect
+    rows_before = await conn.fetch(
+        "SELECT uuid FROM tasks WHERE user_id = $1::uuid AND source = 'google_calendar'",
+        TEST_USER_ID,
+    )
+    assert len(rows_before) >= 2, "Precondition: synced tasks must exist before disconnect"
+
+    with patch("api.routes.integrations.GoogleCalendarAuth.revoke", new=AsyncMock()):
+        resp = await api_client.post("/api/integrations/google/disconnect")
+
+    assert resp.status_code == 200, resp.text
+
+    rows_after = await conn.fetch(
+        "SELECT uuid FROM tasks WHERE user_id = $1::uuid AND source = 'google_calendar'",
+        TEST_USER_ID,
+    )
+    assert len(rows_after) == 0, (
+        f"All google_calendar tasks must be deleted on disconnect, "
+        f"{len(rows_after)} remain"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 4. POST /api/integrations/google/sync — manual sync via PG NOTIFY
 # ---------------------------------------------------------------------------

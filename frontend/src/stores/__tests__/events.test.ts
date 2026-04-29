@@ -13,7 +13,9 @@ const BASE_EVENT_FIELDS = {
   color: null,
   is_recurring: false,
   is_occurrence: false,
+  is_all_day: false,
   rrule: null,
+  context_subject: null,
 }
 
 describe('useEventStore', () => {
@@ -206,5 +208,152 @@ describe('useEventStore', () => {
     expect(vi.mocked(api)).not.toHaveBeenCalled()
     expect(store.events[0].rrule).toBeNull()
     expect(store.events[0].is_recurring).toBe(false)
+  })
+
+  // --- demoteEvent ---
+
+  it('demoteEvent removes the event locally and PATCHes the task with null times', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-d1',
+      title: 'Scheduled task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-d1',
+    })
+
+    await store.demoteEvent('ev-d1', 'anchor-1', '2024-06-10')
+
+    expect(store.events).toHaveLength(0)
+    expect(vi.mocked(api)).toHaveBeenCalledWith(
+      '/api/tasks/task-d1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          start_time: null,
+          end_time: null,
+          anchor_id: 'anchor-1',
+          plan_date: '2024-06-10',
+        }),
+      }),
+    )
+  })
+
+  it('demoteEvent keeps event removed even if PATCH fails', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockRejectedValueOnce(new Error('network error'))
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-d2',
+      title: 'Task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-d2',
+    })
+
+    await store.demoteEvent('ev-d2', 'anchor-1', '2024-06-10')
+
+    expect(store.events).toHaveLength(0)
+  })
+
+  // --- deleteEvent ---
+
+  it('deleteEvent removes event locally and calls DELETE /api/events/:id', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-del1',
+      title: 'Delete me',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+    })
+
+    await store.deleteEvent('ev-del1')
+
+    expect(store.events).toHaveLength(0)
+    expect(vi.mocked(api)).toHaveBeenCalledWith(
+      '/api/events/ev-del1',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('deleteEvent with scope=all appends query params', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-del2',
+      title: 'Recurring',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+      is_occurrence: true,
+    })
+
+    await store.deleteEvent('ev-del2', 'all', '2024-06-10T09:00:00Z')
+
+    const call = vi.mocked(api).mock.calls[0]
+    expect(call[0]).toContain('scope=all')
+    expect(call[0]).toContain('original_start_time=')
+  })
+
+  // --- updateEventColor ---
+
+  it('updateEventColor updates ev.color optimistically in the store', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-col1',
+      title: 'Colorable',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+      color: null,
+    })
+
+    await store.updateEventColor('ev-col1', '#ff0000')
+
+    expect(store.events[0].color).toBe('#ff0000')
+  })
+
+  it('updateEventColor sets color to null when passed null', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => ({}) } as any)
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    store.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-col2',
+      title: 'Colorable',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: null,
+      color: '#ff0000',
+    })
+
+    await store.updateEventColor('ev-col2', null)
+
+    expect(store.events[0].color).toBeNull()
+  })
+
+  it('updateEventColor is a no-op for unknown event id', async () => {
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+    await expect(store.updateEventColor('nonexistent', '#ff0000')).resolves.toBeUndefined()
   })
 })

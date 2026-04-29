@@ -8,6 +8,12 @@ export const useIntegrationsStore = defineStore('integrations', () => {
   const error = ref<string | null>(null)
   const lastSyncedAt = ref<string | null>(null)
 
+  // Anthropic Account state
+  const anthropicConnected = ref(false)
+  const anthropicLoading = ref(false)
+  const anthropicError = ref<string | null>(null)
+  const anthropicAuthUrl = ref<string | null>(null)
+
   /**
    * Check Google Calendar connection status.
    * Uses GET /api/integrations/google/calendars as a proxy:
@@ -76,6 +82,116 @@ export const useIntegrationsStore = defineStore('integrations', () => {
     }
   }
 
+  /**
+   * Clear transient Anthropic flow state (error and auth URL).
+   * Call before starting a new flow, on cancel, and after modal closes on success.
+   */
+  function clearAnthropicFlowState() {
+    anthropicError.value = null
+    anthropicAuthUrl.value = null
+  }
+
+  /**
+   * Check Anthropic account connection status.
+   * GET /api/integrations/anthropic → { connected: boolean }
+   */
+  async function fetchAnthropicStatus() {
+    anthropicLoading.value = true
+    anthropicError.value = null
+    try {
+      const resp = await api('/api/integrations/anthropic')
+      if (resp.ok) {
+        const data = await resp.json()
+        anthropicConnected.value = data.connected === true
+      } else {
+        anthropicConnected.value = false
+      }
+    } catch {
+      anthropicConnected.value = false
+      anthropicError.value = 'Could not reach server. Check your connection.'
+    } finally {
+      anthropicLoading.value = false
+    }
+  }
+
+  /**
+   * Start Anthropic OAuth flow.
+   * POST /api/integrations/anthropic/start → { url: string, expires_in: number }
+   */
+  async function startAnthropicConnect(): Promise<string | null> {
+    anthropicLoading.value = true
+    anthropicError.value = null
+    try {
+      const resp = await api('/api/integrations/anthropic/start', { method: 'POST' })
+      const data = await resp.json().catch(() => ({}))
+      if (resp.ok && data.url) {
+        anthropicAuthUrl.value = data.url
+        return data.url as string
+      } else {
+        anthropicError.value = 'Failed to start connection. Please try again.'
+        return null
+      }
+    } catch {
+      anthropicError.value = 'Could not reach server. Check your connection.'
+      return null
+    } finally {
+      anthropicLoading.value = false
+    }
+  }
+
+  /**
+   * Complete Anthropic OAuth flow with code.
+   * POST /api/integrations/anthropic/complete { code } → { ok: true } | { ok: false, error: string }
+   */
+  async function completeAnthropicConnect(code: string) {
+    anthropicLoading.value = true
+    anthropicError.value = null
+    try {
+      const resp = await api('/api/integrations/anthropic/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      })
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}))
+        anthropicError.value = errData.detail ?? errData.error ?? 'Connection failed.'
+        return
+      }
+      const data = await resp.json()
+      if (data.ok) {
+        anthropicConnected.value = true
+        anthropicAuthUrl.value = null
+      } else {
+        anthropicError.value = data.error ?? 'Connection failed.'
+      }
+    } catch {
+      anthropicError.value = 'Could not reach server. Check your connection.'
+    } finally {
+      anthropicLoading.value = false
+    }
+  }
+
+  /**
+   * Disconnect Anthropic account.
+   * DELETE /api/integrations/anthropic → 204
+   */
+  async function disconnectAnthropic() {
+    anthropicLoading.value = true
+    anthropicError.value = null
+    try {
+      const resp = await api('/api/integrations/anthropic', { method: 'DELETE' })
+      if (resp.ok) {
+        anthropicConnected.value = false
+      } else {
+        anthropicError.value = 'Failed to disconnect. Please try again.'
+      }
+    } catch {
+      anthropicError.value = 'Failed to disconnect. Please try again.'
+    } finally {
+      anthropicLoading.value = false
+    }
+  }
+
   return {
     gcalConnected,
     loading,
@@ -85,5 +201,14 @@ export const useIntegrationsStore = defineStore('integrations', () => {
     connectGCal,
     disconnectGCal,
     syncNow,
+    anthropicConnected,
+    anthropicLoading,
+    anthropicError,
+    anthropicAuthUrl,
+    clearAnthropicFlowState,
+    fetchAnthropicStatus,
+    startAnthropicConnect,
+    completeAnthropicConnect,
+    disconnectAnthropic,
   }
 })

@@ -205,3 +205,49 @@ def test_map_event_raises_on_missing_id():
     }
     with pytest.raises(ValueError, match="missing 'id'"):
         map_event(raw)
+
+
+# ── DST handling — DTSTART;TZID in stored rrule ───────────────────────────────
+
+def test_map_event_embeds_dtstart_tzid_in_rrule_when_timezone_provided():
+    """Recurring GCal events with start.timeZone must embed DTSTART;TZID in the
+    stored rrule so that expand_recurring() honours wall-clock semantics across
+    DST transitions.
+
+    A winter event at 9am Eastern stored as 14:00 UTC would expand to 14:00 UTC
+    in summer (= 10am EDT) if TZID is lost. Embedding DTSTART;TZID=America/New_York
+    tells dateutil to use wall-clock time and produce 13:00 UTC post-DST (= 9am EDT).
+    """
+    raw = {
+        "id": "gcal-eastern-weekly",
+        "summary": "Weekly Eastern 9am",
+        # Winter event: 9am EST = 14:00 UTC
+        "start": {"dateTime": "2026-02-09T09:00:00-05:00", "timeZone": "America/New_York"},
+        "end": {"dateTime": "2026-02-09T10:00:00-05:00", "timeZone": "America/New_York"},
+        "recurrence": ["RRULE:FREQ=WEEKLY"],
+    }
+    draft = map_event(raw)
+    assert draft.rrule is not None
+    # Stored rrule must begin with a DTSTART line that carries TZID
+    assert "DTSTART;TZID=America/New_York:" in draft.rrule, (
+        f"Expected DTSTART;TZID in rrule, got: {draft.rrule!r}"
+    )
+    # The RRULE itself must still be present
+    assert "RRULE:FREQ=WEEKLY" in draft.rrule
+
+
+def test_map_event_rrule_unchanged_when_no_timezone():
+    """Recurring events without start.timeZone keep the bare RRULE (no DTSTART prepended).
+
+    Tether-created events don't carry a timeZone — their UTC start_time IS the
+    wall clock and no TZID rewriting is needed.
+    """
+    raw = {
+        "id": "gcal-utc-weekly",
+        "summary": "Weekly no-tz",
+        "start": {"dateTime": "2026-04-06T09:00:00+00:00"},
+        "end": {"dateTime": "2026-04-06T10:00:00+00:00"},
+        "recurrence": ["RRULE:FREQ=WEEKLY"],
+    }
+    draft = map_event(raw)
+    assert draft.rrule == "RRULE:FREQ=WEEKLY"

@@ -24,7 +24,9 @@ const baseEvent: CalendarEvent = {
   color: null,
   is_recurring: false,
   is_occurrence: false,
+  is_all_day: false,
   rrule: null,
+  context_subject: null,
 }
 
 describe('CalendarEventBlock', () => {
@@ -113,5 +115,67 @@ describe('CalendarEventBlock', () => {
       props: { event: baseEvent, topPx: 0, heightPx: 30 },
     })
     expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(false)
+  })
+
+  it('positions event using leftPercent and widthPercent', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: baseEvent, topPx: 100, heightPx: 60,
+        leftPercent: 50, widthPercent: 50,
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('50%')
+  })
+
+  it('uses resolvedColor when provided', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: baseEvent, topPx: 0, heightPx: 30,
+        resolvedColor: 'rgb(255, 0, 0)',
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('rgb(255, 0, 0)')
+  })
+
+  it('falls back to event.color when resolvedColor is not passed', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: { ...baseEvent, color: '#abcdef' },
+        topPx: 0,
+        heightPx: 30,
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('#abcdef')
+  })
+
+  it('applies a left border using the resolvedColor', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: {
+        event: baseEvent, topPx: 0, heightPx: 30,
+        resolvedColor: '#ff0000',
+      },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    expect(style).toContain('border-left')
+    expect(style).toContain('#ff0000')
+  })
+
+  it('width is at most 90% of the widthPercent lane (not the full 100%)', async () => {
+    const { default: CalendarEventBlock } = await import('../CalendarEventBlock.vue')
+    const wrapper = mount(CalendarEventBlock, {
+      props: { event: baseEvent, topPx: 0, heightPx: 30, widthPercent: 100 },
+    })
+    const style = wrapper.attributes('style') ?? ''
+    // The width should use 90% of widthPercent (100 * 0.9 = 90)
+    expect(style).toContain('90%')
+    // And should NOT use the full 100% for the width calculation
+    expect(style).not.toMatch(/width: calc\(100% - 4px\)/)
   })
 })

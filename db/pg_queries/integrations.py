@@ -119,6 +119,103 @@ async def upsert_sync_state(
     return _row(row)
 
 
+async def delete_tasks_by_source(
+    conn: asyncpg.Connection,
+    user_id: str,
+    source: str,
+) -> int:
+    """Hard-delete all tasks imported from a given source for this user.
+
+    Called when the user disconnects an integration (e.g. Google Calendar)
+    so that stale synced events don't persist in the calendar or plan view.
+
+    Returns the number of tasks deleted.
+    """
+    # task_id columns in child tables have no FK REFERENCES tasks(uuid) ON DELETE CASCADE —
+    # cleanup must be explicit. Use a subquery to batch-clean all child rows in one statement
+    # before deleting the tasks themselves.
+    task_id_subquery = "SELECT uuid::text FROM tasks WHERE user_id = $1::uuid AND source = $2"
+    await conn.execute(
+        f"DELETE FROM subtasks WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    await conn.execute(
+        f"DELETE FROM links WHERE parent_type = 'tasks' AND parent_id IN ({task_id_subquery})",
+        user_id, source,
+    )
+    await conn.execute(
+        f"""
+        DELETE FROM dependencies
+        WHERE (blocker_type = 'task' AND blocker_id IN ({task_id_subquery}))
+           OR (blocked_type = 'task' AND blocked_id IN ({task_id_subquery}))
+        """,
+        user_id, source,
+    )
+    await conn.execute(
+        f"DELETE FROM milestone_tasks WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    await conn.execute(
+        f"DELETE FROM followup_state WHERE task_id IN ({task_id_subquery})", user_id, source
+    )
+    result = await conn.execute(
+        "DELETE FROM tasks WHERE user_id = $1::uuid AND source = $2",
+        user_id, source,
+    )
+    # asyncpg returns "DELETE N" as the command tag
+    try:
+        return int(result.split()[-1])
+    except (IndexError, ValueError):
+        return 0
+
+
+_ANTHROPIC_PROVIDER = "anthropic"
+
+
+async def get_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+) -> bytes | None:
+    """Return raw credentials_blob bytes for 'anthropic' provider, or None."""
+    row = await conn.fetchrow(
+        "SELECT credentials_blob FROM user_integrations"
+        " WHERE user_id = $1 AND provider = $2",
+        user_id, _ANTHROPIC_PROVIDER,
+    )
+    if row is None:
+        return None
+    return row["credentials_blob"]
+
+
+async def store_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+    blob: bytes,
+) -> None:
+    """Upsert anthropic row setting credentials_blob.
+
+    Uses ON CONFLICT (user_id, provider) to safely insert-or-update.
+    """
+    await conn.execute(
+        """
+        INSERT INTO user_integrations (user_id, provider, credentials_blob, enabled)
+        VALUES ($1, $2, $3, true)
+        ON CONFLICT (user_id, provider) DO UPDATE SET
+            credentials_blob = EXCLUDED.credentials_blob
+        """,
+        user_id, _ANTHROPIC_PROVIDER, blob,
+    )
+
+
+async def delete_credentials_blob(
+    conn: asyncpg.Connection,
+    user_id: str,
+) -> None:
+    """DELETE the anthropic integration row for user_id."""
+    await conn.execute(
+        "DELETE FROM user_integrations WHERE user_id = $1 AND provider = $2",
+        user_id, _ANTHROPIC_PROVIDER,
+    )
+
+
 async def soft_delete_task_by_external_id(
     conn: asyncpg.Connection,
     user_id: str,

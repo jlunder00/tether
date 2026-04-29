@@ -13,7 +13,7 @@ cors:
   allowed_origins: "${TETHER_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8000}"
 
 vault:
-  # Fernet key for per-user Anthropic OAuth credential encryption.
+  # Fernet key for per-user credentials blobs. Leave empty to disable vault.
   # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   # WARNING: losing this key makes all stored Anthropic credentials unrecoverable.
   key: "${TETHER_VAULT_KEY:-}"

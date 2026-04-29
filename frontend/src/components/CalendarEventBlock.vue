@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { CalendarEvent } from '../types/events'
 
-defineProps<{
+const props = defineProps<{
   event: CalendarEvent
   topPx: number
   heightPx: number
+  leftPercent?: number
+  widthPercent?: number
+  resolvedColor?: string
 }>()
 
 const emit = defineEmits<{
@@ -12,26 +15,28 @@ const emit = defineEmits<{
   (e: 'mousedown', ev: MouseEvent): void
 }>()
 
-function eventColor(event: CalendarEvent): string {
-  if (event.source !== 'tether') return '#4285f4' // Google blue for synced
-  return event.color ?? '#6366f1' // indigo default
+function defaultColor(event: CalendarEvent): string {
+  if (event.source !== 'tether') return '#4285f4'
+  return event.color ?? '#6366f1'
 }
 </script>
 
 <template>
   <div
-    class="absolute inset-x-1 rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
+    class="absolute rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
     :style="{
       top: `${topPx}px`,
       height: `${heightPx}px`,
-      backgroundColor: eventColor(event),
-      opacity: event.source !== 'tether' ? 0.75 : 1,
+      left: `calc(${props.leftPercent ?? 0}% + ${(props.widthPercent ?? 100) * 0.05}% + 2px)`,
+      width: `calc(${(props.widthPercent ?? 100) * 0.9}% - 4px)`,
+      backgroundColor: props.resolvedColor ?? defaultColor(event),
+      borderLeft: '3px solid ' + (props.resolvedColor ?? defaultColor(event)),
+      opacity: event.source !== 'tether' ? 0.75 : 0.92,
     }"
     @click.stop="emit('click', event)"
     @mousedown.stop="(ev) => emit('mousedown', ev)"
   >
     <div class="flex items-center gap-1 truncate pointer-events-none">
-      <!-- Provider badge for synced events -->
       <span
         v-if="event.source !== 'tether'"
         data-testid="gcal-badge"
@@ -40,7 +45,6 @@ function eventColor(event: CalendarEvent): string {
       >
         {{ event.source === 'google_calendar' ? 'G' : '↗' }}
       </span>
-      <!-- Recurring indicator for master events and synthesized occurrences -->
       <span
         v-if="event.is_recurring || event.is_occurrence"
         data-testid="recurring-indicator"
