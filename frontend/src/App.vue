@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { loadPremiumThemes, unloadPremiumThemes } from './composables/usePremiumThemes'
 import BotChat from './components/BotChat.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
+import ThemeDrawer from './components/ThemeDrawer.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -25,6 +26,7 @@ watch(
   { immediate: true },
 )
 const chatOpen = ref(false)
+const themeDrawerOpen = ref(false)
 
 async function logout() {
   await authStore.logout()
@@ -86,6 +88,18 @@ async function logout() {
           Chat
         </button>
 
+        <button
+          @click="themeDrawerOpen = true"
+          data-testid="theme-drawer-trigger"
+          class="text-white/40 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/10"
+          title="Theme"
+          aria-label="Open theme picker"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+          </svg>
+        </button>
+
         <router-link v-if="authStore.user?.is_admin" to="/admin"
                      class="text-xs text-white/40 hover:text-white/80 border border-white/10 rounded px-2 py-1 transition-colors">
           Admin
@@ -127,6 +141,9 @@ async function logout() {
 
     <!-- Global slide-over panel stack (outside router-view so it persists across routes) -->
     <SlideOverStack v-if="authStore.isAuthenticated" />
+
+    <!-- Global theme picker drawer -->
+    <ThemeDrawer v-if="authStore.isAuthenticated" v-model="themeDrawerOpen" />
   </div>
 </template>
 
