@@ -141,4 +141,133 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
 
     expect(wrapper.find('[data-testid="recurrence-picker-stub"]').exists()).toBe(false)
   })
+
+  it('color input @input updates eventStore color for task-linked events (after debounce)', async () => {
+    // Verifies the task-linked picker → store path works end-to-end.
+    // onEventColorChange debounces 150 ms; fake timers are used to flush it.
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    backlogTasksRef.value = [MOCK_TASK]
+    eventStore.events.push({
+      id: 'ev-linked',
+      title: 'Test task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      source: 'tether' as const,
+      external_id: null,
+      task_id: 'task-1',
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    await wrapper.vm.$nextTick()
+
+    const colorInput = wrapper.find('[data-testid="event-color-input"]')
+    expect(colorInput.exists()).toBe(true)
+
+    vi.useFakeTimers()
+    try {
+      // setValue triggers the input event synchronously
+      await colorInput.setValue('#ff0000')
+      // Advance timers past the 150 ms debounce window
+      vi.runAllTimers()
+      await wrapper.vm.$nextTick()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(eventStore.events.find(e => e.id === 'ev-linked')?.color).toBe('#ff0000')
+  })
+
+  // Bug 1: Standalone events (no task_id) opened via kind:'event' in SlideOverStack
+  // pass their own event.id as the taskId prop. The current taskEvent computed only
+  // searches by task_id — so taskEvent is null, and the color picker is hidden inside
+  // the v-if="taskEvent" guard that never renders.
+  it('color picker is visible when TaskDetailPanel receives a standalone event ID as taskId', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    // Standalone event: task_id is null (no linked task)
+    eventStore.events.push({
+      id: 'ev-standalone',
+      title: 'Standalone Calendar Event',
+      start_time: '2024-06-10T14:00:00Z',
+      end_time: '2024-06-10T15:00:00Z',
+      source: 'tether' as const,
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: '#ff6600',
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    // SlideOverStack passes event.id as task-id for kind:'event' panels
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'ev-standalone' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    await wrapper.vm.$nextTick()
+
+    // Color picker must be visible so the user can change the event's color
+    expect(wrapper.find('[data-testid="event-color-input"]').exists()).toBe(true)
+  })
+
+  it('changing color picker for standalone event updates eventStore color (after debounce)', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    eventStore.events.push({
+      id: 'ev-standalone-2',
+      title: 'Another Standalone Event',
+      start_time: '2024-06-10T14:00:00Z',
+      end_time: '2024-06-10T15:00:00Z',
+      source: 'tether' as const,
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'ev-standalone-2' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    await wrapper.vm.$nextTick()
+
+    const colorInput = wrapper.find('[data-testid="event-color-input"]')
+    expect(colorInput.exists()).toBe(true)
+
+    vi.useFakeTimers()
+    try {
+      await colorInput.setValue('#00aaff')
+      vi.runAllTimers()
+      await wrapper.vm.$nextTick()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(eventStore.events.find(e => e.id === 'ev-standalone-2')?.color).toBe('#00aaff')
+  })
 })

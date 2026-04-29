@@ -25,8 +25,14 @@ const anchorStore = useAnchorStore()
 const backlogStore = useBacklogStore()
 const eventStore = useEventStore()
 
-// Calendar event linked to this task (if it has been scheduled on the calendar)
-const taskEvent = computed(() => eventStore.events.find(e => e.task_id === props.taskId) ?? null)
+// Calendar event linked to this task, OR the event itself when props.taskId is an event ID
+// (standalone events opened via kind:'event' in SlideOverStack pass event.id as taskId).
+const taskEvent = computed(
+  () =>
+    eventStore.events.find(e => e.task_id === props.taskId) ??
+    eventStore.events.find(e => e.id === props.taskId) ??
+    null,
+)
 
 // Find the task from the plan OR from the backlog
 const taskAndAnchor = computed(() => {
@@ -314,9 +320,17 @@ async function onRecurrenceChange(rrule: string | null) {
   await eventStore.setRecurrence(taskEvent.value.id, rrule)
 }
 
-async function onEventColorChange(color: string | null) {
+// Debounce timer so rapid @input firings during color-picker drag
+// collapse to a single PATCH instead of one per mouse-move event.
+let _colorDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+function onEventColorChange(color: string | null) {
   if (!taskEvent.value) return
-  await eventStore.updateEventColor(taskEvent.value.id, color)
+  if (_colorDebounceTimer !== null) clearTimeout(_colorDebounceTimer)
+  _colorDebounceTimer = setTimeout(async () => {
+    _colorDebounceTimer = null
+    if (taskEvent.value) await eventStore.updateEventColor(taskEvent.value.id, color)
+  }, 150)
 }
 
 onMounted(async () => {
@@ -351,8 +365,56 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- Not found -->
-      <div v-if="!task" class="text-white/40 text-sm">Task not found.</div>
+      <!-- Not found: only when neither a task nor a standalone event was resolved -->
+      <div v-if="!task && !taskEvent" class="text-white/40 text-sm">Not found.</div>
+
+      <!-- Standalone calendar event (opened via kind:'event'): show title + calendar controls only -->
+      <template v-else-if="!task && taskEvent">
+        <div class="text-xl font-semibold border-b border-white/20 pb-1">{{ taskEvent.title }}</div>
+        <div class="flex flex-col gap-2">
+          <span class="text-xs text-white/50 uppercase tracking-wide">Calendar</span>
+          <div class="flex flex-col gap-2">
+            <label class="flex flex-col gap-0.5">
+              <span class="text-xs text-white/40">Start</span>
+              <input
+                type="datetime-local"
+                :value="isoToDatetimeLocal(taskEvent.start_time)"
+                @change="onCalendarStartChange"
+                class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+            </label>
+            <label class="flex flex-col gap-0.5">
+              <span class="text-xs text-white/40">End</span>
+              <input
+                type="datetime-local"
+                :value="isoToDatetimeLocal(taskEvent.end_time)"
+                @change="onCalendarEndChange"
+                class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+            </label>
+            <!-- Color picker -->
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-white/40 w-20">Color</span>
+              <input
+                type="color"
+                data-testid="event-color-input"
+                :value="taskEvent.color ?? '#6366f1'"
+                class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
+                @input="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
+              />
+              <button
+                v-if="taskEvent.color"
+                data-testid="event-color-reset"
+                class="text-[10px] text-white/30 hover:text-white/60"
+                @click="onEventColorChange(null)"
+              >Reset</button>
+            </div>
+            <RecurrencePicker
+              :model-value="taskEvent.rrule"
+              :start-time="taskEvent.start_time"
+              @update:model-value="onRecurrenceChange"
+            />
+          </div>
+        </div>
+      </template>
 
       <template v-else>
 
@@ -400,6 +462,8 @@ onMounted(async () => {
                   class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
               </label>
               <!-- Color picker — overrides milestone/context-node color -->
+              <!-- @input fires continuously during drag; @change only fires on dismiss.
+                   Using @input ensures Linux/Chromium users see live updates. -->
               <div class="flex items-center gap-2">
                 <span class="text-xs text-white/40 w-20">Color</span>
                 <input
@@ -407,7 +471,7 @@ onMounted(async () => {
                   data-testid="event-color-input"
                   :value="taskEvent.color ?? '#6366f1'"
                   class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
-                  @change="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
+                  @input="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
                 />
                 <button
                   v-if="taskEvent.color"
