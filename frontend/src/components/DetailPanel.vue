@@ -22,7 +22,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
     <div class="fixed inset-0 z-40 bg-black/40" @click="close" />
 
     <!-- Panel -->
-    <div class="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] lg:w-[520px] bg-gray-900 border-l border-white/10 shadow-2xl overflow-y-auto animate-slide-in">
+    <div class="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] lg:w-[520px] bg-[--bg-canvas] border-l border-[--border-1] shadow-2xl overflow-y-auto animate-slide-in">
       <slot />
     </div>
   </Teleport>

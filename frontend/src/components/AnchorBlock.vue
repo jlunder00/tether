@@ -142,7 +142,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
     <div class="pl-3">
   <GroupContainer :label="`${anchorName} · ${time}`" :color="color" :collapsible="true" :level="0">
     <template #header-right>
-      <span class="text-xs text-white/30">{{ anchorPlan.tasks.length }}</span>
+      <span class="text-xs text-[--fg-5]">{{ anchorPlan.tasks.length }}</span>
     </template>
 
     <div ref="tasksRef" class="space-y-px">
@@ -201,7 +201,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
               </div>
               <button type="button"
                       @click.stop="onAddNewTask({ ...(ctx.contextSubject ? { context_subject: ctx.contextSubject } : {}), milestone_id: mg.milestone.id })"
-                      class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                      class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
                 + Add task
               </button>
             </GroupContainer>
@@ -219,7 +219,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
 
           <button type="button"
                   @click.stop="onAddNewTask(ctx.contextSubject ? { context_subject: ctx.contextSubject } : {})"
-                  class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                  class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
             + Add task
           </button>
         </GroupContainer>
@@ -227,7 +227,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
     </div>
 
     <button type="button" @click="onAddNewTask()"
-            class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
+            class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2]">+ Add task</button>
   </GroupContainer>
     </div>
   </div>
