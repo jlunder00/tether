@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api'
 import SearchAutocomplete from './SearchAutocomplete.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
+import MotifPicker, { type MotifSlot } from './MotifPicker.vue'
 import { useMilestoneStore } from '../stores/milestones'
 import { usePlanStore } from '../stores/plan'
 import { useLinks } from '../composables/useLinks'
@@ -171,20 +172,13 @@ onMounted(async () => {
             class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none" />
         </div>
 
-        <!-- Color -->
-        <label class="flex flex-col gap-1 text-white/50 text-xs">
-          Color
-          <div class="flex items-center gap-2">
-            <input
-              :value="milestone.color ?? ''"
-              type="color"
-              @change="patchMilestone({ color: ($event.target as HTMLInputElement).value })"
-              class="bg-white/10 rounded h-8 w-12 cursor-pointer" />
-            <button v-if="milestone.color"
-                    @click="patchMilestone({ color: null })"
-                    class="text-xs text-white/30 hover:text-white/60">Clear</button>
-          </div>
-        </label>
+        <!-- Motif -->
+        <div data-testid="milestone-motif-picker" class="flex items-center gap-3">
+          <MotifPicker
+            :model-value="(milestone.motif as MotifSlot | null | undefined) ?? null"
+            @update:model-value="(slot) => patchMilestone({ motif: slot })"
+          />
+        </div>
 
         <!-- Description -->
         <div class="flex flex-col gap-1">

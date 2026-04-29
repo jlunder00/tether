@@ -4,6 +4,7 @@ import { api } from '../lib/api'
 import SearchAutocomplete from './SearchAutocomplete.vue'
 import RecurrencePicker from './RecurrencePicker.vue'
 import RecurrenceEditDialog from './RecurrenceEditDialog.vue'
+import MotifPicker, { type MotifSlot } from './MotifPicker.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
@@ -133,6 +134,11 @@ function onTextChange(e: Event) {
 function onStatusChange(e: Event) {
   const status = (e.target as HTMLSelectElement).value as TaskStatus
   patchTask({ status })
+}
+
+// Motif
+function onMotifChange(slot: MotifSlot) {
+  patchTask({ motif: slot })
 }
 
 // Description
@@ -594,6 +600,14 @@ onMounted(async () => {
             <option value="skipped">Skipped</option>
             <option value="blocked">Blocked</option>
           </select>
+        </div>
+
+        <!-- Motif -->
+        <div data-testid="task-motif-picker" class="flex items-center gap-3">
+          <MotifPicker
+            :model-value="(task.motif as MotifSlot | null | undefined) ?? null"
+            @update:model-value="onMotifChange"
+          />
         </div>
 
         <!-- Calendar -->

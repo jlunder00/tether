@@ -121,9 +121,9 @@ function toggleFollowup(enabled: boolean) {
       :draggable="!editable && !!task.id"
       @dragstart="onDragStart"
       @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })">
-    <div v-if="task.color"
+    <div v-if="task.motif || task.color"
          class="absolute left-0 top-1 bottom-1 w-1 rounded-full pointer-events-none"
-         :style="{ background: task.color }" />
+         :style="{ background: task.motif ? `var(--motif-${task.motif})` : task.color! }" />
     <div class="flex flex-col gap-1 p-2 pl-3">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
     <div class="absolute top-1.5 right-1.5">
