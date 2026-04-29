@@ -538,11 +538,16 @@ const filteredEventsByDay = computed(() => {
 
 /**
  * Detect all-day events including the Google Calendar pattern where the
- * backend sets is_all_day: false but sends UTC-midnight start times.
- * A start_time ending in T00:00:00Z means "whole day" regardless of the flag.
+ * backend sets is_all_day: false but sends UTC-midnight start times
+ * (e.g. '2024-06-10T00:00:00Z' or '2024-06-10T00:00:00.000Z').
+ *
+ * Parses UTC time components instead of suffix-matching so it is robust
+ * to fractional-second precision (T00:00:00.000Z) and ±00:00 variants.
  */
 function isAllDay(ev: CalendarEvent): boolean {
-  return ev.is_all_day || ev.start_time.endsWith('T00:00:00Z')
+  if (ev.is_all_day) return true
+  const d = new Date(ev.start_time)
+  return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0
 }
 
 // For the week view: only timed (non-all-day) events per day

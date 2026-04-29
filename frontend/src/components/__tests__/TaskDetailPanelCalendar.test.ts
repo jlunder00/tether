@@ -142,10 +142,9 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     expect(wrapper.find('[data-testid="recurrence-picker-stub"]').exists()).toBe(false)
   })
 
-  it('color input @change updates eventStore color for task-linked events', async () => {
+  it('color input @input updates eventStore color for task-linked events (after debounce)', async () => {
     // Verifies the task-linked picker → store path works end-to-end.
-    // If this test PASSES the reactive chain is intact and Bug 1 is
-    // confined to the standalone-event case (event ID passed as taskId).
+    // onEventColorChange debounces 150 ms; fake timers are used to flush it.
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
@@ -177,8 +176,16 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     const colorInput = wrapper.find('[data-testid="event-color-input"]')
     expect(colorInput.exists()).toBe(true)
 
-    // setValue triggers both input and change events in Vue Test Utils
-    await colorInput.setValue('#ff0000')
+    vi.useFakeTimers()
+    try {
+      // setValue triggers the input event synchronously
+      await colorInput.setValue('#ff0000')
+      // Advance timers past the 150 ms debounce window
+      vi.runAllTimers()
+      await wrapper.vm.$nextTick()
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(eventStore.events.find(e => e.id === 'ev-linked')?.color).toBe('#ff0000')
   })
@@ -221,7 +228,7 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     expect(wrapper.find('[data-testid="event-color-input"]').exists()).toBe(true)
   })
 
-  it('changing color picker for standalone event updates eventStore color', async () => {
+  it('changing color picker for standalone event updates eventStore color (after debounce)', async () => {
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
@@ -251,7 +258,15 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
 
     const colorInput = wrapper.find('[data-testid="event-color-input"]')
     expect(colorInput.exists()).toBe(true)
-    await colorInput.setValue('#00aaff')
+
+    vi.useFakeTimers()
+    try {
+      await colorInput.setValue('#00aaff')
+      vi.runAllTimers()
+      await wrapper.vm.$nextTick()
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(eventStore.events.find(e => e.id === 'ev-standalone-2')?.color).toBe('#00aaff')
   })

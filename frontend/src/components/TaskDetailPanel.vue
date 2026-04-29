@@ -320,9 +320,17 @@ async function onRecurrenceChange(rrule: string | null) {
   await eventStore.setRecurrence(taskEvent.value.id, rrule)
 }
 
-async function onEventColorChange(color: string | null) {
+// Debounce timer so rapid @input firings during color-picker drag
+// collapse to a single PATCH instead of one per mouse-move event.
+let _colorDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
+function onEventColorChange(color: string | null) {
   if (!taskEvent.value) return
-  await eventStore.updateEventColor(taskEvent.value.id, color)
+  if (_colorDebounceTimer !== null) clearTimeout(_colorDebounceTimer)
+  _colorDebounceTimer = setTimeout(async () => {
+    _colorDebounceTimer = null
+    if (taskEvent.value) await eventStore.updateEventColor(taskEvent.value.id, color)
+  }, 150)
 }
 
 onMounted(async () => {
