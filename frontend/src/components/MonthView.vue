@@ -90,15 +90,15 @@ watch(viewDate, loadMonth)
 <template>
   <div>
     <div class="flex items-center gap-2 mb-4">
-      <button @click="prevMonth" class="text-white/40 hover:text-white text-lg px-1">‹</button>
-      <span class="text-sm font-medium min-w-[140px] text-center">{{ monthLabel }}</span>
-      <button @click="nextMonth" class="text-white/40 hover:text-white text-lg px-1">›</button>
+      <button @click="prevMonth" class="text-[--fg-4] hover:text-[--fg-1] text-lg px-1">‹</button>
+      <span class="text-sm font-medium min-w-[140px] text-center text-[--fg-1]">{{ monthLabel }}</span>
+      <button @click="nextMonth" class="text-[--fg-4] hover:text-[--fg-1] text-lg px-1">›</button>
     </div>
 
     <!-- Day-of-week headers -->
     <div class="grid grid-cols-7 gap-1 mb-1">
       <div v-for="d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']" :key="d"
-           class="text-center text-xs text-white/30 py-1">{{ d }}</div>
+           class="text-center text-xs text-[--fg-5] py-1">{{ d }}</div>
     </div>
 
     <!-- Calendar grid -->
@@ -107,21 +107,21 @@ watch(viewDate, loadMonth)
         v-for="date in calendarDates" :key="date"
         class="relative min-h-[64px] rounded-lg p-1.5 cursor-pointer transition-colors"
         :class="[
-          isCurrentMonth(date) ? 'bg-white/5 hover:bg-white/10' : 'bg-white/2 opacity-40',
-          date === planStore.today ? 'ring-1 ring-white/30' : '',
+          isCurrentMonth(date) ? 'bg-[--bg-elev-2] hover:bg-[--bg-elev-3]' : 'bg-[--bg-elev-1] opacity-40',
+          date === planStore.today ? 'ring-1 ring-[--accent]' : '',
         ]"
         @click="planStore.fetchPlan(date)"
         @dragover.prevent="onDragOverCell(date)"
         @drop.prevent>
-        <div class="text-xs text-white/50 mb-1">
+        <div class="text-xs text-[--fg-3] mb-1">
           {{ new Date(date + 'T12:00:00').getDate() }}
         </div>
         <template v-if="taskCounts(date).total > 0">
-          <div class="text-xs text-white/60">
+          <div class="text-xs text-[--fg-2]">
             {{ taskCounts(date).done }}/{{ taskCounts(date).total }}
           </div>
-          <div class="mt-1 h-1 bg-white/10 rounded-full overflow-hidden">
-            <div class="h-full bg-green-400 rounded-full"
+          <div class="mt-1 h-1 bg-[--bg-elev-3] rounded-full overflow-hidden">
+            <div class="h-full bg-[--status-done-fg] rounded-full"
                  :style="{ width: `${(taskCounts(date).done / taskCounts(date).total) * 100}%` }" />
           </div>
         </template>
