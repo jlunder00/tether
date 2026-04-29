@@ -130,3 +130,55 @@ async def test_truncate_anchor_series_sets_until(conn):
     row = await conn.fetchrow("SELECT rrule FROM tasks WHERE uuid=$1::uuid", master_id)
     # UNTIL should be 2026-05-09 (day before from_date)
     assert "UNTIL=20260509" in row["rrule"]
+
+
+async def test_create_anchor_recurring_master_embeds_dtstart(conn):
+    """DTSTART should be embedded so FREQ=WEEKLY anchors to the correct weekday.
+
+    Without DTSTART, _anchor_recurring_occurs_on would use target_date as dtstart,
+    making every day match its own weekday (FREQ=WEEKLY would behave like FREQ=DAILY).
+    """
+    from db.pg_queries.tasks import create_anchor_recurring_master
+    anchor_id = str(_uuid_mod.uuid4())
+    master_id = await create_anchor_recurring_master(
+        conn, TEST_USER_ID, anchor_id, "Weekly stand-up", "RRULE:FREQ=WEEKLY"
+    )
+    row = await conn.fetchrow("SELECT rrule FROM tasks WHERE uuid=$1::uuid", master_id)
+    assert "DTSTART" in row["rrule"], (
+        "create_anchor_recurring_master must embed DTSTART so bare FREQ=WEEKLY "
+        "anchors to the creation weekday, not over-matches every day"
+    )
+    assert "FREQ=WEEKLY" in row["rrule"]
+
+
+async def test_set_task_rrule_embeds_dtstart_from_plan_date(conn):
+    """set_task_rrule should embed DTSTART from the task's plan_date."""
+    from db.pg_queries.tasks import set_task_rrule
+    anchor_id = str(_uuid_mod.uuid4())
+    # Task scheduled on a Monday (2026-05-04)
+    plain_id = await conn.fetchval(
+        """INSERT INTO tasks (uuid, user_id, anchor_id, plan_date, text, status, position)
+           VALUES ($1, $2::uuid, $3::uuid, '2026-05-04', 'Stand-up', 'pending', 0) RETURNING uuid::text""",
+        str(_uuid_mod.uuid4()), TEST_USER_ID, anchor_id,
+    )
+    await set_task_rrule(conn, plain_id, "RRULE:FREQ=WEEKLY")
+    row = await conn.fetchrow("SELECT rrule FROM tasks WHERE uuid=$1::uuid", plain_id)
+    # DTSTART should be embedded with the original plan_date
+    assert "DTSTART:20260504" in row["rrule"], (
+        "set_task_rrule must embed DTSTART from original plan_date to preserve weekday anchor"
+    )
+
+
+async def test_set_task_rrule_bumps_version(conn):
+    """set_task_rrule must bump version for stale-read detection."""
+    from db.pg_queries.tasks import set_task_rrule
+    anchor_id = str(_uuid_mod.uuid4())
+    plain_id = await conn.fetchval(
+        """INSERT INTO tasks (uuid, user_id, anchor_id, plan_date, text, status, position)
+           VALUES ($1, $2::uuid, $3::uuid, '2026-05-05', 'Stand-up', 'pending', 0) RETURNING uuid::text""",
+        str(_uuid_mod.uuid4()), TEST_USER_ID, anchor_id,
+    )
+    v_before = await conn.fetchval("SELECT version FROM tasks WHERE uuid=$1::uuid", plain_id)
+    await set_task_rrule(conn, plain_id, "RRULE:FREQ=DAILY")
+    v_after = await conn.fetchval("SELECT version FROM tasks WHERE uuid=$1::uuid", plain_id)
+    assert v_after > v_before, "set_task_rrule must bump version"
