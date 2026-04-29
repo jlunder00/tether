@@ -47,14 +47,14 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
       <div
         v-for="(panel, index) in stack"
         :key="panel.id"
-        class="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] lg:w-[520px] bg-gray-900 border-l border-white/10 shadow-2xl overflow-y-auto"
+        class="fixed top-0 right-0 z-50 h-full w-full sm:w-[480px] lg:w-[520px] bg-[--bg-canvas] border-l border-[--border-1] shadow-2xl overflow-y-auto"
         :style="panelStyle(index)"
       >
         <!-- Back button / close -->
-        <div class="flex items-center gap-2 px-4 py-3 border-b border-white/10 flex-shrink-0">
+        <div class="flex items-center gap-2 px-4 py-3 border-b border-[--border-1] flex-shrink-0">
           <button
             v-if="index > 0"
-            class="text-white/50 hover:text-white transition-colors text-sm mr-1"
+            class="text-[--fg-3] hover:text-[--fg-1] transition-colors text-sm mr-1"
             title="Back"
             @click="pop"
           >
@@ -62,7 +62,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           </button>
           <div class="flex-1" />
           <button
-            class="text-white/30 hover:text-white transition-colors p-1 rounded hover:bg-white/10"
+            class="text-[--fg-5] hover:text-[--fg-1] transition-colors p-1 rounded hover:bg-[--bg-elev-3]"
             title="Close all (Esc)"
             @click="close"
           >

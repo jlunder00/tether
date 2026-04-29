@@ -129,15 +129,15 @@ function onColumnDrop(evt: DragEvent) {
 </script>
 
 <template>
-  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-white/[0.03] border border-white/10 rounded-xl flex-shrink-0 min-h-0">
+  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-[--bg-elev-1] border border-[--border-1] rounded-xl flex-shrink-0 min-h-0">
     <!-- Column header (fixed, does not scroll) -->
-    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-white/10 flex-shrink-0">
+    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-[--border-1] flex-shrink-0">
       <span v-if="column.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: column.color }" />
       <span class="text-sm font-semibold uppercase tracking-wide"
             :style="column.color ? { color: column.color } : {}">
         {{ column.name }}
       </span>
-      <span class="text-xs text-white/30 ml-auto">{{ tasks.length }}</span>
+      <span class="text-xs text-[--fg-5] ml-auto">{{ tasks.length }}</span>
     </div>
 
     <!-- Scrollable body (fills remaining column height) -->
@@ -148,13 +148,13 @@ function onColumnDrop(evt: DragEvent) {
          @dragleave="onColumnDragLeave"
          @drop="onColumnDrop">
       <template v-if="!tasks.length">
-        <p class="text-white/20 text-xs text-center py-4">No tasks</p>
+        <p class="text-[--fg-6] text-xs text-center py-4">No tasks</p>
       </template>
 
       <template v-for="group in grouped" :key="group.label">
         <GroupContainer :label="group.label" :collapsible="true" :level="0" :stickyOffset="0">
           <template #header-right>
-            <span class="text-xs text-white/30">{{ group.tasks.length }}</span>
+            <span class="text-xs text-[--fg-5]">{{ group.tasks.length }}</span>
           </template>
 
           <!-- Milestone sub-groups -->
@@ -167,7 +167,7 @@ function onColumnDrop(evt: DragEvent) {
             :stickyOffset="0"
             class="mb-1"
             @header-click="pushPanel({ kind: 'milestone', entityId: mg.id })">
-            <div class="space-y-1">
+            <div class="space-y-px">
               <TaskCard
                 v-for="task in mg.tasks"
                 :key="task.id"
@@ -178,7 +178,7 @@ function onColumnDrop(evt: DragEvent) {
                 @update="onTaskUpdate" />
             </div>
             <button @click.stop="emit('add-task', addOpts(group.contextSubject, mg.id))"
-                    class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                    class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
               + Add task
             </button>
           </GroupContainer>
@@ -196,13 +196,13 @@ function onColumnDrop(evt: DragEvent) {
           </div>
 
           <button @click.stop="emit('add-task', addOpts(group.contextSubject))"
-                  class="mt-1 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                  class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
             + Add task
           </button>
         </GroupContainer>
       </template>
 
-      <button @click="emit('add-task', {})" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+      <button @click="emit('add-task', {})" class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
         + Add task
       </button>
     </div>

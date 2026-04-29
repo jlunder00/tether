@@ -29,5 +29,5 @@ function remove(i: number) {
       @update="updateTask(i, $event)"
       @remove="remove(i)" />
   </ul>
-  <button @click="add" class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
+  <button @click="add" class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2]">+ Add task</button>
 </template>

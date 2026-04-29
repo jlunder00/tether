@@ -318,16 +318,16 @@ function timedEventStyle(event: CalendarEvent) {
 </script>
 
 <template>
-  <div data-testid="day-timeline" class="flex flex-col bg-gray-900 border border-white/10 rounded-lg overflow-hidden select-none">
+  <div data-testid="day-timeline" class="flex flex-col bg-[--bg-elev-1] border border-[--border-1] rounded-lg overflow-hidden select-none">
     <!-- All-day events strip -->
     <div
       data-testid="allday-strip"
-      class="flex flex-col gap-0.5 px-2 py-1 border-b border-white/10 min-h-[28px]"
+      class="flex flex-col gap-0.5 px-2 py-1 border-b border-[--border-1] min-h-[28px]"
     >
       <div
         v-for="ev in allDayEvents"
         :key="ev.id"
-        class="text-xs px-1.5 py-0.5 rounded text-white truncate cursor-pointer"
+        class="text-xs px-1.5 py-0.5 rounded text-[--fg-1] truncate cursor-pointer"
         :style="{ backgroundColor: ev.color ?? '#6366f1' }"
         @click="emit('open-event', ev)"
       >
@@ -351,7 +351,7 @@ function timedEventStyle(event: CalendarEvent) {
           v-for="{ hour, label } in hourLabels"
           :key="hour"
           :data-testid="`time-label-${hour}`"
-          class="absolute right-1 text-[10px] text-white/30 leading-none"
+          class="absolute right-1 text-[10px] text-[--fg-5] leading-none"
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         >
           {{ label }}
@@ -375,7 +375,7 @@ function timedEventStyle(event: CalendarEvent) {
           v-for="(band, bi) in overlapBands"
           :key="'overlap-' + bi"
           data-testid="overlap-background"
-          class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+          class="absolute inset-x-0 bg-[--bg-elev-1] pointer-events-none rounded-sm"
           :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
         />
 
@@ -383,7 +383,7 @@ function timedEventStyle(event: CalendarEvent) {
         <div
           v-for="{ hour } in hourLabels"
           :key="'line-' + hour"
-          class="absolute inset-x-0 border-t border-white/5 pointer-events-none"
+          class="absolute inset-x-0 border-t border-[--border-soft] pointer-events-none"
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         />
 
@@ -409,7 +409,7 @@ function timedEventStyle(event: CalendarEvent) {
         >
           <!-- Drag grip (HTML5 demote drag) — narrow left strip -->
           <div
-            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-white/20 transition-opacity"
+            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-[--bg-elev-4] transition-opacity"
             :title="'Drag to anchor column to un-schedule'"
             draggable="true"
             @dragstart.stop="(de) => onEventDragstart(ev, de)"
