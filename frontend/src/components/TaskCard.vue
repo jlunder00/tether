@@ -31,10 +31,10 @@ const emit = defineEmits<{
 // Status pill colors (text + bg for the clickable pill)
 const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string }> = {
   pending:     { bg: 'bg-[--status-todo-bg]', text: 'text-[--status-todo-fg]', label: 'todo' },
-  in_progress: { bg: 'bg-blue-500/20', text: 'text-blue-300', label: 'doing' },
-  done:        { bg: 'bg-green-500/20', text: 'text-green-300', label: 'done' },
-  skipped:     { bg: 'bg-orange-500/20', text: 'text-orange-300', label: 'skip' },
-  blocked:     { bg: 'bg-red-500/20', text: 'text-red-300', label: 'blocked' },
+  in_progress: { bg: 'bg-[--status-doing-bg]', text: 'text-[--status-doing-fg]', label: 'doing' },
+  done:        { bg: 'bg-[--status-done-bg]', text: 'text-[--status-done-fg]', label: 'done' },
+  skipped:     { bg: 'bg-[--status-skip-bg]', text: 'text-[--status-skip-fg]', label: 'skip' },
+  blocked:     { bg: 'bg-[--status-block-bg]', text: 'text-[--status-block-fg]', label: 'blocked' },
 }
 
 // Tasks are transparent — the parent AnchorBlock's --m-band provides the surface.
