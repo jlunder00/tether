@@ -18,19 +18,16 @@ FROM python:3.11-slim
 
 # System deps for bcrypt, PyJWT, and potential native extensions.
 # cron is needed for anchor trigger scheduling in the bot container.
+# curl is needed for the NodeSource setup script.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev cron git gosu \
+    gcc libffi-dev cron git gosu curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Node 20 from the frontend build stage so we can install the Claude Code CLI
-# without pulling a second (older) Node version from Debian apt.
-# npm is a symlink in node:20-slim (/usr/local/bin/npm → ../lib/node_modules/npm/bin/npm).
-# Docker COPY dereferences symlinks, breaking npm's relative require('../lib/cli.js').
-# Recreate the symlink manually instead of copying the dereferenced file.
-COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
-COPY --from=frontend-build /usr/local/lib/node_modules /usr/local/lib/node_modules
-RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm /usr/local/bin/npm \
-    && ln -sf /usr/local/lib/node_modules/npm/bin/npx /usr/local/bin/npx
+# Install Node.js 20 via NodeSource so npm has a properly self-contained
+# installation (copying Node out of node:20-slim breaks npm's prefix detection).
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
 # Claude Code CLI — required for `claude setup-token` in the Anthropic OAuth flow.
 # Pin to a specific version for reproducible image builds.
