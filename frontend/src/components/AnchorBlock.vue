@@ -164,7 +164,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
   <div :data-motif="motif ?? 'anchor'" class="relative">
     <div class="absolute left-0 top-0 bottom-0 w-1 rounded-full pointer-events-none" :style="{ background: 'var(--m)' }" />
     <div class="pl-3">
-  <GroupContainer :label="`${anchorName} · ${time}`" :color="color" :collapsible="true" :level="0">
+  <GroupContainer :label="`${anchorName} · ${time}`" :collapsible="true" :level="0">
     <template #header-right>
       <span class="text-xs text-[--fg-5]">{{ anchorPlan.tasks.length }}</span>
     </template>
