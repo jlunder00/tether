@@ -75,7 +75,7 @@ watch(() => props.modelValue, async (open) => {
           <button
             ref="closeBtn"
             data-testid="theme-drawer-close"
-            class="text-[--fg-4] hover:text-[--fg-1] transition-colors p-1 rounded hover:bg-[--bg-elev-3]"
+            class="text-[--fg-3] hover:text-[--fg-1] transition-colors p-1 rounded hover:bg-[--bg-elev-3]"
             title="Close (Esc)"
             aria-label="Close"
             @click="close"
