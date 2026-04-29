@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from db.pool_middleware import get_db_conn
 from db.pg_queries.preferences import upsert_user_preference, get_user_preferences
 from api.auth import auth_dependency
@@ -22,6 +22,8 @@ async def get_preferences(request: Request, _auth=Depends(auth_dependency), conn
 
 @router.patch("")
 async def patch_preferences(body: PreferencesBody, request: Request, _auth=Depends(auth_dependency), conn=Depends(get_db_conn)):
+    if body.theme is None and body.mode is None:
+        raise HTTPException(status_code=400, detail="At least one field (theme, mode) must be provided")
     user_id = request.state.user_id
     if body.theme is not None:
         await upsert_user_preference(conn, user_id, "theme", body.theme)
