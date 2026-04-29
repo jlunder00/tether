@@ -37,13 +37,14 @@ const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string 
   blocked:     { bg: 'bg-red-500/20', text: 'text-red-300', label: 'blocked' },
 }
 
-// Card background — opaque colors to prevent parent GroupContainer color bleed
-const STATUS_CARD_STYLE: Record<TaskStatus, Record<string, string>> = {
-  pending:     { backgroundColor: 'var(--bg-elev-1)' },
-  in_progress: { backgroundColor: 'var(--status-doing-card)' },
-  done:        { backgroundColor: 'var(--status-done-card)', opacity: '0.7' },
-  skipped:     { backgroundColor: 'var(--status-skip-card)', opacity: '0.5' },
-  blocked:     { backgroundColor: 'var(--status-block-card)' },
+// Tasks are transparent — the parent AnchorBlock's --m-band provides the surface.
+// Status is communicated by text dimming + pill + per-task sidebar line only.
+const STATUS_ROW_STYLE: Record<TaskStatus, Record<string, string>> = {
+  pending:     {},
+  in_progress: {},
+  done:        { opacity: '0.55' },
+  skipped:     { opacity: '0.45' },
+  blocked:     {},
 }
 
 const isOverdue = computed(() => {
@@ -116,13 +117,13 @@ function toggleFollowup(enabled: boolean) {
 </script>
 
 <template>
-  <div class="group rounded-md transition-colors cursor-pointer relative"
-      :style="STATUS_CARD_STYLE[task.status]"
+  <div class="group transition-colors cursor-pointer relative"
+      :style="STATUS_ROW_STYLE[task.status]"
       :draggable="!editable && !!task.id"
       @dragstart="onDragStart"
       @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })">
     <div v-if="task.color"
-         class="absolute left-0 top-1 bottom-1 w-1 rounded-full pointer-events-none"
+         class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full pointer-events-none"
          :style="{ background: task.color }" />
     <div class="flex flex-col gap-1 p-2 pl-3">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->

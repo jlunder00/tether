@@ -17,28 +17,9 @@ const emit = defineEmits<{ (e: 'header-click'): void }>()
 
 const collapsed = ref(false)
 
-// Opaque background colors — mix color with base dark bg to prevent bleed-through
-// Base dark bg is approximately rgb(17, 24, 39) — gray-900
-function mixWithDark(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  const base = { r: 17, g: 24, b: 39 }
-  const mr = Math.round(base.r * (1 - alpha) + r * alpha)
-  const mg = Math.round(base.g * (1 - alpha) + g * alpha)
-  const mb = Math.round(base.b * (1 - alpha) + b * alpha)
-  return `rgb(${mr},${mg},${mb})`
-}
-
-const containerBg = computed(() => {
-  if (props.color) return mixWithDark(props.color, 0.08)
-  return props.level === 0 ? 'var(--bg-elev-2)' : 'var(--bg-elev-1)'
-})
-
-const headerBg = computed(() => {
-  if (props.color) return mixWithDark(props.color, 0.12)
-  return props.level === 0 ? 'var(--bg-elev-3)' : 'var(--bg-elev-1)'
-})
+// Sidebar line color: use the group's color if provided, else neutral fg-5 placeholder
+// (real motif field is coming via a separate backend stream).
+const railColor = computed(() => props.color || 'var(--fg-5)')
 
 const stickyTop = computed(() => {
   if (props.level === 0) return `${props.stickyOffset}px`
@@ -47,20 +28,20 @@ const stickyTop = computed(() => {
 </script>
 
 <template>
-  <div :class="[
-    'rounded-lg transition-all cursor-pointer',
-    level === 0 ? 'border border-[--border-1] p-3' : 'border border-[--border-soft] p-2 ml-1',
-  ]"
-  :style="{ backgroundColor: containerBg }"
-  @click="collapsible && (collapsed = !collapsed)">
+  <div class="relative cursor-pointer pl-3"
+       @click="collapsible && (collapsed = !collapsed)">
+    <!-- Sidebar rail -->
+    <div class="absolute left-0 top-1 bottom-0 w-px"
+         :style="{ background: railColor, opacity: 0.55 }" />
+
     <!-- Pill heading (sticky below nav bar) -->
     <div
-      class="flex items-center gap-2 select-none sticky z-10 rounded py-0.5"
-      :class="[collapsed ? '' : 'mb-2']"
-      :style="{ backgroundColor: headerBg, top: stickyTop }">
-      <span class="text-xs font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
-            :style="color ? { backgroundColor: color + '22', color } : {}"
-            :class="color ? '' : 'text-[--fg-3] bg-white/10'"
+      class="flex items-center gap-2 select-none sticky z-10 py-0.5"
+      :class="[collapsed ? '' : 'mb-1']"
+      :style="{ top: stickyTop }">
+      <span class="text-xs font-medium uppercase tracking-wide"
+            :style="color ? { color } : {}"
+            :class="color ? '' : 'text-[--fg-3]'"
             @click.stop="emit('header-click')">
         {{ label }}
       </span>

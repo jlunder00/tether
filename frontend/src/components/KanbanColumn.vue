@@ -167,7 +167,7 @@ function onColumnDrop(evt: DragEvent) {
             :stickyOffset="0"
             class="mb-1"
             @header-click="pushPanel({ kind: 'milestone', entityId: mg.id })">
-            <div class="space-y-1">
+            <div class="space-y-px">
               <TaskCard
                 v-for="task in mg.tasks"
                 :key="task.id"
