@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import asyncpg
 
 from db.pg_queries.errors import StaleReadError
+from db.pg_queries._motif import validate_motif
 from db.pg_queries.plans import _row_to_task
 
 if TYPE_CHECKING:
@@ -164,6 +165,7 @@ async def patch_task_fields(
         params.append(_parse_ts(val) if val is not None else None)
         set_parts.append(f"end_time = ${len(params)}")
     if "motif" in fields:
+        validate_motif(fields["motif"])
         params.append(fields["motif"])
         set_parts.append(f"motif = ${len(params)}")
 
@@ -264,6 +266,7 @@ async def create_unscheduled_task(
     motif: str = "anchor",
 ) -> dict:
     """Create a task with no plan_date or anchor_id (backlog task)."""
+    validate_motif(motif)
     user_uuid = await conn.fetchval(
         "SELECT current_setting('app.current_user_id', true)::uuid"
     )
@@ -360,7 +363,7 @@ async def move_task_atomic(
 async def search_tasks(conn: asyncpg.Connection, q: str) -> list[dict]:
     rows = await conn.fetch(
         """
-        SELECT uuid, text, status, plan_date, anchor_id, context_subject, version
+        SELECT uuid, text, status, plan_date, anchor_id, context_subject, motif, version
         FROM tasks
         WHERE text ILIKE '%' || $1 || '%'
         ORDER BY plan_date DESC NULLS LAST, text
@@ -668,7 +671,7 @@ async def upsert_task_from_draft(
             version            = tasks.version + 1
         RETURNING
             uuid, text, status, position, followup_config,
-            description, context_subject, context_node_id, version
+            description, context_subject, context_node_id, motif, version
         """,
         new_uuid,
         user_id,

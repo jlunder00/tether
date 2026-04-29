@@ -100,7 +100,7 @@ async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
             "context_subject": master["context_subject"],
             "context_node_id": str(master["context_node_id"]) if master["context_node_id"] else None,
             "followup_config": master["followup_config"],
-            "motif": master["motif"] or "anchor",
+            "motif": master["motif"],
             "version": master["version"] or 0,
             "anchor_id": aid,
             "plan_date": date,
@@ -166,7 +166,7 @@ def _row_to_task(row, *, include_schedule: bool = False) -> dict:
         "context_subject": r.get("context_subject"),
         "context_node_id": str(r["context_node_id"]) if r.get("context_node_id") else None,
         "followup_config": r.get("followup_config"),  # asyncpg already deserialises JSONB
-        "motif": r.get("motif", "anchor"),
+        "motif": r["motif"],
         "version": r.get("version", 0),
         "blocks": [],
         "blocked_by": [],

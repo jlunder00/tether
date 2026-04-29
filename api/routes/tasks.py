@@ -12,17 +12,18 @@ from db.pg_queries import (
 )
 from db.pg_queries.tasks import set_task_rrule, delete_anchor_occurrence, truncate_anchor_series
 from db.pool_middleware import get_db_conn
+from db.pg_queries._motif import VALID_MOTIFS
 from api.auth import auth_dependency
 
 router = APIRouter()
 
 
-VALID_MOTIFS = {"anchor", "focus", "calm", "energy", "care", "flow", "dusk", "quiet"}
-
-
 def _validate_motif(body: dict) -> None:
     if "motif" in body and body["motif"] not in VALID_MOTIFS:
-        raise HTTPException(status_code=422, detail=f"Invalid motif: {body['motif']!r}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid motif: {body['motif']!r}. Must be one of {sorted(VALID_MOTIFS)}",
+        )
 
 
 class TaskRruleBody(BaseModel):

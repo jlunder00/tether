@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncpg
 
+from db.pg_queries._motif import validate_motif
+
 
 async def upsert_context_entry(
     conn: asyncpg.Connection,
@@ -12,9 +14,13 @@ async def upsert_context_entry(
 ) -> int:
     """Upsert a context entry. Returns the surrogate id.
 
-    If motif is None, the existing motif is preserved on update and 'anchor'
-    is used on insert (the column default).
+    Pass motif=None to preserve the existing motif on update (or fall back to
+    the column default 'anchor' on insert). Pass an explicit motif string to
+    set/overwrite. Empty string and other invalid values raise ValueError —
+    there is no way to clear motif to NULL because the column is NOT NULL.
     """
+    if motif is not None:
+        validate_motif(motif)
     if motif is None:
         row = await conn.fetchrow(
             """

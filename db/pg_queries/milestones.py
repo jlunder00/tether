@@ -6,6 +6,7 @@ import uuid as _uuid
 import asyncpg
 
 from db.pg_queries.errors import StaleReadError
+from db.pg_queries._motif import validate_motif
 
 
 def _derive_milestone_status(statuses: list[str]) -> str:
@@ -29,6 +30,7 @@ async def create_milestone(
     color: str | None = None,
     motif: str = "anchor",
 ) -> dict:
+    validate_motif(motif)
     user_uuid = await conn.fetchval(
         "SELECT current_setting('app.current_user_id', true)::uuid"
     )
@@ -168,6 +170,7 @@ async def patch_milestone(
         params.append(fields["color"])
         set_parts.append(f"color = ${len(params)}")
     if "motif" in fields:
+        validate_motif(fields["motif"])
         params.append(fields["motif"])
         set_parts.append(f"motif = ${len(params)}")
     if "status" in fields:
