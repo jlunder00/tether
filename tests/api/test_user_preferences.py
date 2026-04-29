@@ -61,12 +61,59 @@ async def test_patch_overwrites_existing(api_client, conn):
 
 
 @pytest.mark.asyncio
-async def test_auth_me_includes_is_paid(api_client, conn):
-    """GET /auth/me response includes is_paid as a bool (False when TETHER_COMMUNITY_EDITION not set)."""
+async def test_auth_me_includes_is_paid_no_subscription(api_client, conn):
+    """GET /auth/me returns is_paid=False when the user has no subscription row."""
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
     data = resp.json()
     assert "is_paid" in data
     assert isinstance(data["is_paid"], bool)
-    # In test env TETHER_COMMUNITY_EDITION is not set → False
     assert data["is_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_auth_me_is_paid_false_for_free_plan(api_client, conn):
+    """A subscription row with plan='free' yields is_paid=False."""
+    await conn.execute(
+        "INSERT INTO subscriptions (user_id, plan) VALUES ($1::uuid, 'free')",
+        TEST_USER_ID,
+    )
+    resp = await api_client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["is_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_auth_me_is_paid_true_for_premium_plan(api_client, conn):
+    """A subscription row with plan!='free' (e.g. 'premium') yields is_paid=True."""
+    await conn.execute(
+        "INSERT INTO subscriptions (user_id, plan) VALUES ($1::uuid, 'premium')",
+        TEST_USER_ID,
+    )
+    resp = await api_client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["is_paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_auth_me_is_paid_false_for_cancelled_premium(api_client, conn):
+    """A premium subscription with status!='active' does not grant paid access."""
+    await conn.execute(
+        "INSERT INTO subscriptions (user_id, plan, status) VALUES ($1::uuid, 'premium', 'cancelled')",
+        TEST_USER_ID,
+    )
+    resp = await api_client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["is_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_user_is_paid_raises_without_rls_context(conn):
+    """get_user_is_paid raises RuntimeError when called on an unscoped connection,
+    so a future caller that forgets to pass a user-scoped conn fails loudly."""
+    from db.pg_queries import get_user_is_paid
+
+    # Reset the RLS context that the conn fixture set, simulating an unscoped conn.
+    await conn.execute("SELECT set_config('app.current_user_id', '', true)")
+    with pytest.raises(RuntimeError, match="user-scoped connection"):
+        await get_user_is_paid(conn)
