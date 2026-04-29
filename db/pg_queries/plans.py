@@ -1,8 +1,10 @@
 """Async Postgres queries — plans table and related."""
 from __future__ import annotations
+import datetime as _dt
 import uuid as _uuid
 
 import asyncpg
+from dateutil.rrule import rrulestr as _rrulestr
 
 
 async def upsert_plan(conn: asyncpg.Connection, date: str) -> None:
@@ -14,6 +16,20 @@ async def upsert_plan(conn: asyncpg.Connection, date: str) -> None:
         """,
         date,
     )
+
+
+def _anchor_recurring_occurs_on(rrule_str: str, date_str: str) -> bool:
+    """Return True if the rrule fires on the given calendar date (date-only, ignoring time).
+
+    Accepts rrule strings with or without the 'RRULE:' prefix, and with or
+    without an embedded DTSTART line.
+    """
+    target_date = _dt.date.fromisoformat(date_str)
+    dtstart = _dt.datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0)
+    window_end = dtstart + _dt.timedelta(days=1)
+    rule = _rrulestr(rrule_str, dtstart=dtstart, ignoretz=True)
+    occurrences = rule.between(dtstart, window_end, inc=True)
+    return len(occurrences) > 0
 
 
 async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
@@ -40,6 +56,59 @@ async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
         if aid not in anchors:
             anchors[aid] = {"tasks": [], "notes": row["notes"]}
         anchors[aid]["tasks"].append(_row_to_task(row))
+
+    # Expand anchor-recurring masters for this date (on-demand, RLS scoped)
+    master_rows = await conn.fetch(
+        """
+        SELECT uuid, anchor_id, text, status, notes, position,
+               rrule, color, context_subject, context_node_id,
+               followup_config, description, version, exdates
+        FROM tasks
+        WHERE anchor_id IS NOT NULL
+          AND rrule IS NOT NULL
+          AND plan_date IS NULL
+          AND recurrence_id IS NULL
+          AND start_time IS NULL
+          AND (source_status IS NULL OR source_status != 'cancelled')
+        ORDER BY anchor_id, position
+        """,
+    )
+    for master in master_rows:
+        rrule_str = master["rrule"]
+        if not _anchor_recurring_occurs_on(rrule_str, date):
+            continue
+        # Check exdates — stored as plain ISO date strings for anchor-recurring tasks
+        exdates = list(master["exdates"] or [])
+        if date in exdates:
+            continue
+        # Skip if there's already an exception occurrence row for this date
+        exception = await conn.fetchrow(
+            "SELECT uuid FROM tasks WHERE recurrence_id = $1 AND plan_date = $2",
+            str(master["uuid"]), date,
+        )
+        if exception:
+            continue  # Exception row already picked up by plan_date query above
+        aid = str(master["anchor_id"])
+        if aid not in anchors:
+            anchors[aid] = {"tasks": [], "notes": master["notes"]}
+        anchors[aid]["tasks"].append({
+            "id": str(master["uuid"]),
+            "text": master["text"],
+            "status": master["status"] or "pending",
+            "position": master["position"] or 0,
+            "description": master["description"],
+            "context_subject": master["context_subject"],
+            "context_node_id": str(master["context_node_id"]) if master["context_node_id"] else None,
+            "followup_config": master["followup_config"],
+            "version": master["version"] or 0,
+            "anchor_id": aid,
+            "plan_date": date,
+            "rrule": rrule_str,
+            "color": master["color"],
+            "is_recurring_master": True,
+            "blocks": [],
+            "blocked_by": [],
+        })
 
     all_uuids = [t["id"] for a in anchors.values() for t in a["tasks"] if t["id"]]
     if all_uuids:
