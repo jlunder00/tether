@@ -65,6 +65,16 @@ describe('useTheme', () => {
     expect(isThemeUnlocked(paidOssTheme)).toBe(false)
   })
 
+  it('isThemeUnlocked returns true for paid-oss themes when user is_paid', async () => {
+    vi.doMock('../../stores/auth', () => ({
+      useAuthStore: () => ({ user: { user_id: '1', username: 'alice', is_admin: false, is_paid: true } }),
+    }))
+    const { useTheme, THEMES } = await import('../useTheme')
+    const { isThemeUnlocked } = useTheme()
+    const paidOssTheme = THEMES.find(t => t.id === 'terminal')!
+    expect(isThemeUnlocked(paidOssTheme)).toBe(true)
+  })
+
   it('setMode updates data-mode and localStorage', async () => {
     const { useTheme } = await import('../useTheme')
     const { setMode } = useTheme()

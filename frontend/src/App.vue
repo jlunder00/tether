@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
-import { loadPremiumThemes } from './composables/usePremiumThemes'
+import { loadPremiumThemes, unloadPremiumThemes } from './composables/usePremiumThemes'
 import BotChat from './components/BotChat.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 
@@ -15,9 +15,11 @@ watch(
   () => authStore.user,
   (user) => {
     if (user?.is_paid) {
-      // token not available client-side via cookie auth — pass empty string;
-      // the endpoint will use session cookie instead when implemented
-      loadPremiumThemes('')
+      // Cookie auth handles identity; token param reserved for future API-key support
+      loadPremiumThemes()
+    } else {
+      // Remove premium CSS when user logs out or loses entitlement
+      unloadPremiumThemes()
     }
   },
   { immediate: true },

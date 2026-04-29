@@ -1,7 +1,8 @@
 /** Fetches server-side premium theme CSS and injects it into the document.
  *  Called on boot when the user is known to be premium. The endpoint does not
- *  exist yet — the call is a no-op until the backend ships it. */
-export async function loadPremiumThemes(token: string): Promise<void> {
+ *  exist yet — the call is a no-op until the backend ships it.
+ *  Uses cookie-based auth; the optional token param is reserved for future API-key auth. */
+export async function loadPremiumThemes(token = ''): Promise<void> {
   const res = await fetch('/api/premium/themes', {
     credentials: 'include',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -15,4 +16,9 @@ export async function loadPremiumThemes(token: string): Promise<void> {
     document.head.appendChild(el)
   }
   el.textContent = themes.map(t => t.css).join('\n')
+}
+
+/** Removes the injected premium theme CSS element. Call on logout. */
+export function unloadPremiumThemes(): void {
+  document.getElementById('premium-themes')?.remove()
 }

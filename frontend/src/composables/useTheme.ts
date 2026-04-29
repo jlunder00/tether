@@ -38,9 +38,9 @@ const isCommunityEdition = (() => {
 })()
 
 export function useTheme() {
-  useAuthStore() // reserved for future isPaid check — do not remove
-  // TODO: add is_paid to user type in stores/auth.ts when backend adds the field
-  const isPaid = computed(() => false)
+  const auth = useAuthStore()
+  // is_paid is optional on User — defaults to false until backend ships the field
+  const isPaid = computed(() => !!auth.user?.is_paid)
 
   const activeTheme = ref(localStorage.getItem('tether-theme') ?? 'tether')
   const activeMode = ref<'light' | 'dark'>(
