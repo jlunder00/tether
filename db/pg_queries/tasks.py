@@ -1609,3 +1609,152 @@ async def _update_event_time_all(
         new_master_start, new_master_end, new_rrule, _uuid.UUID(event_uuid),
     )
     return _row_to_event(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Anchor-recurring task helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_anchor_dtstart(rrule_str: str, anchor_date_iso: str) -> str:
+    """Prepend DTSTART:YYYYMMDD to an rrule if not already present.
+
+    Without an explicit DTSTART, dateutil resolves ambiguous patterns (e.g.
+    FREQ=WEEKLY without BYDAY) using the dtstart passed at query time.  In
+    _anchor_recurring_occurs_on the query-time dtstart is the target date
+    itself, which makes every day match its own weekday — a daily-like
+    over-match.  Embedding a DTSTART at series-creation time anchors the
+    series to the correct weekday/day-of-month so FREQ=WEEKLY fires on the
+    same weekday the series started.
+    """
+    if "DTSTART" in rrule_str.upper():
+        return rrule_str
+    compact = anchor_date_iso.replace("-", "")  # "2026-04-29" → "20260429"
+    rrule_line = rrule_str if rrule_str.upper().startswith("RRULE:") else f"RRULE:{rrule_str}"
+    return f"DTSTART:{compact}\n{rrule_line}"
+
+
+async def create_anchor_recurring_master(
+    conn: asyncpg.Connection,
+    user_id: str,
+    anchor_id: str,
+    text: str,
+    rrule: str,
+    notes: str | None = None,
+    color: str | None = None,
+) -> str:
+    """Create an anchor-recurring master task.
+
+    plan_date=NULL, start_time=NULL, recurrence_id=NULL.
+    Occurrences are synthesized on-demand by get_plan().
+    A DTSTART:YYYYMMDD is embedded in the rrule (using today's date) so that
+    bare FREQ=WEEKLY/MONTHLY rules anchor to the correct weekday/day-of-month.
+    """
+    import datetime as _dt_today
+    today_iso = _dt_today.date.today().isoformat()
+    anchored_rrule = _ensure_anchor_dtstart(rrule, today_iso)
+    new_id = _uuid.uuid4()
+    await conn.execute(
+        """
+        INSERT INTO tasks (uuid, user_id, anchor_id, text, rrule, notes, color,
+                           plan_date, start_time, end_time, recurrence_id, status, position)
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7,
+                NULL, NULL, NULL, NULL, 'pending', 0)
+        """,
+        new_id, user_id, anchor_id, text, anchored_rrule, notes, color,
+    )
+    return str(new_id)
+
+
+async def set_task_rrule(
+    conn: asyncpg.Connection,
+    task_id: str,
+    rrule: str | None,
+) -> None:
+    """Set or clear rrule on an anchor task.
+
+    Setting: clears plan_date (task becomes a recurring master) and deletes any
+    pre-existing occurrence rows.  A DTSTART:YYYYMMDD is embedded using the
+    task's current plan_date (preserving the existing schedule anchor) or
+    today's date if the task has no plan_date.
+    Clearing: restores plan_date to today so the task remains visible in today's plan
+    rather than falling into backlog; also clears recurrence_id and exdates.
+    """
+    import datetime as _datetime_mod
+    if rrule is not None:
+        # Fetch current plan_date to use as the series anchor
+        row = await conn.fetchrow(
+            "SELECT plan_date FROM tasks WHERE uuid=$1::uuid", task_id
+        )
+        anchor_date = (
+            row["plan_date"].isoformat() if row and row["plan_date"] else
+            _datetime_mod.date.today().isoformat()
+        )
+        anchored_rrule = _ensure_anchor_dtstart(rrule, anchor_date)
+        await conn.execute(
+            "UPDATE tasks SET rrule=$1, plan_date=NULL, version=version+1 WHERE uuid=$2::uuid",
+            anchored_rrule, task_id,
+        )
+        await conn.execute(
+            "DELETE FROM tasks WHERE recurrence_id=$1",
+            task_id,
+        )
+    else:
+        today = _datetime_mod.date.today().isoformat()
+        await conn.execute(
+            "UPDATE tasks SET rrule=NULL, plan_date=$1, exdates='{}', version=version+1 WHERE uuid=$2::uuid",
+            today, task_id,
+        )
+
+
+async def delete_anchor_occurrence(
+    conn: asyncpg.Connection,
+    master_id: str,
+    date_str: str,
+) -> None:
+    """scope=this: suppress one occurrence of an anchor-recurring series.
+
+    Appends the plain ISO date string to the master's exdates array.
+    Idempotent — does not add duplicates.
+    """
+    row = await conn.fetchrow(
+        "SELECT exdates FROM tasks WHERE uuid=$1::uuid", master_id
+    )
+    if row is None:
+        return
+    existing = list(row["exdates"] or [])
+    if date_str not in existing:
+        existing.append(date_str)
+    await conn.execute(
+        "UPDATE tasks SET exdates=$1, version=version+1 WHERE uuid=$2::uuid",
+        existing, master_id,
+    )
+
+
+async def truncate_anchor_series(
+    conn: asyncpg.Connection,
+    master_id: str,
+    from_date_str: str,
+) -> None:
+    """scope=this_and_future: truncate anchor-recurring series before from_date.
+
+    Sets UNTIL on the master's rrule to midnight UTC of the day before from_date,
+    so occurrences on or after from_date no longer appear.
+    Uses the existing _rrule_set_until helper.
+    """
+    import datetime as _dt_mod
+    row = await conn.fetchrow(
+        "SELECT rrule FROM tasks WHERE uuid=$1::uuid", master_id
+    )
+    if row is None or not row["rrule"]:
+        return
+    from_date = _dt_mod.date.fromisoformat(from_date_str)
+    until_dt = _dt_mod.datetime(
+        from_date.year, from_date.month, from_date.day, 0, 0, 0,
+        tzinfo=_dt_mod.timezone.utc,
+    ) - _dt_mod.timedelta(days=1)
+    new_rrule = _rrule_set_until(row["rrule"], until_dt)
+    await conn.execute(
+        "UPDATE tasks SET rrule=$1, version=version+1 WHERE uuid=$2::uuid",
+        new_rrule, master_id,
+    )
