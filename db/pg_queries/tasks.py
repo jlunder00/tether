@@ -1658,7 +1658,7 @@ async def create_anchor_recurring_master(
         """
         INSERT INTO tasks (uuid, user_id, anchor_id, text, rrule, notes, color,
                            plan_date, start_time, end_time, recurrence_id, status, position)
-        VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7,
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5, COALESCE($6, ''), $7,
                 NULL, NULL, NULL, NULL, 'pending', 0)
         """,
         new_id, user_id, anchor_id, text, anchored_rrule, notes, color,
