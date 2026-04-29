@@ -226,12 +226,18 @@ async def get_task_by_uuid(conn: asyncpg.Connection, task_uuid: str) -> dict | N
     row = await conn.fetchrow(
         """
         SELECT uuid, plan_date, anchor_id, text, status, position,
-               followup_config, description, context_subject, context_node_id, version
+               followup_config, description, context_subject, context_node_id, version,
+               rrule, exdates
         FROM tasks WHERE uuid = $1
         """,
         _uuid.UUID(task_uuid),
     )
-    return _row_to_task(row, include_schedule=True) if row else None
+    if row is None:
+        return None
+    result = _row_to_task(row, include_schedule=True)
+    result["rrule"] = row["rrule"]
+    result["exdates"] = list(row["exdates"]) if row["exdates"] else []
+    return result
 
 
 async def get_all_tasks(conn: asyncpg.Connection) -> list[dict]:
@@ -1658,7 +1664,7 @@ async def create_anchor_recurring_master(
         """
         INSERT INTO tasks (uuid, user_id, anchor_id, text, rrule, notes, color,
                            plan_date, start_time, end_time, recurrence_id, status, position)
-        VALUES ($1, $2::uuid, $3::uuid, $4, $5, $6, $7,
+        VALUES ($1, $2::uuid, $3::uuid, $4, $5, COALESCE($6, ''), $7,
                 NULL, NULL, NULL, NULL, 'pending', 0)
         """,
         new_id, user_id, anchor_id, text, anchored_rrule, notes, color,
@@ -1687,7 +1693,7 @@ async def set_task_rrule(
             "SELECT plan_date FROM tasks WHERE uuid=$1::uuid", task_id
         )
         anchor_date = (
-            row["plan_date"].isoformat() if row and row["plan_date"] else
+            row["plan_date"] if row and row["plan_date"] else
             _datetime_mod.date.today().isoformat()
         )
         anchored_rrule = _ensure_anchor_dtstart(rrule, anchor_date)
