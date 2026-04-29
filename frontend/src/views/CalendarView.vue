@@ -536,11 +536,20 @@ const filteredEventsByDay = computed(() => {
   return map
 })
 
+/**
+ * Detect all-day events including the Google Calendar pattern where the
+ * backend sets is_all_day: false but sends UTC-midnight start times.
+ * A start_time ending in T00:00:00Z means "whole day" regardless of the flag.
+ */
+function isAllDay(ev: CalendarEvent): boolean {
+  return ev.is_all_day || ev.start_time.endsWith('T00:00:00Z')
+}
+
 // For the week view: only timed (non-all-day) events per day
 const eventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => !ev.is_all_day)
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => !isAllDay(ev))
   }
   return map
 })
@@ -549,7 +558,7 @@ const eventsByDay = computed(() => {
 const allDayEventsByDay = computed(() => {
   const map: Record<string, CalendarEvent[]> = {}
   for (const key of dayKeys.value) {
-    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => ev.is_all_day)
+    map[key] = (filteredEventsByDay.value[key] ?? []).filter(ev => isAllDay(ev))
   }
   return map
 })

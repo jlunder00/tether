@@ -358,6 +358,51 @@ describe('CalendarView', () => {
     expect(wrapper.find('[data-testid="overlap-background"]').exists()).toBe(true)
   })
 
+  // Bug 2: Google Calendar sends all-day events with is_all_day: false but
+  // start_time ending in T00:00:00Z (UTC midnight). The frontend must detect
+  // this implicit pattern and route the event to the all-day band, not the
+  // timed grid where UTC midnight + negative timezone offset = ~5pm slot.
+  it('implicit UTC-midnight event (is_all_day: false, T00:00:00Z) appears in all-day band not timed grid', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    // Google Calendar style: is_all_day not set, but midnight UTC start = all-day
+    useEventStore().events.push({
+      id: 'ev-gcal-allday',
+      title: 'GCal All Day Event',
+      start_time: `${TODAY}T00:00:00Z`,
+      end_time: `${TODAY}T00:00:00Z`,
+      source: 'google_calendar' as const,
+      external_id: 'gcal-123',
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,   // backend doesn't set this for GCal all-day events
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    // Must appear in all-day band (the sticky header row above the time grid)
+    const band = wrapper.find('[data-testid="all-day-band"]')
+    expect(band.text()).toContain('GCal All Day Event')
+
+    // Must NOT appear as a timed event block (positioned inside the scrollable grid).
+    // Note: both all-day and timed event divs carry data-event-block; scope the
+    // query to [data-testid="week-view"] to select only the timed entries.
+    const weekView = wrapper.find('[data-testid="week-view"]')
+    const timedBlocks = weekView.findAll('[data-event-block]')
+    const timedTitles = timedBlocks.map(b => b.text())
+    expect(timedTitles).not.toContain('GCal All Day Event')
+  })
+
   it('event block backgroundColor updates reactively when ev.color is mutated in the store', async () => {
     // Bug 1: color picker in TaskDetailPanel calls updateEventColor which mutates ev.color;
     // the CalendarView template must re-render and pass the new resolvedColor to CalendarEventBlock.
