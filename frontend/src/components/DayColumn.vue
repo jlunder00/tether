@@ -31,9 +31,9 @@ const label = computed(() => {
     <button
       @click="expanded = !expanded"
       class="text-center py-2 px-1 rounded-t-lg text-xs font-medium"
-      :class="isToday ? 'bg-white/20 text-white' : 'bg-white/5 text-white/60 hover:bg-white/10'">
+      :class="isToday ? 'bg-white/20 text-[--fg-1]' : 'bg-[--bg-elev-1] text-[--fg-3] hover:bg-[--bg-elev-3]'">
       {{ label }}
-      <span class="block text-white/40 text-xs font-normal mt-0.5">
+      <span class="block text-[--fg-4] text-xs font-normal mt-0.5">
         {{ doneTasks }}/{{ totalTasks }} ✓
       </span>
     </button>
@@ -53,7 +53,7 @@ const label = computed(() => {
       <div
         v-for="anchor in anchorStore.anchors"
         :key="anchor.id"
-        class="rounded px-2 py-1 text-xs text-white/60 truncate"
+        class="rounded px-2 py-1 text-xs text-[--fg-3] truncate"
         :style="{ background: anchor.color + '33' }">
         {{ anchor.name }}
       </div>
