@@ -32,12 +32,12 @@ function mixWithDark(hex: string, alpha: number): string {
 
 const containerBg = computed(() => {
   if (props.color) return mixWithDark(props.color, 0.08)
-  return props.level === 0 ? 'rgb(20,27,42)' : 'rgb(17,24,39)'
+  return props.level === 0 ? 'var(--bg-elev-2)' : 'var(--bg-elev-1)'
 })
 
 const headerBg = computed(() => {
   if (props.color) return mixWithDark(props.color, 0.12)
-  return props.level === 0 ? 'rgb(22,29,44)' : 'rgb(17,24,39)'
+  return props.level === 0 ? 'var(--bg-elev-3)' : 'var(--bg-elev-1)'
 })
 
 const stickyTop = computed(() => {
@@ -49,7 +49,7 @@ const stickyTop = computed(() => {
 <template>
   <div :class="[
     'rounded-lg transition-all cursor-pointer',
-    level === 0 ? 'border border-white/10 p-3' : 'border border-white/[0.06] p-2 ml-1',
+    level === 0 ? 'border border-[--border-1] p-3' : 'border border-[--border-soft] p-2 ml-1',
   ]"
   :style="{ backgroundColor: containerBg }"
   @click="collapsible && (collapsed = !collapsed)">
@@ -60,11 +60,11 @@ const stickyTop = computed(() => {
       :style="{ backgroundColor: headerBg, top: stickyTop }">
       <span class="text-xs font-medium uppercase tracking-wide px-2 py-0.5 rounded-full"
             :style="color ? { backgroundColor: color + '22', color } : {}"
-            :class="color ? '' : 'text-white/50 bg-white/10'"
+            :class="color ? '' : 'text-[--fg-3] bg-white/10'"
             @click.stop="emit('header-click')">
         {{ label }}
       </span>
-      <span v-if="collapsible" class="text-white/30 text-xs transition-transform"
+      <span v-if="collapsible" class="text-[--fg-5] text-xs transition-transform"
             :class="collapsed ? '' : 'rotate-90'">▸</span>
       <slot name="header-right" />
     </div>
