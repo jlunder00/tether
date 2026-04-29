@@ -33,7 +33,7 @@ COMPOSE_ENV = PREMIUM_GIT_TOKEN=$(PREMIUM_GIT_TOKEN) \
         deploy deploy-no-cache deploy-community \
         tag-latest \
         install \
-        configure-auth configure-google configure-github configure-db configure-telegram \
+        configure-auth configure-google configure-github configure-db configure-telegram configure-vault \
         generate-bot-token
 
 # ── Build targets ─────────────────────────────────────────
@@ -126,6 +126,10 @@ configure-telegram:
 	python3 scripts/configure.py telegram \
 	    TELEGRAM_BOT_TOKEN="$(TELEGRAM_BOT_TOKEN)" \
 	    TELEGRAM_CHAT_ID="$(TELEGRAM_CHAT_ID)"
+
+configure-vault:
+	python3 scripts/configure.py vault \
+	    TETHER_VAULT_KEY="$(TETHER_VAULT_KEY)"
 
 generate-bot-token:
 	python3 scripts/generate_bot_token.py
