@@ -73,8 +73,11 @@ function contextTaskCount(ctx: { milestoneGroups: { tasks: TaskWithIndex[] }[]; 
   return ctx.milestoneGroups.reduce((sum, g) => sum + g.tasks.length, 0) + ctx.ungrouped.length
 }
 
-// Local cache of motif selections per context subject. Backend support lands in a parallel stream;
-// PATCH attempts here are best-effort no-ops until then.
+// Local cache of motif selections per context subject.
+// TODO(motif-db-api): backend read path not yet wired. When the parallel
+// `feature/motif-db-api` stream ships a `motif` field on context-entry responses,
+// seed this map from there (e.g. via a context store) so picks survive remount.
+// Until then, selections are lost on reload — acceptable per spec.
 const contextMotifs = ref<Record<string, MotifSlot>>({})
 
 async function setContextMotif(subject: string | null, slot: MotifSlot) {
@@ -86,7 +89,11 @@ async function setContextMotif(subject: string | null, slot: MotifSlot) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ motif: slot }),
     })
-  } catch { /* backend motif support pending — see feature/motif-db-api */ }
+  } catch (e) {
+    // Backend motif support pending (feature/motif-db-api). Log so non-network
+    // failures (bad JSON, undefined subject, etc.) remain visible during dev.
+    console.warn('setContextMotif failed:', e)
+  }
 }
 
 function onUpdate(task: Task, index: number) {
