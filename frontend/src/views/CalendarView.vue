@@ -726,18 +726,18 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 </script>
 
 <template>
-  <div class="flex h-full bg-gray-900 text-white overflow-hidden">
+  <div class="flex h-full bg-[--bg-canvas] text-[--fg-1] overflow-hidden">
 
     <!-- ── Anchor / Side Panel ── -->
     <aside
       data-testid="anchor-panel"
-      class="flex-shrink-0 border-r border-white/10 flex flex-col transition-all duration-200 relative"
+      class="flex-shrink-0 border-r border-[--border-1] flex flex-col transition-all duration-200 relative"
       :style="anchorPanelOpen ? { width: sidebarWidth + 'px' } : { width: '40px' }"
     >
       <!-- Toggle button -->
       <button
         data-testid="anchor-panel-toggle"
-        class="flex items-center justify-center h-10 w-full border-b border-white/10 hover:bg-white/10 transition-colors text-white/50 hover:text-white flex-shrink-0"
+        class="flex items-center justify-center h-10 w-full border-b border-[--border-1] hover:bg-[--bg-elev-3] transition-colors text-[--fg-3] hover:text-[--fg-1] flex-shrink-0"
         :title="anchorPanelOpen ? 'Collapse panel' : 'Expand panel'"
         @click="anchorPanelOpen = !anchorPanelOpen"
       >
@@ -753,7 +753,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         class="flex-1 overflow-y-auto p-2 space-y-2"
       >
         <!-- Focused day label -->
-        <div class="text-xs text-white/40 uppercase tracking-wide px-1 pt-1 select-none">
+        <div class="text-xs text-[--fg-4] uppercase tracking-wide px-1 pt-1 select-none">
           {{ new Date(focusedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) }}
         </div>
 
@@ -761,12 +761,12 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
         <div
           v-for="{ anchor, tasks } in (activeFilterCount > 0 ? filteredAnchorsWithTasks : anchorsWithTasks)"
           :key="anchor.id"
-          class="rounded-lg border border-white/5 overflow-hidden"
+          class="rounded-lg border border-[--border-soft] overflow-hidden"
         >
           <!-- Anchor header -->
           <div class="flex items-center gap-1.5 px-2 py-1.5" :style="{ borderLeft: `3px solid ${anchor.color}` }">
-            <span class="text-xs font-medium text-white/80 truncate flex-1">{{ anchor.name }}</span>
-            <span class="text-[10px] text-white/30">{{ anchor.time }}</span>
+            <span class="text-xs font-medium text-[--fg-2] truncate flex-1">{{ anchor.name }}</span>
+            <span class="text-[10px] text-[--fg-5]">{{ anchor.time }}</span>
           </div>
           <!-- Task list — max height + scroll so one long anchor doesn't consume the panel -->
           <ul class="flex flex-col gap-0.5 px-1 pb-1 max-h-36 overflow-y-auto">
@@ -774,7 +774,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               v-for="task in tasks"
               :key="task.id"
               draggable="true"
-              class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-white/5 text-white/60 hover:text-white/90 transition-colors truncate"
+              class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-3] hover:text-[--fg-1] transition-colors truncate"
               :class="task.status === 'done' ? 'line-through opacity-40' : ''"
               @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
               @dragstart="(e: DragEvent) => {
@@ -786,13 +786,13 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             >
               {{ task.text }}
             </li>
-            <li v-if="!tasks.length" class="text-[11px] text-white/20 px-1.5 py-0.5">No tasks</li>
+            <li v-if="!tasks.length" class="text-[11px] text-[--fg-6] px-1.5 py-0.5">No tasks</li>
           </ul>
         </div>
 
-        <div v-if="!anchorsWithTasks.length" class="text-xs text-white/30 px-1">No anchors</div>
+        <div v-if="!anchorsWithTasks.length" class="text-xs text-[--fg-5] px-1">No anchors</div>
 
-        <div class="text-[10px] text-white/20 px-1 pt-2 select-none leading-tight">
+        <div class="text-[10px] text-[--fg-6] px-1 pt-2 select-none leading-tight">
           Drag tasks into the calendar to schedule them
         </div>
       </div>
@@ -800,7 +800,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
       <!-- Resize handle — only visible when panel is open -->
       <div
         v-if="anchorPanelOpen"
-        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-indigo-500/40 transition-colors z-10"
+        class="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-[--accent-soft] transition-colors z-10"
         @mousedown.prevent="onResizeHandleMousedown"
       />
     </aside>
@@ -809,20 +809,20 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
     <div class="flex-1 flex flex-col min-w-0 overflow-hidden">
 
       <!-- Toolbar -->
-      <header class="flex items-center gap-3 px-4 py-2 border-b border-white/10 flex-shrink-0">
+      <header class="flex items-center gap-3 px-4 py-2 border-b border-[--border-1] flex-shrink-0">
         <h1 class="text-lg font-bold">Calendar</h1>
         <div class="flex items-center gap-1 ml-2">
-          <button @click="navigatePrev" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">‹</button>
-          <button @click="goToday" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-xs transition-colors">Today</button>
-          <button @click="navigateNext" class="px-2 py-0.5 rounded hover:bg-white/10 text-white/60 hover:text-white text-sm transition-colors">›</button>
+          <button @click="navigatePrev" class="px-2 py-0.5 rounded hover:bg-[--bg-elev-3] text-[--fg-2] hover:text-[--fg-1] text-sm transition-colors">‹</button>
+          <button @click="goToday" class="px-2 py-0.5 rounded hover:bg-[--bg-elev-3] text-[--fg-2] hover:text-[--fg-1] text-xs transition-colors">Today</button>
+          <button @click="navigateNext" class="px-2 py-0.5 rounded hover:bg-[--bg-elev-3] text-[--fg-2] hover:text-[--fg-1] text-sm transition-colors">›</button>
         </div>
-        <span class="text-sm text-white/50">
+        <span class="text-sm text-[--fg-3]">
           {{ viewMode === 'month' ? monthLabel : weekLabel }}
         </span>
         <!-- View mode toggle -->
         <button
           data-testid="view-mode-toggle"
-          class="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs text-white/50 hover:text-white hover:bg-white/10 transition-colors border border-white/10"
+          class="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs text-[--fg-3] hover:text-[--fg-1] hover:bg-[--bg-elev-3] transition-colors border border-[--border-1]"
           @click="viewMode = viewMode === 'week' ? 'month' : 'week'"
         >
           {{ viewMode === 'week' ? 'Month' : 'Week' }}
@@ -834,12 +834,12 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             data-testid="filter-button"
             class="flex items-center gap-1 px-2 py-0.5 rounded text-xs border transition-colors"
             :class="activeFilterCount > 0
-              ? 'text-indigo-300 border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20'
-              : 'text-white/50 border-white/10 hover:text-white hover:bg-white/10'"
+              ? 'text-[--accent] border-[--accent-soft] bg-[--accent-veil] hover:bg-[--accent-soft]'
+              : 'text-[--fg-3] border-[--border-1] hover:text-[--fg-1] hover:bg-[--bg-elev-3]'"
             @click.stop="filterOpen = !filterOpen"
           >
             Filter
-            <span v-if="activeFilterCount > 0" class="bg-indigo-500 text-white rounded-full text-[10px] px-1 leading-none py-0.5 font-bold">
+            <span v-if="activeFilterCount > 0" class="bg-[--accent] text-[--accent-fg] rounded-full text-[10px] px-1 leading-none py-0.5 font-bold">
               {{ activeFilterCount }}
             </span>
           </button>
@@ -872,7 +872,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
           <div
             v-for="label in DAY_LABELS"
             :key="label"
-            class="text-center text-xs text-white/30 py-1"
+            class="text-center text-xs text-[--fg-5] py-1"
           >
             {{ label }}
           </div>
@@ -886,14 +886,14 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             :data-day="date"
             class="min-h-[72px] rounded-lg p-1.5 cursor-pointer transition-colors"
             :class="[
-              isCurrentMonth(date) ? 'bg-white/5 hover:bg-white/10' : 'bg-white/[0.02] opacity-40',
-              date === today ? 'ring-1 ring-indigo-400/50' : '',
-              date === focusedDay ? 'ring-1 ring-indigo-400' : '',
+              isCurrentMonth(date) ? 'bg-[--bg-elev-2] hover:bg-[--bg-elev-3]' : 'bg-[--bg-elev-1] opacity-40',
+              date === today ? 'ring-1 ring-[--accent-soft]' : '',
+              date === focusedDay ? 'ring-1 ring-[--accent]' : '',
             ]"
             @click="clickMonthDay(date)"
           >
             <div class="text-xs font-medium mb-1"
-                 :class="date === today ? 'text-indigo-400' : 'text-white/50'">
+                 :class="date === today ? 'text-[--accent]' : 'text-[--fg-3]'">
               {{ new Date(date + 'T12:00:00').getDate() }}
             </div>
             <!-- Event pills -->
@@ -908,7 +908,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               </div>
               <div
                 v-if="eventsForDay(date).length > 3"
-                class="text-[10px] text-white/40 px-1"
+                class="text-[10px] text-[--fg-4] px-1"
               >
                 +{{ eventsForDay(date).length - 3 }} more
               </div>
@@ -927,17 +927,17 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
           <div class="sticky top-0 z-10">
 
             <!-- Day-of-week header -->
-            <div class="flex border-b border-white/10 bg-gray-900 pl-12">
+            <div class="flex border-b border-[--border-1] bg-[--bg-canvas] pl-12">
               <div
                 v-for="(day, i) in days"
                 :key="dayKeys[i]"
                 :data-testid="`day-header-${i}`"
                 :data-day="dayKeys[i]"
                 :data-focused="focusedDay === dayKeys[i] ? 'true' : undefined"
-                class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-white/5 transition-colors select-none"
+                class="flex-1 text-center py-1.5 text-xs cursor-pointer hover:bg-[--bg-elev-2] transition-colors select-none"
                 :class="[
-                  dayKeys[i] === today ? 'text-indigo-400 font-semibold' : 'text-white/50',
-                  focusedDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
+                  dayKeys[i] === today ? 'text-[--accent] font-semibold' : 'text-[--fg-3]',
+                  focusedDay === dayKeys[i] ? 'bg-[--accent-veil]' : '',
                 ]"
                 @click="focusDay(dayKeys[i])"
               >
@@ -946,11 +946,11 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
             </div>
 
             <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
-            <div data-testid="all-day-band" class="sticky flex border-b border-white/10 bg-gray-900/80 pl-12">
+            <div data-testid="all-day-band" class="sticky flex border-b border-[--border-1] bg-[--bg-canvas-veil] pl-12">
             <div
               v-for="(_, i) in days"
               :key="dayKeys[i]"
-              class="flex-1 min-h-[24px] flex flex-wrap gap-0.5 px-1 py-0.5 border-l border-white/5"
+              class="flex-1 min-h-[24px] flex flex-wrap gap-0.5 px-1 py-0.5 border-l border-[--border-soft]"
             >
               <div
                 v-for="ev in allDayEventsByDay[dayKeys[i]]"
@@ -974,7 +974,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-for="h in hours"
                 :key="h"
-                class="border-b border-white/5 text-right pr-1 text-[10px] text-white/30"
+                class="border-b border-[--border-soft] text-right pr-1 text-[10px] text-[--fg-5]"
                 :style="{ height: `${HOUR_HEIGHT}px`, lineHeight: `${HOUR_HEIGHT}px` }"
               >
                 {{ h === 0 ? '' : `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}` }}
@@ -987,10 +987,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               :key="dayKeys[i]"
               :data-testid="`day-col-${dayKeys[i]}`"
               :data-day-col="dayKeys[i]"
-              class="flex-1 relative border-l border-white/5 min-w-0"
+              class="flex-1 relative border-l border-[--border-soft] min-w-0"
               :class="[
-                dragOverDay === dayKeys[i] ? 'bg-indigo-500/10' : '',
-                focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-indigo-400/30' : '',
+                dragOverDay === dayKeys[i] ? 'bg-[--accent-veil]' : '',
+                focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-[--accent-soft]' : '',
               ]"
               :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
               @click.self="focusDay(dayKeys[i])"
@@ -1003,20 +1003,20 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-for="h in hours"
                 :key="h"
-                class="absolute inset-x-0 border-b border-white/5"
+                class="absolute inset-x-0 border-b border-[--border-soft]"
                 :style="{ top: `${(h - START_HOUR) * HOUR_HEIGHT}px`, height: `${HOUR_HEIGHT}px` }"
               />
 
               <!-- Today highlight -->
               <div
                 v-if="dayKeys[i] === today"
-                class="absolute inset-0 bg-indigo-500/5 pointer-events-none"
+                class="absolute inset-0 bg-[--accent-veil] pointer-events-none"
               />
 
               <!-- Focused day highlight (stronger than today) -->
               <div
                 v-if="focusedDay === dayKeys[i]"
-                class="absolute inset-0 bg-indigo-400/8 pointer-events-none"
+                class="absolute inset-0 bg-[--accent-veil] pointer-events-none"
               />
 
               <!-- Overlap background bands — light tint over time windows with simultaneous events -->
@@ -1024,7 +1024,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
                 v-for="(band, bi) in overlapBandsByDay[dayKeys[i]]"
                 :key="'overlap-bg-' + bi"
                 data-testid="overlap-background"
-                class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+                class="absolute inset-x-0 bg-[--bg-elev-2] pointer-events-none rounded-sm"
                 :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
               />
 
@@ -1054,7 +1054,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <!-- Drop indicator (sidebar DnD) -->
               <div
                 v-if="dragOverDay === dayKeys[i] && dragOverHour !== null"
-                class="absolute inset-x-1 h-0.5 bg-indigo-400 rounded pointer-events-none z-20"
+                class="absolute inset-x-1 h-0.5 bg-[--accent] rounded pointer-events-none z-20"
                 :style="{ top: `${(dragOverHour! - START_HOUR) * HOUR_HEIGHT}px` }"
               />
             </div>

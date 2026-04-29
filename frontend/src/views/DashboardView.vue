@@ -85,23 +85,23 @@ const dayStats = computed(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6">
     <div class="flex items-center gap-4 mb-6">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex items-center gap-2 text-sm">
         <span class="w-2 h-2 rounded-full"
               :class="botStatus === 'ok' ? 'bg-green-400' : botStatus === 'stale' ? 'bg-yellow-400' : 'bg-red-400'" />
-        <span class="text-white/50">Bot {{ botStatus }}</span>
+        <span class="text-[--fg-3]">Bot {{ botStatus }}</span>
       </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Now Box -->
-      <div class="bg-white/5 border border-white/10 rounded-xl p-4">
+      <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
         <div class="flex items-center gap-2 mb-3">
           <div v-if="currentAnchor" class="w-3 h-3 rounded-full" :style="{ background: currentAnchor.color }" />
           <h2 class="font-semibold text-lg">{{ currentAnchor?.name ?? 'No active block' }}</h2>
-          <span class="text-white/40 text-sm ml-auto">{{ currentAnchor?.time }}</span>
+          <span class="text-[--fg-4] text-sm ml-auto">{{ currentAnchor?.time }}</span>
         </div>
         <div v-if="allDayEventsToday.length" class="flex flex-wrap gap-1 mb-2">
           <div v-for="ev in allDayEventsToday" :key="ev.id"
@@ -114,21 +114,21 @@ const dayStats = computed(() => {
         <ul class="flex flex-col gap-1.5">
           <TaskCard v-for="task in currentTasks" :key="task.id"
             :task="task" :editable="false" :show-remove="false" :show-detail-link="false" :compact="true" />
-          <li v-if="!currentTasks.length" class="text-white/30 text-sm">No tasks</li>
+          <li v-if="!currentTasks.length" class="text-[--fg-5] text-sm">No tasks</li>
         </ul>
         <button v-if="currentAnchor" type="button" @click="onAddTaskToNow"
-                class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-left">
+                class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
           + Add task
         </button>
       </div>
 
       <!-- Today Box -->
-      <div class="bg-white/5 border border-white/10 rounded-xl p-4">
+      <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
         <h2 class="font-semibold text-lg mb-3">Today</h2>
         <ul class="flex flex-col gap-2">
           <li v-for="s in dayStats" :key="s.anchor.id"
               class="flex items-center gap-2 text-sm"
-              :class="currentAnchor?.id === s.anchor.id ? 'text-white' : 'text-white/40'">
+              :class="currentAnchor?.id === s.anchor.id ? 'text-[--fg-1]' : 'text-[--fg-4]'">
             <div class="w-2 h-2 rounded-full flex-shrink-0" :style="{ background: s.anchor.color }" />
             <span class="flex-1">{{ s.anchor.name }}</span>
             <span class="text-xs">{{ s.done }}/{{ s.total }}</span>
@@ -137,9 +137,9 @@ const dayStats = computed(() => {
       </div>
 
       <!-- This Week Box -->
-      <div class="bg-white/5 border border-white/10 rounded-xl p-4">
+      <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
         <h2 class="font-semibold text-lg mb-3">This Week</h2>
-        <p class="text-white/30 text-sm">Coming soon</p>
+        <p class="text-[--fg-5] text-sm">Coming soon</p>
       </div>
     </div>
 
