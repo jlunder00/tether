@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from typing import Literal
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 import asyncpg
 from db.pg_queries import (
     patch_task_fields, move_task_atomic,
@@ -8,10 +10,15 @@ from db.pg_queries import (
     get_unscheduled_tasks, create_unscheduled_task, get_task_by_uuid, get_all_tasks,
     link_milestone_task, upsert_plan, delete_task_by_uuid, get_full_task_dependencies,
 )
+from db.pg_queries.tasks import set_task_rrule, delete_anchor_occurrence, truncate_anchor_series
 from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency
 
 router = APIRouter()
+
+
+class TaskRruleBody(BaseModel):
+    rrule: str | None
 
 
 @router.get("/search")
@@ -83,12 +90,54 @@ async def patch_task(task_uuid: str, body: dict,
     return result
 
 
-@router.delete("/tasks/{task_uuid}")
-async def delete_task(task_uuid: str, _auth=Depends(auth_dependency),
-                      conn: asyncpg.Connection = Depends(get_db_conn)):
-    async with conn.transaction():
-        await delete_task_by_uuid(conn, task_uuid)
-    return {"ok": True}
+@router.patch("/tasks/{task_id}/rrule")
+async def patch_task_rrule(
+    task_id: str,
+    body: TaskRruleBody,
+    request: Request,
+    _auth=Depends(auth_dependency),
+    conn: asyncpg.Connection = Depends(get_db_conn),
+):
+    task = await get_task_by_uuid(conn, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("anchor_id") is None:
+        raise HTTPException(
+            status_code=400,
+            detail="rrule scheduling only supported for anchor tasks; use /api/events for time-scheduled recurrence",
+        )
+    await set_task_rrule(conn, task_id, body.rrule)
+    return await get_task_by_uuid(conn, task_id)
+
+
+@router.delete("/tasks/{task_uuid}", status_code=204)
+async def delete_task(
+    task_uuid: str,
+    request: Request,
+    scope: Literal["all", "this", "this_and_future"] = Query(default="all"),
+    original_date: str | None = Query(default=None),
+    _auth=Depends(auth_dependency),
+    conn: asyncpg.Connection = Depends(get_db_conn),
+):
+    task = await get_task_by_uuid(conn, task_uuid)
+    if task is None:
+        raise HTTPException(status_code=404)
+    if task.get("rrule") and task.get("anchor_id"):
+        # Anchor-recurring master — honour scope
+        if scope == "this":
+            if not original_date:
+                raise HTTPException(status_code=422, detail="original_date required for scope=this")
+            await delete_anchor_occurrence(conn, task_uuid, original_date)
+        elif scope == "this_and_future":
+            if not original_date:
+                raise HTTPException(status_code=422, detail="original_date required for scope=this_and_future")
+            await truncate_anchor_series(conn, task_uuid, original_date)
+        else:
+            async with conn.transaction():
+                await delete_task_by_uuid(conn, task_uuid)
+    else:
+        async with conn.transaction():
+            await delete_task_by_uuid(conn, task_uuid)
 
 
 @router.put("/tasks/{task_uuid}/move")
