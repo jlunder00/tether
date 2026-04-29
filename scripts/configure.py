@@ -9,6 +9,7 @@ Usage:
   python3 scripts/configure.py github [KEY=VALUE ...]           # write GitHub OAuth config
   python3 scripts/configure.py db    [KEY=VALUE ...]            # write DB passwords to .env
   python3 scripts/configure.py telegram [KEY=VALUE ...]         # write Telegram credentials
+  python3 scripts/configure.py vault [KEY=VALUE ...]            # write Anthropic vault key
 
 When KEY=VALUE args are provided, values are written directly (CI/make path).
 When values are empty strings or omitted, the script prompts interactively (self-hoster path).
@@ -97,6 +98,20 @@ CATEGORIES: Dict[str, Dict] = {
         "prompts": {
             "TELEGRAM_BOT_TOKEN": "Telegram bot token",
             "TELEGRAM_CHAT_ID": "Telegram chat ID",
+        },
+    },
+    "vault": {
+        "file": "auth_config.yaml",
+        "keys": {
+            "TETHER_VAULT_KEY": "vault.key",
+        },
+        "prompts": {
+            "TETHER_VAULT_KEY": (
+                "Anthropic vault encryption key "
+                "(leave blank to skip; generate with: "
+                "python -c \"from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())\")"
+            ),
         },
     },
 }
@@ -334,7 +349,7 @@ def main() -> None:
         # Interactive loop for remaining categories
         print("\nJWT secret written. Now configuring remaining categories interactively.")
         print("Press Enter to skip any value.\n")
-        for cat_name in ("google", "github", "db", "telegram"):
+        for cat_name in ("google", "github", "db", "telegram", "vault"):
             spec = CATEGORIES[cat_name]
             kvs = {k: "" for k in spec["keys"]}
             apply_category(

@@ -14,6 +14,8 @@ cors:
 
 vault:
   # Fernet key for per-user credentials blobs. Leave empty to disable vault.
+  # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  # WARNING: losing this key makes all stored Anthropic credentials unrecoverable.
   key: "${TETHER_VAULT_KEY:-}"
 
 oauth:
