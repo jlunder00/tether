@@ -42,7 +42,7 @@ async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
     task_rows = await conn.fetch(
         """
         SELECT uuid, anchor_id, text, status, notes, position,
-               followup_config, description, context_subject, context_node_id, version
+               followup_config, description, context_subject, context_node_id, motif, version
         FROM tasks
         WHERE plan_date = $1
         ORDER BY anchor_id, position
@@ -62,7 +62,7 @@ async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
         """
         SELECT uuid, anchor_id, text, status, notes, position,
                rrule, color, context_subject, context_node_id,
-               followup_config, description, version, exdates
+               followup_config, description, motif, version, exdates
         FROM tasks
         WHERE anchor_id IS NOT NULL
           AND rrule IS NOT NULL
@@ -100,6 +100,7 @@ async def get_plan(conn: asyncpg.Connection, date: str) -> dict:
             "context_subject": master["context_subject"],
             "context_node_id": str(master["context_node_id"]) if master["context_node_id"] else None,
             "followup_config": master["followup_config"],
+            "motif": master["motif"],
             "version": master["version"] or 0,
             "anchor_id": aid,
             "plan_date": date,
@@ -165,6 +166,7 @@ def _row_to_task(row, *, include_schedule: bool = False) -> dict:
         "context_subject": r.get("context_subject"),
         "context_node_id": str(r["context_node_id"]) if r.get("context_node_id") else None,
         "followup_config": r.get("followup_config"),  # asyncpg already deserialises JSONB
+        "motif": r["motif"],
         "version": r.get("version", 0),
         "blocks": [],
         "blocked_by": [],

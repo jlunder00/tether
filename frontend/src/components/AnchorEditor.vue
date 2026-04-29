@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import type { Anchor } from '../stores/anchors'
+import MotifPicker, { type MotifSlot } from './MotifPicker.vue'
 
 const props = withDefaults(defineProps<{
   anchor: Anchor
@@ -51,11 +52,15 @@ async function save() {
   <div class="bg-white/5 border rounded-xl p-4 flex flex-col gap-3"
        :class="isPending ? 'border-blue-400/40' : 'border-white/10'">
     <div class="flex items-center gap-3">
-      <input v-model="draft.color" type="color"
-             class="w-5 h-5 rounded-full cursor-pointer bg-transparent border-0 p-0" />
       <input v-model="draft.name" placeholder="Anchor name"
              class="bg-transparent font-semibold text-white flex-1 outline-none border-b border-white/20 pb-0.5"
              :class="isPending ? 'border-blue-400/40' : ''" />
+    </div>
+    <div data-testid="anchor-motif-picker">
+      <MotifPicker
+        :model-value="(draft.motif as MotifSlot | null | undefined) ?? null"
+        @update:model-value="(slot) => draft.motif = slot"
+      />
     </div>
 
     <div class="grid grid-cols-4 gap-3 text-sm">

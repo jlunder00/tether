@@ -12,9 +12,18 @@ from db.pg_queries import (
 )
 from db.pg_queries.tasks import set_task_rrule, delete_anchor_occurrence, truncate_anchor_series
 from db.pool_middleware import get_db_conn
+from db.pg_queries._motif import VALID_MOTIFS
 from api.auth import auth_dependency
 
 router = APIRouter()
+
+
+def _validate_motif(body: dict) -> None:
+    if "motif" in body and body["motif"] not in VALID_MOTIFS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid motif: {body['motif']!r}. Must be one of {sorted(VALID_MOTIFS)}",
+        )
 
 
 class TaskRruleBody(BaseModel):
@@ -50,6 +59,7 @@ async def create_unscheduled(body: dict, request: Request,
                              conn: asyncpg.Connection = Depends(get_db_conn)):
     if "text" not in body:
         raise HTTPException(status_code=422, detail="'text' is required")
+    _validate_motif(body)
     milestone_id = body.get("milestone_id")
     date = body.get("date")
     anchor_id = body.get("anchor_id")
@@ -59,6 +69,7 @@ async def create_unscheduled(body: dict, request: Request,
             description=body.get("description"),
             status=body.get("status", "pending"),
             context_subject=body.get("context_subject"),
+            motif=body.get("motif", "anchor"),
         )
         if milestone_id:
             await link_milestone_task(conn, milestone_id, task["id"])
@@ -83,6 +94,7 @@ async def get_task(task_uuid: str, _auth=Depends(auth_dependency),
 async def patch_task(task_uuid: str, body: dict,
                      _auth=Depends(auth_dependency),
                      conn: asyncpg.Connection = Depends(get_db_conn)):
+    _validate_motif(body)
     async with conn.transaction():
         result = await patch_task_fields(conn, task_uuid, body)
     if result is None:

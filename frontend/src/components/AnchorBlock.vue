@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import TaskCard from './TaskCard.vue'
 import GroupContainer from './GroupContainer.vue'
+import MotifPicker, { type MotifSlot } from './MotifPicker.vue'
 import { usePlanStore } from '../stores/plan'
 import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
@@ -70,6 +71,29 @@ const groupedByContext = computed(() => {
 
 function contextTaskCount(ctx: { milestoneGroups: { tasks: TaskWithIndex[] }[]; ungrouped: TaskWithIndex[] }): number {
   return ctx.milestoneGroups.reduce((sum, g) => sum + g.tasks.length, 0) + ctx.ungrouped.length
+}
+
+// Local cache of motif selections per context subject.
+// TODO(motif-db-api): backend read path not yet wired. When the parallel
+// `feature/motif-db-api` stream ships a `motif` field on context-entry responses,
+// seed this map from there (e.g. via a context store) so picks survive remount.
+// Until then, selections are lost on reload — acceptable per spec.
+const contextMotifs = ref<Record<string, MotifSlot>>({})
+
+async function setContextMotif(subject: string | null, slot: MotifSlot) {
+  if (!subject) return
+  contextMotifs.value = { ...contextMotifs.value, [subject]: slot }
+  try {
+    await api(`/api/context/${encodeURIComponent(subject)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motif: slot }),
+    })
+  } catch (e) {
+    // Backend motif support pending (feature/motif-db-api). Log so non-network
+    // failures (bad JSON, undefined subject, etc.) remain visible during dev.
+    console.warn('setContextMotif failed:', e)
+  }
 }
 
 function onUpdate(task: Task, index: number) {
@@ -169,8 +193,26 @@ function onDrop(evt: DragEvent, toIndex: number) {
           </div>
         </template>
 
-        <!-- Context has >1 task — wrap in context GroupContainer -->
-        <GroupContainer v-else :label="ctx.label" :collapsible="true" :level="1" class="mb-2">
+        <!-- Context has >1 task — wrap in context GroupContainer with motif sidebar -->
+        <div v-else class="relative">
+          <div
+            v-if="ctx.contextSubject && contextMotifs[ctx.contextSubject]"
+            class="absolute left-0 top-0 bottom-0 w-0.5 pointer-events-none"
+            :style="{ background: `var(--motif-${contextMotifs[ctx.contextSubject]})` }"
+          />
+        <GroupContainer :label="ctx.label" :collapsible="true" :level="1" class="mb-2 group/ctx">
+          <template #header-right>
+            <div
+              v-if="ctx.contextSubject"
+              data-testid="context-motif-picker"
+              class="opacity-0 group-hover/ctx:opacity-100 transition-opacity ml-1"
+              @click.stop>
+              <MotifPicker
+                :model-value="contextMotifs[ctx.contextSubject] ?? null"
+                @update:model-value="(slot) => setContextMotif(ctx.contextSubject, slot)"
+              />
+            </div>
+          </template>
           <!-- Milestone sub-groups -->
           <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
             <!-- Milestone group has 1 task — show standalone with tags visible -->
@@ -223,6 +265,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
             + Add task
           </button>
         </GroupContainer>
+        </div>
       </template>
     </div>
 
