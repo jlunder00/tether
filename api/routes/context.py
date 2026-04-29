@@ -6,6 +6,7 @@ from db.pg_queries import (
     rename_context_subject,
 )
 from db.pool_middleware import get_db_conn
+from db.pg_queries._motif import VALID_MOTIFS
 from api.ws import manager
 from api.auth import auth_dependency
 
@@ -34,7 +35,13 @@ async def get_context(subject: str, _auth=Depends(auth_dependency),
 async def put_context(subject: str, body: dict, request: Request,
                       _auth=Depends(auth_dependency),
                       conn: asyncpg.Connection = Depends(get_db_conn)):
-    await upsert_context_entry(conn, subject, body.get("body", ""))
+    motif = body.get("motif")
+    if motif is not None and motif not in VALID_MOTIFS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid motif: {motif!r}. Must be one of {sorted(VALID_MOTIFS)}",
+        )
+    await upsert_context_entry(conn, subject, body.get("body", ""), motif=motif)
     await manager.broadcast({"type": "context_updated"}, request.state.user_id)
     return {"ok": True}
 
