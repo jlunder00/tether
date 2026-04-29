@@ -338,7 +338,7 @@ async function linkTelegram() {
               <button
                 @click="linkTelegram"
                 :disabled="telegramStatus === 'loading' || !telegramCode.trim()"
-                class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-[--fg-1] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
               >
                 {{ telegramStatus === 'loading' ? '…' : 'Link' }}
               </button>
@@ -424,7 +424,7 @@ async function linkTelegram() {
             <button
               @click="saveArchiveSettings"
               :disabled="archiveStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-[--fg-1] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ archiveStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>
@@ -538,7 +538,7 @@ async function linkTelegram() {
             <button
               @click="saveLLMConfig"
               :disabled="llmStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-[--fg-1] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ llmStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>

@@ -96,7 +96,8 @@ async function logout() {
 
         <button @click="toggleMode"
                 class="text-[--fg-3] hover:text-[--fg-1] transition-colors p-1.5 rounded-lg hover:bg-[--bg-elev-3] text-sm leading-none"
-                :title="activeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
+                :title="activeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+                :aria-label="activeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
           <span v-if="activeMode === 'dark'">☀</span>
           <span v-else>☾</span>
         </button>
