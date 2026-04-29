@@ -6,9 +6,15 @@ import { loadPremiumThemes, unloadPremiumThemes } from './composables/usePremium
 import BotChat from './components/BotChat.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 import ThemeDrawer from './components/ThemeDrawer.vue'
+import { useTheme } from './composables/useTheme'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const { activeMode, setMode } = useTheme()
+
+function toggleMode() {
+  setMode(activeMode.value === 'dark' ? 'light' : 'dark')
+}
 
 // Load premium theme CSS once the user is known to be authenticated.
 // isPaid is always false today; this fires when backend adds the field.
@@ -88,10 +94,17 @@ async function logout() {
           Chat
         </button>
 
+        <button @click="toggleMode"
+                class="text-[--fg-3] hover:text-[--fg-1] transition-colors p-1.5 rounded-lg hover:bg-[--bg-elev-3] text-sm leading-none"
+                :title="activeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'">
+          <span v-if="activeMode === 'dark'">☀</span>
+          <span v-else>☾</span>
+        </button>
+
         <button
           @click="themeDrawerOpen = true"
           data-testid="theme-drawer-trigger"
-          class="text-white/40 hover:text-white/80 transition-colors p-1.5 rounded-lg hover:bg-white/10"
+          class="text-[--fg-4] hover:text-[--fg-2] transition-colors p-1.5 rounded-lg hover:bg-[--bg-elev-3]"
           title="Theme"
           aria-label="Open theme picker"
         >
