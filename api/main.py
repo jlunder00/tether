@@ -31,6 +31,7 @@ from api.routes import meetings as meetings_routes
 from api.routes import integrations as integrations_routes
 from api.routes import api_keys as api_keys_routes
 from api.routes import events as events_routes
+from api.routes import preferences as preferences_routes
 from api.ws import manager
 from api.auth import auth_dependency, decode_jwt
 from api.limiter import limiter
@@ -158,6 +159,7 @@ def create_app(lifespan_override=None) -> FastAPI:
     app.include_router(integrations_routes.router, prefix="/api")
     app.include_router(api_keys_routes.router, prefix="/api")
     app.include_router(events_routes.router, prefix="/api")
+    app.include_router(preferences_routes.router, prefix="/api")
 
     # --- Premium plugin hook ---
     try:

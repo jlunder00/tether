@@ -51,6 +51,7 @@ def _safe_user(user: dict) -> dict:
         "username": user["username"],
         "email": user["email"],
         "is_admin": bool(user["is_admin"]),
+        "is_paid": cfg.IS_COMMUNITY_EDITION,
     }
 
 
@@ -161,6 +162,7 @@ async def me(request: Request, _auth=Depends(auth_dependency)):
         "user_id": request.state.user_id,
         "username": request.state.username,
         "is_admin": request.state.is_admin,
+        "is_paid": cfg.IS_COMMUNITY_EDITION,
     }
 
 
