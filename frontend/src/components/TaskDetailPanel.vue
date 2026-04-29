@@ -10,6 +10,7 @@ import { useMilestoneStore } from '../stores/milestones'
 import { useAnchorStore } from '../stores/anchors'
 import { useBacklogStore } from '../stores/backlog'
 import { useEventStore } from '../stores/events'
+import { useTasksStore } from '../stores/tasks'
 import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
@@ -26,6 +27,7 @@ const milestoneStore = useMilestoneStore()
 const anchorStore = useAnchorStore()
 const backlogStore = useBacklogStore()
 const eventStore = useEventStore()
+const tasksStore = useTasksStore()
 
 // Calendar event linked to this task, OR the event itself when props.taskId is an event ID
 // (standalone events opened via kind:'event' in SlideOverStack pass event.id as taskId).
@@ -409,6 +411,75 @@ function onColorReset() {
   }
 }
 
+// ── Anchor-task recurrence (no calendar event) ──────────────────────────────
+// For anchor tasks (anchor_id set, no start_time), RecurrencePicker emits
+// update:modelValue.  If the task is already a recurring master, we gate
+// through RecurrenceEditDialog first; otherwise we PATCH immediately.
+
+// Pending rrule value buffered while the scope dialog is open.
+const pendingAnchorRrule = ref<string | null | undefined>(undefined)
+
+// Controls the recurrence-scope dialog for rrule changes on recurring masters.
+const showAnchorScopeDialog = ref(false)
+
+// Controls the delete-scope dialog for recurring master deletes.
+const showAnchorDeleteDialog = ref(false)
+
+/** Called when RecurrencePicker emits update:modelValue for anchor tasks. */
+async function onAnchorRecurrenceChange(rrule: string | null) {
+  if (!task.value) return
+  if (task.value.is_recurring_master) {
+    // Gate behind scope dialog — don't PATCH until user confirms
+    pendingAnchorRrule.value = rrule
+    showAnchorScopeDialog.value = true
+  } else {
+    await tasksStore.setTaskRrule(props.taskId, rrule)
+    await planStore.fetchPlan()
+  }
+}
+
+/** Called when anchor recurrence scope dialog confirms. */
+async function onAnchorScopeConfirm(_scope: RecurrenceEditScope) {
+  showAnchorScopeDialog.value = false
+  const rrule = pendingAnchorRrule.value ?? null
+  pendingAnchorRrule.value = undefined
+  await tasksStore.setTaskRrule(props.taskId, rrule)
+  await planStore.fetchPlan()
+}
+
+/** Called when anchor recurrence scope dialog cancels. */
+function onAnchorScopeCancel() {
+  showAnchorScopeDialog.value = false
+  pendingAnchorRrule.value = undefined
+}
+
+/** Called when the delete button is clicked for anchor tasks. */
+async function onDeleteAnchorTask() {
+  if (!task.value) return
+  if (task.value.is_recurring_master) {
+    // Gate through scope dialog for recurring master deletes
+    showAnchorDeleteDialog.value = true
+  } else {
+    await tasksStore.deleteTask(props.taskId)
+    popPanel()
+    await planStore.fetchPlan()
+  }
+}
+
+/** Called when anchor delete scope dialog confirms. */
+async function onAnchorDeleteConfirm(scope: RecurrenceEditScope) {
+  showAnchorDeleteDialog.value = false
+  const originalDate = task.value?.original_date
+  await tasksStore.deleteTask(props.taskId, scope, originalDate)
+  popPanel()
+  await planStore.fetchPlan()
+}
+
+/** Called when anchor delete scope dialog cancels. */
+function onAnchorDeleteCancel() {
+  showAnchorDeleteDialog.value = false
+}
+
 onMounted(async () => {
   if (!planStore.plan) await planStore.fetchPlan()
   if (!milestoneStore.all.length) await milestoneStore.fetchAll()
@@ -582,6 +653,15 @@ onMounted(async () => {
                 @cancel="onColorScopeCancel"
               />
             </div>
+          </template>
+          <template v-else-if="task?.anchor_id && !task?.start_time">
+            <!-- Anchor task (not on calendar): show recurrence picker -->
+            <div class="text-xs text-white/30 italic mb-1">Anchor task — drag to calendar to schedule</div>
+            <RecurrencePicker
+              :model-value="task.rrule ?? null"
+              :start-time="''"
+              @update:model-value="onAnchorRecurrenceChange"
+            />
           </template>
           <template v-else>
             <div class="text-xs text-white/30 italic">Not on calendar — drag it onto the time grid to schedule</div>
@@ -828,8 +908,35 @@ onMounted(async () => {
 
         <!-- Delete -->
         <div class="mt-auto pt-4 border-t border-white/10">
-          <button @click="deleteTask" class="text-red-400 hover:text-red-300 text-sm">Delete task</button>
+          <button
+            v-if="task?.anchor_id && !task?.start_time"
+            data-testid="delete-task-btn"
+            @click="onDeleteAnchorTask"
+            class="text-red-400 hover:text-red-300 text-sm">Delete task</button>
+          <button
+            v-else
+            data-testid="delete-task-btn"
+            @click="deleteTask"
+            class="text-red-400 hover:text-red-300 text-sm">Delete task</button>
         </div>
+
+        <!-- Scope dialog for anchor-task rrule edits (teleported to body) -->
+        <RecurrenceEditDialog
+          :visible="showAnchorScopeDialog"
+          mode="task"
+          action="edit"
+          @confirm="onAnchorScopeConfirm"
+          @cancel="onAnchorScopeCancel"
+        />
+
+        <!-- Scope dialog for anchor-task deletes (teleported to body) -->
+        <RecurrenceEditDialog
+          :visible="showAnchorDeleteDialog"
+          mode="task"
+          action="delete"
+          @confirm="onAnchorDeleteConfirm"
+          @cancel="onAnchorDeleteCancel"
+        />
 
       </template>
   </div>
