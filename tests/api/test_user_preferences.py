@@ -93,3 +93,27 @@ async def test_auth_me_is_paid_true_for_premium_plan(api_client, conn):
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
     assert resp.json()["is_paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_auth_me_is_paid_false_for_cancelled_premium(api_client, conn):
+    """A premium subscription with status!='active' does not grant paid access."""
+    await conn.execute(
+        "INSERT INTO subscriptions (user_id, plan, status) VALUES ($1::uuid, 'premium', 'cancelled')",
+        TEST_USER_ID,
+    )
+    resp = await api_client.get("/auth/me")
+    assert resp.status_code == 200
+    assert resp.json()["is_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_user_is_paid_raises_without_rls_context(conn):
+    """get_user_is_paid raises RuntimeError when called on an unscoped connection,
+    so a future caller that forgets to pass a user-scoped conn fails loudly."""
+    from db.pg_queries import get_user_is_paid
+
+    # Reset the RLS context that the conn fixture set, simulating an unscoped conn.
+    await conn.execute("SELECT set_config('app.current_user_id', '', true)")
+    with pytest.raises(RuntimeError, match="user-scoped connection"):
+        await get_user_is_paid(conn)
