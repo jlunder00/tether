@@ -18,6 +18,15 @@ export interface Task {
   blocked_by: string[]
   context_subject: string | null
   context_node_id: string | null
+  // Scheduling timestamps (set when task is promoted to a calendar event)
+  start_time?: string | null
+  end_time?: string | null
+  // Anchor association — set for plan tasks; null for backlog
+  anchor_id?: string | null
+  // Recurrence fields — anchor-recurring tasks only
+  rrule?: string | null
+  is_recurring_master?: boolean
+  original_date?: string
 }
 
 export interface AnchorPlan { tasks: Task[]; notes: string }
