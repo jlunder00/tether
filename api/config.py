@@ -52,5 +52,5 @@ VAULT_KEY_B64: str = config.get("vault.key", default="")
 # Encode to bytes for Fernet (it expects the base64 string as bytes, not raw bytes)
 VAULT_KEY: bytes | None = VAULT_KEY_B64.encode() if VAULT_KEY_B64 else None
 
-import os as _os
-IS_COMMUNITY_EDITION: bool = _os.environ.get("TETHER_COMMUNITY_EDITION", "").lower() == "true"
+# Community Edition flag — self-hosters set TETHER_COMMUNITY_EDITION=true to unlock all paid features
+IS_COMMUNITY_EDITION: bool = os.environ.get("TETHER_COMMUNITY_EDITION", "").lower() == "true"

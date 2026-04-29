@@ -45,8 +45,11 @@ async def test_patch_preferences_mode(api_client, conn):
 
 @pytest.mark.asyncio
 async def test_auth_me_includes_is_paid(api_client, conn):
-    """GET /auth/me response includes is_paid field."""
+    """GET /auth/me response includes is_paid as a bool (False when TETHER_COMMUNITY_EDITION not set)."""
     resp = await api_client.get("/auth/me")
     assert resp.status_code == 200
     data = resp.json()
     assert "is_paid" in data
+    assert isinstance(data["is_paid"], bool)
+    # In test env TETHER_COMMUNITY_EDITION is not set → False
+    assert data["is_paid"] is False
