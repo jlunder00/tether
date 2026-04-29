@@ -710,6 +710,61 @@
   --type-voice:   sharp;
 }
 
+[data-theme="solstice"][data-mode="light"] {
+  --bg-canvas:       #EAF2F5;
+  --bg-canvas-veil:  rgba(234, 242, 245, 0.85);
+  --bg-elev-1:       rgba(11, 40, 56, 0.035);
+  --bg-elev-2:       rgba(11, 40, 56, 0.06);
+  --bg-elev-3:       rgba(11, 40, 56, 0.10);
+  --bg-elev-4:       rgba(11, 40, 56, 0.18);
+  --bg-popover:      #FFFFFF;
+  --bg-input:        #FFFFFF;
+
+  --fg-1: #0B2028;
+  --fg-2: rgba(11, 32, 40, 0.88);
+  --fg-3: rgba(11, 32, 40, 0.66);
+  --fg-4: rgba(11, 32, 40, 0.50);
+  --fg-5: rgba(11, 32, 40, 0.36);
+  --fg-6: rgba(11, 32, 40, 0.24);
+  --fg-7: rgba(11, 32, 40, 0.14);
+
+  --border-1:     rgba(11, 32, 40, 0.12);
+  --border-2:     rgba(11, 32, 40, 0.24);
+  --border-soft:  rgba(11, 32, 40, 0.06);
+  --border-input: rgba(11, 32, 40, 0.22);
+
+  --accent:       #1F7A98;
+  --accent-soft:  rgba(31, 122, 152, 0.16);
+  --accent-veil:  rgba(31, 122, 152, 0.08);
+  --accent-fg:    #FFFFFF;
+
+  --line-color:    #B8CCD3;
+  --line-glow:     rgba(31, 122, 152, 0.30);
+  --line-strength: 1.5px;
+  --node-fill:     #EAF2F5;
+  --node-now:      #1F7A98;
+  --node-done:     #B8CCD3;
+
+  --status-todo-bg:    rgba(11, 32, 40, 0.06);
+  --status-todo-fg:    rgba(11, 32, 40, 0.58);
+  --status-doing-bg:   rgba(31, 122, 152, 0.14);
+  --status-doing-fg:   #155A73;
+  --status-doing-card: #DEEBF0;
+  --status-done-bg:    rgba(60, 140, 100, 0.16);
+  --status-done-fg:    #246B47;
+  --status-done-card:  #DCEDE2;
+  --status-skip-bg:    rgba(196, 130, 36, 0.16);
+  --status-skip-fg:    #7E5210;
+  --status-skip-card:  #F1E7D2;
+  --status-block-bg:   rgba(196, 70, 70, 0.14);
+  --status-block-fg:   #8E2424;
+  --status-block-card: #F2DEDE;
+
+  --radius-sharp: 3px;
+  --radius-soft:  10px;
+  --type-voice:   sharp;
+}
+
 /* DRACULA-TETHER — homage to Dracula, with the Tether line. Devs love this. */
 [data-theme="dracula"],
 [data-theme="dracula"][data-mode="dark"] {
@@ -760,6 +815,62 @@
   --status-block-bg:   rgba(255, 85, 85, 0.16);    /* red */
   --status-block-fg:   #FF5555;
   --status-block-card: #2E1B1F;
+
+  --radius-sharp: 3px;
+  --radius-soft:  8px;
+  --type-voice:   terminal;
+  --font-display: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans:    "Inter", system-ui, sans-serif;
+}
+
+[data-theme="dracula"][data-mode="light"] {
+  --bg-canvas:       #F8F8F2;
+  --bg-canvas-veil:  rgba(248, 248, 242, 0.85);
+  --bg-elev-1:       rgba(40, 42, 54, 0.04);
+  --bg-elev-2:       rgba(40, 42, 54, 0.07);
+  --bg-elev-3:       rgba(40, 42, 54, 0.11);
+  --bg-elev-4:       rgba(40, 42, 54, 0.18);
+  --bg-popover:      #FFFFFF;
+  --bg-input:        #FFFFFF;
+
+  --fg-1: #282A36;
+  --fg-2: rgba(40, 42, 54, 0.88);
+  --fg-3: rgba(40, 42, 54, 0.68);
+  --fg-4: rgba(40, 42, 54, 0.52);
+  --fg-5: rgba(40, 42, 54, 0.38);
+  --fg-6: rgba(40, 42, 54, 0.26);
+  --fg-7: rgba(40, 42, 54, 0.14);
+
+  --border-1:     rgba(40, 42, 54, 0.12);
+  --border-2:     rgba(40, 42, 54, 0.24);
+  --border-soft:  rgba(40, 42, 54, 0.06);
+  --border-input: rgba(40, 42, 54, 0.22);
+
+  --accent:       #6B3DCC;
+  --accent-soft:  rgba(107, 61, 204, 0.16);
+  --accent-veil:  rgba(107, 61, 204, 0.08);
+  --accent-fg:    #FFFFFF;
+
+  --line-color:    #C8C2D8;
+  --line-glow:     rgba(107, 61, 204, 0.30);
+  --node-fill:     #F8F8F2;
+  --node-now:      #6B3DCC;
+  --node-done:     #C8C2D8;
+
+  --status-todo-bg:    rgba(40, 42, 54, 0.06);
+  --status-todo-fg:    rgba(40, 42, 54, 0.58);
+  --status-doing-bg:   rgba(0, 145, 175, 0.14);   /* cyan, darkened from #8BE9FD */
+  --status-doing-fg:   #006B86;
+  --status-doing-card: #D9EEF3;
+  --status-done-bg:    rgba(40, 160, 80, 0.16);   /* green, darkened from #50FA7B */
+  --status-done-fg:    #1F7A3D;
+  --status-done-card:  #DCEFE0;
+  --status-skip-bg:    rgba(180, 140, 0, 0.16);   /* yellow, darkened from #F1FA8C */
+  --status-skip-fg:    #6F5500;
+  --status-skip-card:  #F1ECCF;
+  --status-block-bg:   rgba(220, 50, 50, 0.14);   /* red, darkened from #FF5555 */
+  --status-block-fg:   #A32020;
+  --status-block-card: #F4DEDE;
 
   --radius-sharp: 3px;
   --radius-soft:  8px;
