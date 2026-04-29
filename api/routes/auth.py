@@ -21,7 +21,8 @@ from api.oauth_state import make_signed_state, verify_signed_state
 import api.config as cfg
 import db.postgres as pg
 import db.pg_auth_queries as auth_queries
-from db.pg_queries import seed_default_anchors, seed_kanban_columns
+from db.pg_queries import seed_default_anchors, seed_kanban_columns, get_user_is_paid
+from db.pool_middleware import get_db_conn
 
 
 router = APIRouter()
@@ -45,13 +46,13 @@ def _set_auth_cookie(response: Response, token: str) -> None:
     )
 
 
-def _safe_user(user: dict) -> dict:
+def _safe_user(user: dict, is_paid: bool) -> dict:
     return {
         "user_id": user["id"],
         "username": user["username"],
         "email": user["email"],
         "is_admin": bool(user["is_admin"]),
-        "is_paid": cfg.IS_COMMUNITY_EDITION,
+        "is_paid": is_paid,
     }
 
 
@@ -100,6 +101,7 @@ async def register(body: RegisterBody, response: Response, request: Request):
         async with pg.get_conn(pool, user_id=user["id"]) as user_conn:
             await seed_default_anchors(user_conn)
             await seed_kanban_columns(user_conn)
+            is_paid = await get_user_is_paid(user_conn)
     except Exception:
         logging.getLogger(__name__).error(
             "Failed to seed defaults for new user %s — account exists but may be missing defaults",
@@ -109,7 +111,7 @@ async def register(body: RegisterBody, response: Response, request: Request):
 
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     _set_auth_cookie(response, token)
-    return _safe_user(user)
+    return _safe_user(user, is_paid)
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +139,12 @@ async def login(body: LoginBody, response: Response, request: Request):
     if not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    async with pg.get_conn(pool, user_id=user["id"]) as user_conn:
+        is_paid = await get_user_is_paid(user_conn)
+
     token = create_jwt(user["id"], user["username"], bool(user["is_admin"]))
     _set_auth_cookie(response, token)
-    return _safe_user(user)
+    return _safe_user(user, is_paid)
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +162,13 @@ async def logout(response: Response):
 # ---------------------------------------------------------------------------
 
 @router.get("/auth/me")
-async def me(request: Request, _auth=Depends(auth_dependency)):
+async def me(request: Request, _auth=Depends(auth_dependency), conn=Depends(get_db_conn)):
+    is_paid = await get_user_is_paid(conn)
     return {
         "user_id": request.state.user_id,
         "username": request.state.username,
         "is_admin": request.state.is_admin,
-        "is_paid": cfg.IS_COMMUNITY_EDITION,
+        "is_paid": is_paid,
     }
 
 

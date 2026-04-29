@@ -76,3 +76,6 @@ from db.pg_queries.journal import (
 from db.pg_queries.activity import (
     acquire_lease, release_lease, heartbeat_lease, get_active_writers,
 )
+from db.pg_queries.subscriptions import (
+    get_user_is_paid,
+)
