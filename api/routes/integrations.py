@@ -141,14 +141,13 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
             args=["setup-token"],
             env=env,
             dimensions=(24, 220),
-            timeout=15,
         )
     except Exception:
         logger.exception("pexpect.spawn failed for claude setup-token")
         return None, None
 
     buf = ""
-    deadline = time.time() + 15
+    deadline = time.time() + 30
     while time.time() < deadline:
         try:
             chunk = child.read_nonblocking(4096, timeout=1)
@@ -201,9 +200,9 @@ def _complete_pexpect_sync(child, code: str) -> str:
     except Exception:
         pass
 
-    if child.exitstatus not in (0, None):
-        return "failed"
-    return "ok"
+    # exitstatus is None when the process was killed by a signal — treat that as
+    # failure, not success.  Only exitstatus == 0 means the setup succeeded.
+    return "ok" if child.exitstatus == 0 else "failed"
 
 
 async def _sweep_expired_setups() -> None:
@@ -611,7 +610,9 @@ async def anthropic_complete(
     """Submit the OAuth code to the waiting pexpect child and persist credentials."""
     user_id = request.state.user_id
 
-    entry = _pending_setups.get(user_id)
+    # Pop atomically: prevents two concurrent /complete calls from racing on the
+    # same child process or temp dir.
+    entry = _pending_setups.pop(user_id, None)
     if entry is None:
         raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
 
@@ -622,20 +623,16 @@ async def anthropic_complete(
     result = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
 
     if result == "error":
-        _pending_setups.pop(user_id, None)
         asyncio.create_task(_reap_child(child))
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
 
     if result == "timeout":
-        _pending_setups.pop(user_id, None)
         asyncio.create_task(_reap_child(child))
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
     # "ok" or "failed" — child already reaped by _complete_pexpect_sync.
-    _pending_setups.pop(user_id, None)
-
     if result == "failed":
         shutil.rmtree(temp_dir, ignore_errors=True)
         return {"ok": False, "error": "setup failed"}
