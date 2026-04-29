@@ -124,16 +124,16 @@ async def delete_task(
         raise HTTPException(status_code=404)
     if task.get("rrule") and task.get("anchor_id"):
         # Anchor-recurring master — honour scope
-        if scope == "this":
-            if not original_date:
-                raise HTTPException(status_code=422, detail="original_date required for scope=this")
-            await delete_anchor_occurrence(conn, task_uuid, original_date)
-        elif scope == "this_and_future":
-            if not original_date:
-                raise HTTPException(status_code=422, detail="original_date required for scope=this_and_future")
-            await truncate_anchor_series(conn, task_uuid, original_date)
-        else:
-            async with conn.transaction():
+        async with conn.transaction():
+            if scope == "this":
+                if not original_date:
+                    raise HTTPException(status_code=422, detail="original_date required for scope=this")
+                await delete_anchor_occurrence(conn, task_uuid, original_date)
+            elif scope == "this_and_future":
+                if not original_date:
+                    raise HTTPException(status_code=422, detail="original_date required for scope=this_and_future")
+                await truncate_anchor_series(conn, task_uuid, original_date)
+            else:
                 await delete_task_by_uuid(conn, task_uuid)
     else:
         async with conn.transaction():
