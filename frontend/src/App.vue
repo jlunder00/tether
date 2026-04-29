@@ -14,7 +14,7 @@ const router = useRouter()
 watch(
   () => authStore.user,
   (user) => {
-    if (user && (user as any).is_paid) {
+    if (user?.is_paid) {
       // token not available client-side via cookie auth — pass empty string;
       // the endpoint will use session cookie instead when implemented
       loadPremiumThemes('')

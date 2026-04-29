@@ -74,7 +74,7 @@ describe('loadPremiumThemes', () => {
     expect(document.getElementById('premium-themes')).toBeNull()
   })
 
-  it('sends Authorization header with bearer token', async () => {
+  it('sends Authorization header with bearer token when token is provided', async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ themes: [] }),
@@ -87,7 +87,27 @@ describe('loadPremiumThemes', () => {
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/premium/themes',
       expect.objectContaining({
+        credentials: 'include',
         headers: { Authorization: `Bearer ${fakeToken}` },
+      }),
+    )
+  })
+
+  it('omits Authorization header when token is empty string', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ themes: [] }),
+    } as Response)
+    vi.stubGlobal('fetch', mockFetch)
+
+    const { loadPremiumThemes } = await import('../usePremiumThemes')
+    await loadPremiumThemes('')
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/premium/themes',
+      expect.objectContaining({
+        credentials: 'include',
+        headers: {},
       }),
     )
   })
