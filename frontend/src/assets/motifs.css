@@ -1,0 +1,773 @@
+/* =========================================================================
+   Tether — Motif Palettes
+   --------------------------------------------------------------------------
+   Each theme defines 8 named "motif slots" — semantic color roles that
+   anchors, tasks, and events are tagged with. The slot name is the same
+   across themes (e.g. anchor.motif = 'focus'); the hue is theme-defined.
+
+   This is what lets a user change themes without their schedule devolving
+   into clashing colors: Deep Work tagged `focus` is coral in Tether,
+   rust in Horizon, cyan in Terminal — but always semantically "focus".
+
+   Slots:
+     1. anchor   — the brand accent (matches --accent for that theme)
+     2. focus    — sharp, attention-demanding work
+     3. calm     — low-stim, restful
+     4. energy   — bright, active
+     5. care     — warm, body/health
+     6. flow     — cool, liquid, creative
+     7. dusk     — end-of-day, soft
+     8. quiet    — neutral fallback
+
+   Per slot, every theme MUST define:
+     --motif-{slot}        — the solid color (used on lines, text, ticks)
+     --motif-{slot}-band   — the calendar band fill (canvas-tinted)
+     --motif-{slot}-veil   — softer than band, for hovers / pill bg
+     --motif-{slot}-fg     — readable text on top of solid -motif
+
+   The "band" is the most important: it's the wide vertical stripe that
+   colors each anchor's time-segment in the calendar. It needs to be
+   *distinctly different from the canvas* but *quiet enough* not to fight
+   the content sitting on top.
+
+   Rules of construction (followed for every theme below):
+     - bands are always 6–10% alpha over canvas, tuned by hand per hue
+     - veils are 14–22% alpha (used on hovers, pill backgrounds)
+     - solids are 1.0 alpha; should pass 4.5:1 against canvas
+     - fg is canvas color (dark themes) or near-black (light themes)
+   ========================================================================= */
+
+
+/* =========================================================================
+   1. TETHER  (dark indigo / brand default)
+   ========================================================================= */
+:root,
+[data-theme="tether"][data-mode="dark"],
+[data-theme="tether"]:not([data-mode]) {
+  --motif-anchor:        #7C8AFF;  /* indigo — matches --accent */
+  --motif-anchor-band:   rgba(124, 138, 255, 0.08);
+  --motif-anchor-veil:   rgba(124, 138, 255, 0.18);
+  --motif-anchor-fg:     #0E1117;
+
+  --motif-focus:         #FF8B6E;  /* coral */
+  --motif-focus-band:    rgba(255, 139, 110, 0.07);
+  --motif-focus-veil:    rgba(255, 139, 110, 0.16);
+  --motif-focus-fg:      #0E1117;
+
+  --motif-calm:          #6BA8C4;  /* slate-blue */
+  --motif-calm-band:     rgba(107, 168, 196, 0.07);
+  --motif-calm-veil:     rgba(107, 168, 196, 0.16);
+  --motif-calm-fg:       #0E1117;
+
+  --motif-energy:        #C8E060;  /* yellow-green */
+  --motif-energy-band:   rgba(200, 224, 96, 0.07);
+  --motif-energy-veil:   rgba(200, 224, 96, 0.16);
+  --motif-energy-fg:     #0E1117;
+
+  --motif-care:          #F299B7;  /* warm pink */
+  --motif-care-band:     rgba(242, 153, 183, 0.07);
+  --motif-care-veil:     rgba(242, 153, 183, 0.16);
+  --motif-care-fg:       #0E1117;
+
+  --motif-flow:          #5FE3D5;  /* cyan */
+  --motif-flow-band:     rgba(95, 227, 213, 0.07);
+  --motif-flow-veil:     rgba(95, 227, 213, 0.16);
+  --motif-flow-fg:       #0E1117;
+
+  --motif-dusk:          #C09BE5;  /* plum */
+  --motif-dusk-band:     rgba(192, 155, 229, 0.07);
+  --motif-dusk-veil:     rgba(192, 155, 229, 0.16);
+  --motif-dusk-fg:       #0E1117;
+
+  --motif-quiet:         #9CA3B0;  /* slate gray */
+  --motif-quiet-band:    rgba(156, 163, 176, 0.06);
+  --motif-quiet-veil:    rgba(156, 163, 176, 0.14);
+  --motif-quiet-fg:      #0E1117;
+}
+
+[data-theme="tether"][data-mode="light"] {
+  --motif-anchor:        #4F58D9;
+  --motif-anchor-band:   rgba(79, 88, 217, 0.06);
+  --motif-anchor-veil:   rgba(79, 88, 217, 0.14);
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #D9522A;
+  --motif-focus-band:    rgba(217, 82, 42, 0.06);
+  --motif-focus-veil:    rgba(217, 82, 42, 0.14);
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #3F7FA8;
+  --motif-calm-band:     rgba(63, 127, 168, 0.06);
+  --motif-calm-veil:     rgba(63, 127, 168, 0.14);
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #5E8E1E;
+  --motif-energy-band:   rgba(94, 142, 30, 0.07);
+  --motif-energy-veil:   rgba(94, 142, 30, 0.16);
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #B85775;
+  --motif-care-band:     rgba(184, 87, 117, 0.06);
+  --motif-care-veil:     rgba(184, 87, 117, 0.14);
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #1F9B8E;
+  --motif-flow-band:     rgba(31, 155, 142, 0.07);
+  --motif-flow-veil:     rgba(31, 155, 142, 0.15);
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #7A5BAE;
+  --motif-dusk-band:     rgba(122, 91, 174, 0.06);
+  --motif-dusk-veil:     rgba(122, 91, 174, 0.14);
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #6E7280;
+  --motif-quiet-band:    rgba(110, 114, 128, 0.05);
+  --motif-quiet-veil:    rgba(110, 114, 128, 0.12);
+  --motif-quiet-fg:      #FFFFFF;
+}
+
+
+/* =========================================================================
+   2. HORIZON  (warm dark / paper at night)
+   ========================================================================= */
+[data-theme="horizon"][data-mode="dark"],
+[data-theme="horizon"]:not([data-mode]) {
+  --motif-anchor:        #D4A85F;  /* amber — matches --accent */
+  --motif-anchor-band:   rgba(212, 168, 95, 0.08);
+  --motif-anchor-veil:   rgba(212, 168, 95, 0.18);
+  --motif-anchor-fg:     #161512;
+
+  --motif-focus:         #C46A3B;  /* rust */
+  --motif-focus-band:    rgba(196, 106, 59, 0.08);
+  --motif-focus-veil:    rgba(196, 106, 59, 0.18);
+  --motif-focus-fg:      #161512;
+
+  --motif-calm:          #A8B488;  /* sage */
+  --motif-calm-band:     rgba(168, 180, 136, 0.07);
+  --motif-calm-veil:     rgba(168, 180, 136, 0.16);
+  --motif-calm-fg:       #161512;
+
+  --motif-energy:        #B8A435;  /* olive */
+  --motif-energy-band:   rgba(184, 164, 53, 0.08);
+  --motif-energy-veil:   rgba(184, 164, 53, 0.18);
+  --motif-energy-fg:     #161512;
+
+  --motif-care:          #C2554E;  /* brick red */
+  --motif-care-band:     rgba(194, 85, 78, 0.08);
+  --motif-care-veil:     rgba(194, 85, 78, 0.18);
+  --motif-care-fg:       #161512;
+
+  --motif-flow:          #6BB0A8;  /* teal */
+  --motif-flow-band:     rgba(107, 176, 168, 0.07);
+  --motif-flow-veil:     rgba(107, 176, 168, 0.16);
+  --motif-flow-fg:       #161512;
+
+  --motif-dusk:          #B58AAB;  /* mauve */
+  --motif-dusk-band:     rgba(181, 138, 171, 0.07);
+  --motif-dusk-veil:     rgba(181, 138, 171, 0.16);
+  --motif-dusk-fg:       #161512;
+
+  --motif-quiet:         #978B72;  /* sand */
+  --motif-quiet-band:    rgba(151, 139, 114, 0.06);
+  --motif-quiet-veil:    rgba(151, 139, 114, 0.14);
+  --motif-quiet-fg:      #161512;
+}
+
+[data-theme="horizon"][data-mode="light"] {
+  --motif-anchor:        #A87330;
+  --motif-anchor-band:   rgba(168, 115, 48, 0.07);
+  --motif-anchor-veil:   rgba(168, 115, 48, 0.16);
+  --motif-anchor-fg:     #FBF6E8;
+
+  --motif-focus:         #9C4520;
+  --motif-focus-band:    rgba(156, 69, 32, 0.07);
+  --motif-focus-veil:    rgba(156, 69, 32, 0.16);
+  --motif-focus-fg:      #FBF6E8;
+
+  --motif-calm:          #6B8050;
+  --motif-calm-band:     rgba(107, 128, 80, 0.07);
+  --motif-calm-veil:     rgba(107, 128, 80, 0.16);
+  --motif-calm-fg:       #FBF6E8;
+
+  --motif-energy:        #8C7720;
+  --motif-energy-band:   rgba(140, 119, 32, 0.08);
+  --motif-energy-veil:   rgba(140, 119, 32, 0.18);
+  --motif-energy-fg:     #FBF6E8;
+
+  --motif-care:          #8E2E2A;
+  --motif-care-band:     rgba(142, 46, 42, 0.07);
+  --motif-care-veil:     rgba(142, 46, 42, 0.16);
+  --motif-care-fg:       #FBF6E8;
+
+  --motif-flow:          #2F8276;
+  --motif-flow-band:     rgba(47, 130, 118, 0.07);
+  --motif-flow-veil:     rgba(47, 130, 118, 0.16);
+  --motif-flow-fg:       #FBF6E8;
+
+  --motif-dusk:          #7A487B;
+  --motif-dusk-band:     rgba(122, 72, 123, 0.07);
+  --motif-dusk-veil:     rgba(122, 72, 123, 0.16);
+  --motif-dusk-fg:       #FBF6E8;
+
+  --motif-quiet:         #6A604D;
+  --motif-quiet-band:    rgba(106, 96, 77, 0.05);
+  --motif-quiet-veil:    rgba(106, 96, 77, 0.12);
+  --motif-quiet-fg:      #FBF6E8;
+}
+
+
+/* =========================================================================
+   3. CONTRAST  (WCAG AAA — strong fully-saturated bands)
+   ========================================================================= */
+[data-theme="contrast"][data-mode="dark"],
+[data-theme="contrast"]:not([data-mode]) {
+  --motif-anchor:        #FFD43B;  /* yellow — accent */
+  --motif-anchor-band:   #1F1A00;
+  --motif-anchor-veil:   #4A3A00;
+  --motif-anchor-fg:     #000000;
+
+  --motif-focus:         #FF6B6B;  /* red */
+  --motif-focus-band:    #1F0808;
+  --motif-focus-veil:    #4A1414;
+  --motif-focus-fg:      #000000;
+
+  --motif-calm:          #6FC0FF;  /* blue */
+  --motif-calm-band:     #001A2A;
+  --motif-calm-veil:     #00355A;
+  --motif-calm-fg:       #000000;
+
+  --motif-energy:        #6FE38B;  /* green */
+  --motif-energy-band:   #062810;
+  --motif-energy-veil:   #0E4A1F;
+  --motif-energy-fg:     #000000;
+
+  --motif-care:          #FF8FB1;  /* pink */
+  --motif-care-band:     #1F080F;
+  --motif-care-veil:     #4A1428;
+  --motif-care-fg:       #000000;
+
+  --motif-flow:          #5FF7E0;  /* cyan */
+  --motif-flow-band:     #002A26;
+  --motif-flow-veil:     #00524A;
+  --motif-flow-fg:       #000000;
+
+  --motif-dusk:          #C99CFF;  /* purple */
+  --motif-dusk-band:     #1A0A2A;
+  --motif-dusk-veil:     #361A55;
+  --motif-dusk-fg:       #000000;
+
+  --motif-quiet:         #B0B0B0;
+  --motif-quiet-band:    #1A1A1A;
+  --motif-quiet-veil:    #2A2A2A;
+  --motif-quiet-fg:      #000000;
+}
+
+[data-theme="contrast"][data-mode="light"] {
+  --motif-anchor:        #0030B0;
+  --motif-anchor-band:   #E8ECF8;
+  --motif-anchor-veil:   #D6DDF5;
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #B30000;
+  --motif-focus-band:    #FAEAEA;
+  --motif-focus-veil:    #F5D5D5;
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #00538C;
+  --motif-calm-band:     #E2EFFA;
+  --motif-calm-veil:     #C8E0F5;
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #1A6E1A;
+  --motif-energy-band:   #E0F0E0;
+  --motif-energy-veil:   #C0E5C0;
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #A02060;
+  --motif-care-band:     #FAE5EE;
+  --motif-care-veil:     #F2D0E0;
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #007570;
+  --motif-flow-band:     #DFF0EE;
+  --motif-flow-veil:     #BFE2DE;
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #5C2D8F;
+  --motif-dusk-band:     #ECE2F5;
+  --motif-dusk-veil:     #D8C5EB;
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #555555;
+  --motif-quiet-band:    #EAEAEA;
+  --motif-quiet-veil:    #DADADA;
+  --motif-quiet-fg:      #FFFFFF;
+}
+
+
+/* =========================================================================
+   4. TERMINAL  (phosphor — dark and day modes)
+   ========================================================================= */
+[data-theme="terminal"][data-mode="dark"],
+[data-theme="terminal"]:not([data-mode]) {
+  --motif-anchor:        #50FA7B;  /* phosphor green — accent */
+  --motif-anchor-band:   rgba(80, 250, 123, 0.06);
+  --motif-anchor-veil:   rgba(80, 250, 123, 0.14);
+  --motif-anchor-fg:     #0A0E0A;
+
+  --motif-focus:         #8BE9FD;  /* cyan */
+  --motif-focus-band:    rgba(139, 233, 253, 0.05);
+  --motif-focus-veil:    rgba(139, 233, 253, 0.13);
+  --motif-focus-fg:      #0A0E0A;
+
+  --motif-calm:          #6FCF97;  /* dim green */
+  --motif-calm-band:     rgba(111, 207, 151, 0.05);
+  --motif-calm-veil:     rgba(111, 207, 151, 0.13);
+  --motif-calm-fg:       #0A0E0A;
+
+  --motif-energy:        #F1FA8C;  /* yellow */
+  --motif-energy-band:   rgba(241, 250, 140, 0.06);
+  --motif-energy-veil:   rgba(241, 250, 140, 0.14);
+  --motif-energy-fg:     #0A0E0A;
+
+  --motif-care:          #FF79C6;  /* magenta */
+  --motif-care-band:     rgba(255, 121, 198, 0.05);
+  --motif-care-veil:     rgba(255, 121, 198, 0.13);
+  --motif-care-fg:       #0A0E0A;
+
+  --motif-flow:          #A8E0FF;  /* sky cyan */
+  --motif-flow-band:     rgba(168, 224, 255, 0.05);
+  --motif-flow-veil:     rgba(168, 224, 255, 0.13);
+  --motif-flow-fg:       #0A0E0A;
+
+  --motif-dusk:          #BD93F9;  /* purple */
+  --motif-dusk-band:     rgba(189, 147, 249, 0.05);
+  --motif-dusk-veil:     rgba(189, 147, 249, 0.13);
+  --motif-dusk-fg:       #0A0E0A;
+
+  --motif-quiet:         #5A9A5A;
+  --motif-quiet-band:    rgba(90, 154, 90, 0.04);
+  --motif-quiet-veil:    rgba(90, 154, 90, 0.10);
+  --motif-quiet-fg:      #0A0E0A;
+}
+
+[data-theme="terminal"][data-mode="light"] {
+  --motif-anchor:        #1A6E1A;  /* dark forest green */
+  --motif-anchor-band:   rgba(26, 110, 26, 0.06);
+  --motif-anchor-veil:   rgba(26, 110, 26, 0.14);
+  --motif-anchor-fg:     #F2F1E8;
+
+  --motif-focus:         #006B7A;  /* deep cyan */
+  --motif-focus-band:    rgba(0, 107, 122, 0.05);
+  --motif-focus-veil:    rgba(0, 107, 122, 0.13);
+  --motif-focus-fg:      #F2F1E8;
+
+  --motif-calm:          #2D8552;  /* moss */
+  --motif-calm-band:     rgba(45, 133, 82, 0.05);
+  --motif-calm-veil:     rgba(45, 133, 82, 0.13);
+  --motif-calm-fg:       #F2F1E8;
+
+  --motif-energy:        #8C6E00;  /* mustard */
+  --motif-energy-band:   rgba(140, 110, 0, 0.06);
+  --motif-energy-veil:   rgba(140, 110, 0, 0.15);
+  --motif-energy-fg:     #F2F1E8;
+
+  --motif-care:          #A52A6E;  /* deep magenta */
+  --motif-care-band:     rgba(165, 42, 110, 0.05);
+  --motif-care-veil:     rgba(165, 42, 110, 0.13);
+  --motif-care-fg:       #F2F1E8;
+
+  --motif-flow:          #1F6E96;  /* slate cyan */
+  --motif-flow-band:     rgba(31, 110, 150, 0.05);
+  --motif-flow-veil:     rgba(31, 110, 150, 0.13);
+  --motif-flow-fg:       #F2F1E8;
+
+  --motif-dusk:          #5E3A8C;  /* aubergine */
+  --motif-dusk-band:     rgba(94, 58, 140, 0.05);
+  --motif-dusk-veil:     rgba(94, 58, 140, 0.13);
+  --motif-dusk-fg:       #F2F1E8;
+
+  --motif-quiet:         #4A5A4A;
+  --motif-quiet-band:    rgba(74, 90, 74, 0.04);
+  --motif-quiet-veil:    rgba(74, 90, 74, 0.10);
+  --motif-quiet-fg:      #F2F1E8;
+}
+
+
+/* =========================================================================
+   5. SOLSTICE  (cool glacial)
+   ========================================================================= */
+[data-theme="solstice"][data-mode="dark"],
+[data-theme="solstice"]:not([data-mode]) {
+  --motif-anchor:        #5FC8E6;
+  --motif-anchor-band:   rgba(95, 200, 230, 0.07);
+  --motif-anchor-veil:   rgba(95, 200, 230, 0.16);
+  --motif-anchor-fg:     #0B1418;
+
+  --motif-focus:         #FF9F7A;
+  --motif-focus-band:    rgba(255, 159, 122, 0.06);
+  --motif-focus-veil:    rgba(255, 159, 122, 0.15);
+  --motif-focus-fg:      #0B1418;
+
+  --motif-calm:          #88C4D0;
+  --motif-calm-band:     rgba(136, 196, 208, 0.06);
+  --motif-calm-veil:     rgba(136, 196, 208, 0.14);
+  --motif-calm-fg:       #0B1418;
+
+  --motif-energy:        #DCE872;
+  --motif-energy-band:   rgba(220, 232, 114, 0.07);
+  --motif-energy-veil:   rgba(220, 232, 114, 0.16);
+  --motif-energy-fg:     #0B1418;
+
+  --motif-care:          #F2A8C0;
+  --motif-care-band:     rgba(242, 168, 192, 0.06);
+  --motif-care-veil:     rgba(242, 168, 192, 0.15);
+  --motif-care-fg:       #0B1418;
+
+  --motif-flow:          #7DDFD1;
+  --motif-flow-band:     rgba(125, 223, 209, 0.07);
+  --motif-flow-veil:     rgba(125, 223, 209, 0.16);
+  --motif-flow-fg:       #0B1418;
+
+  --motif-dusk:          #BFA6E5;
+  --motif-dusk-band:     rgba(191, 166, 229, 0.06);
+  --motif-dusk-veil:     rgba(191, 166, 229, 0.15);
+  --motif-dusk-fg:       #0B1418;
+
+  --motif-quiet:         #92A8B0;
+  --motif-quiet-band:    rgba(146, 168, 176, 0.05);
+  --motif-quiet-veil:    rgba(146, 168, 176, 0.12);
+  --motif-quiet-fg:      #0B1418;
+}
+
+
+/* =========================================================================
+   6. DRACULA·TETHER  (vivid dev classic — distinctive 6-color palette)
+   ========================================================================= */
+[data-theme="dracula"][data-mode="dark"],
+[data-theme="dracula"]:not([data-mode]) {
+  --motif-anchor:        #BD93F9;  /* purple */
+  --motif-anchor-band:   rgba(189, 147, 249, 0.08);
+  --motif-anchor-veil:   rgba(189, 147, 249, 0.18);
+  --motif-anchor-fg:     #282A36;
+
+  --motif-focus:         #FF5555;  /* red */
+  --motif-focus-band:    rgba(255, 85, 85, 0.07);
+  --motif-focus-veil:    rgba(255, 85, 85, 0.16);
+  --motif-focus-fg:      #282A36;
+
+  --motif-calm:          #6272A4;  /* comment blue */
+  --motif-calm-band:     rgba(98, 114, 164, 0.10);
+  --motif-calm-veil:     rgba(98, 114, 164, 0.22);
+  --motif-calm-fg:       #F8F8F2;
+
+  --motif-energy:        #F1FA8C;  /* yellow */
+  --motif-energy-band:   rgba(241, 250, 140, 0.07);
+  --motif-energy-veil:   rgba(241, 250, 140, 0.16);
+  --motif-energy-fg:     #282A36;
+
+  --motif-care:          #FF79C6;  /* pink */
+  --motif-care-band:     rgba(255, 121, 198, 0.07);
+  --motif-care-veil:     rgba(255, 121, 198, 0.16);
+  --motif-care-fg:       #282A36;
+
+  --motif-flow:          #8BE9FD;  /* cyan */
+  --motif-flow-band:     rgba(139, 233, 253, 0.07);
+  --motif-flow-veil:     rgba(139, 233, 253, 0.16);
+  --motif-flow-fg:       #282A36;
+
+  --motif-dusk:          #FFB86C;  /* orange */
+  --motif-dusk-band:     rgba(255, 184, 108, 0.07);
+  --motif-dusk-veil:     rgba(255, 184, 108, 0.16);
+  --motif-dusk-fg:       #282A36;
+
+  --motif-quiet:         #50FA7B;  /* green — used as quiet because it's the "tether" anchor */
+  --motif-quiet-band:    rgba(80, 250, 123, 0.05);
+  --motif-quiet-veil:    rgba(80, 250, 123, 0.12);
+  --motif-quiet-fg:      #282A36;
+}
+
+
+/* =========================================================================
+   7. PAPER  (light monochrome — bands rely on warmth gradient, not hue)
+   ========================================================================= */
+[data-theme="paper"][data-mode="light"],
+[data-theme="paper"]:not([data-mode]) {
+  --motif-anchor:        #1C1C1A;  /* black — accent */
+  --motif-anchor-band:   rgba(28, 28, 26, 0.05);
+  --motif-anchor-veil:   rgba(28, 28, 26, 0.12);
+  --motif-anchor-fg:     #FAFAF7;
+
+  --motif-focus:         #5F4030;  /* warm sienna */
+  --motif-focus-band:    rgba(95, 64, 48, 0.06);
+  --motif-focus-veil:    rgba(95, 64, 48, 0.14);
+  --motif-focus-fg:      #FAFAF7;
+
+  --motif-calm:          #5A5A5A;  /* warm gray */
+  --motif-calm-band:     rgba(90, 90, 90, 0.05);
+  --motif-calm-veil:     rgba(90, 90, 90, 0.12);
+  --motif-calm-fg:       #FAFAF7;
+
+  --motif-energy:        #8A2020;  /* brick */
+  --motif-energy-band:   rgba(138, 32, 32, 0.06);
+  --motif-energy-veil:   rgba(138, 32, 32, 0.14);
+  --motif-energy-fg:     #FAFAF7;
+
+  --motif-care:          #6B3030;  /* dark sepia */
+  --motif-care-band:     rgba(107, 48, 48, 0.06);
+  --motif-care-veil:     rgba(107, 48, 48, 0.14);
+  --motif-care-fg:       #FAFAF7;
+
+  --motif-flow:          #2A4A5A;  /* steel blue */
+  --motif-flow-band:     rgba(42, 74, 90, 0.06);
+  --motif-flow-veil:     rgba(42, 74, 90, 0.14);
+  --motif-flow-fg:       #FAFAF7;
+
+  --motif-dusk:          #4A2A5A;  /* aubergine */
+  --motif-dusk-band:     rgba(74, 42, 90, 0.06);
+  --motif-dusk-veil:     rgba(74, 42, 90, 0.14);
+  --motif-dusk-fg:       #FAFAF7;
+
+  --motif-quiet:         #6A6A66;
+  --motif-quiet-band:    rgba(106, 106, 102, 0.04);
+  --motif-quiet-veil:    rgba(106, 106, 102, 0.10);
+  --motif-quiet-fg:      #FAFAF7;
+}
+
+
+/* =========================================================================
+   USAGE
+   --------------------------------------------------------------------------
+   Tag any element with [data-motif="<slot>"]. Components read the slot's
+   solid + band + veil values via local var() aliasing:
+
+       [data-motif="anchor"]  { --m: var(--motif-anchor);  --m-band: var(--motif-anchor-band); }
+       [data-motif="focus"]   { --m: var(--motif-focus);   --m-band: var(--motif-focus-band);  }
+       …etc
+
+   Then components reference --m / --m-band / --m-veil instead of --accent.
+
+   The block below sets up that aliasing once, so components don't repeat it.
+   ========================================================================= */
+/* Each motif slot publishes:
+   --m / --m-accent  the solid identity color (borders, dots, key strokes)
+   --m-band          soft tinted background (fills, day-bands, cards)
+   --m-line          mid-weight tint (separators, subtle borders)
+   --m-veil          very faint hint of color (hover states)
+   --m-fg            legible text-on-band color */
+/* =========================================================================
+   ADDITIONAL SLOTS — task / event / milestone colours
+   These extend the anchor palette for granular item colouring.
+   They don't need to represent an entire anchor's mood — they work at the
+   task / event / milestone level so users can mark individual items as
+   urgent, a launch milestone, or a sync/meeting without that colour
+   bleeding into the whole anchor block.
+
+   urgent  — critical, time-sensitive, overdue-adjacent
+   launch  — releases, milestones, ship moments
+   sync    — meetings, calendar events, collaboration
+   ========================================================================= */
+
+/* Tether dark */
+:root,
+[data-theme="tether"][data-mode="dark"],
+[data-theme="tether"]:not([data-mode]) {
+  --motif-urgent:        #FF5C5C;
+  --motif-urgent-band:   rgba(255, 92, 92, 0.08);
+  --motif-urgent-veil:   rgba(255, 92, 92, 0.18);
+  --motif-urgent-fg:     #0E1117;
+
+  --motif-launch:        #F5E642;
+  --motif-launch-band:   rgba(245, 230, 66, 0.07);
+  --motif-launch-veil:   rgba(245, 230, 66, 0.16);
+  --motif-launch-fg:     #0E1117;
+
+  --motif-sync:          #A78BFA;
+  --motif-sync-band:     rgba(167, 139, 250, 0.08);
+  --motif-sync-veil:     rgba(167, 139, 250, 0.18);
+  --motif-sync-fg:       #0E1117;
+}
+[data-theme="tether"][data-mode="light"] {
+  --motif-urgent:        #C0392B;
+  --motif-urgent-band:   rgba(192, 57, 43, 0.07);
+  --motif-urgent-veil:   rgba(192, 57, 43, 0.15);
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #A08800;
+  --motif-launch-band:   rgba(160, 136, 0, 0.07);
+  --motif-launch-veil:   rgba(160, 136, 0, 0.16);
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #6D4ED8;
+  --motif-sync-band:     rgba(109, 78, 216, 0.07);
+  --motif-sync-veil:     rgba(109, 78, 216, 0.16);
+  --motif-sync-fg:       #FFFFFF;
+}
+
+/* Horizon dark */
+[data-theme="horizon"][data-mode="dark"],
+[data-theme="horizon"]:not([data-mode]) {
+  --motif-urgent:        #E05252;
+  --motif-urgent-band:   rgba(224, 82, 82, 0.08);
+  --motif-urgent-veil:   rgba(224, 82, 82, 0.18);
+  --motif-urgent-fg:     #161512;
+
+  --motif-launch:        #C8A820;
+  --motif-launch-band:   rgba(200, 168, 32, 0.08);
+  --motif-launch-veil:   rgba(200, 168, 32, 0.18);
+  --motif-launch-fg:     #161512;
+
+  --motif-sync:          #9B7ECC;
+  --motif-sync-band:     rgba(155, 126, 204, 0.08);
+  --motif-sync-veil:     rgba(155, 126, 204, 0.18);
+  --motif-sync-fg:       #161512;
+}
+[data-theme="horizon"][data-mode="light"] {
+  --motif-urgent:        #9C2A1A;
+  --motif-urgent-band:   rgba(156, 42, 26, 0.07);
+  --motif-urgent-veil:   rgba(156, 42, 26, 0.16);
+  --motif-urgent-fg:     #FBF6E8;
+
+  --motif-launch:        #7A5E00;
+  --motif-launch-band:   rgba(122, 94, 0, 0.07);
+  --motif-launch-veil:   rgba(122, 94, 0, 0.16);
+  --motif-launch-fg:     #FBF6E8;
+
+  --motif-sync:          #5A3A9C;
+  --motif-sync-band:     rgba(90, 58, 156, 0.07);
+  --motif-sync-veil:     rgba(90, 58, 156, 0.16);
+  --motif-sync-fg:       #FBF6E8;
+}
+
+/* Contrast dark */
+[data-theme="contrast"][data-mode="dark"],
+[data-theme="contrast"]:not([data-mode]) {
+  --motif-urgent:        #FF4444;
+  --motif-urgent-band:   #2A0000;
+  --motif-urgent-veil:   #4A0000;
+  --motif-urgent-fg:     #000000;
+
+  --motif-launch:        #FFEE44;
+  --motif-launch-band:   #2A2600;
+  --motif-launch-veil:   #4A4200;
+  --motif-launch-fg:     #000000;
+
+  --motif-sync:          #CC88FF;
+  --motif-sync-band:     #1A0A2A;
+  --motif-sync-veil:     #2E1450;
+  --motif-sync-fg:       #000000;
+}
+[data-theme="contrast"][data-mode="light"] {
+  --motif-urgent:        #AA0000;
+  --motif-urgent-band:   #F9DDDD;
+  --motif-urgent-veil:   #F0C0C0;
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #886600;
+  --motif-launch-band:   #F8F0CC;
+  --motif-launch-veil:   #EFE0A0;
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #550099;
+  --motif-sync-band:     #EEE0FF;
+  --motif-sync-veil:     #DDC0FF;
+  --motif-sync-fg:       #FFFFFF;
+}
+
+/* Terminal dark */
+[data-theme="terminal"][data-mode="dark"],
+[data-theme="terminal"]:not([data-mode]) {
+  --motif-urgent:        #FF5555;
+  --motif-urgent-band:   rgba(255, 85, 85, 0.08);
+  --motif-urgent-veil:   rgba(255, 85, 85, 0.16);
+  --motif-urgent-fg:     #0A0E0A;
+
+  --motif-launch:        #F1FA8C;
+  --motif-launch-band:   rgba(241, 250, 140, 0.07);
+  --motif-launch-veil:   rgba(241, 250, 140, 0.15);
+  --motif-launch-fg:     #0A0E0A;
+
+  --motif-sync:          #BD93F9;
+  --motif-sync-band:     rgba(189, 147, 249, 0.08);
+  --motif-sync-veil:     rgba(189, 147, 249, 0.16);
+  --motif-sync-fg:       #0A0E0A;
+}
+[data-theme="terminal"][data-mode="light"] {
+  --motif-urgent:        #AA1E1E;
+  --motif-urgent-band:   rgba(170, 30, 30, 0.07);
+  --motif-urgent-veil:   rgba(170, 30, 30, 0.15);
+  --motif-urgent-fg:     #F2F1E8;
+
+  --motif-launch:        #8C7000;
+  --motif-launch-band:   rgba(140, 112, 0, 0.07);
+  --motif-launch-veil:   rgba(140, 112, 0, 0.15);
+  --motif-launch-fg:     #F2F1E8;
+
+  --motif-sync:          #6040B8;
+  --motif-sync-band:     rgba(96, 64, 184, 0.07);
+  --motif-sync-veil:     rgba(96, 64, 184, 0.15);
+  --motif-sync-fg:       #F2F1E8;
+}
+
+/* Solstice, Dracula, Paper — inherit from Tether/Terminal/Paper as reasonable defaults */
+[data-theme="solstice"] {
+  --motif-urgent:        #FF7A6B;
+  --motif-urgent-band:   rgba(255, 122, 107, 0.07);
+  --motif-urgent-veil:   rgba(255, 122, 107, 0.16);
+  --motif-urgent-fg:     #0B1418;
+
+  --motif-launch:        #DCE872;
+  --motif-launch-band:   rgba(220, 232, 114, 0.07);
+  --motif-launch-veil:   rgba(220, 232, 114, 0.16);
+  --motif-launch-fg:     #0B1418;
+
+  --motif-sync:          #BFA6E5;
+  --motif-sync-band:     rgba(191, 166, 229, 0.07);
+  --motif-sync-veil:     rgba(191, 166, 229, 0.16);
+  --motif-sync-fg:       #0B1418;
+}
+[data-theme="dracula"] {
+  --motif-urgent:        #FF5555;
+  --motif-urgent-band:   rgba(255, 85, 85, 0.08);
+  --motif-urgent-veil:   rgba(255, 85, 85, 0.18);
+  --motif-urgent-fg:     #282A36;
+
+  --motif-launch:        #F1FA8C;
+  --motif-launch-band:   rgba(241, 250, 140, 0.08);
+  --motif-launch-veil:   rgba(241, 250, 140, 0.18);
+  --motif-launch-fg:     #282A36;
+
+  --motif-sync:          #BD93F9;
+  --motif-sync-band:     rgba(189, 147, 249, 0.08);
+  --motif-sync-veil:     rgba(189, 147, 249, 0.18);
+  --motif-sync-fg:       #282A36;
+}
+[data-theme="paper"] {
+  --motif-urgent:        #8A1818;
+  --motif-urgent-band:   rgba(138, 24, 24, 0.07);
+  --motif-urgent-veil:   rgba(138, 24, 24, 0.14);
+  --motif-urgent-fg:     #FAFAF7;
+
+  --motif-launch:        #7A6200;
+  --motif-launch-band:   rgba(122, 98, 0, 0.07);
+  --motif-launch-veil:   rgba(122, 98, 0, 0.14);
+  --motif-launch-fg:     #FAFAF7;
+
+  --motif-sync:          #4A2A7A;
+  --motif-sync-band:     rgba(74, 42, 122, 0.07);
+  --motif-sync-veil:     rgba(74, 42, 122, 0.14);
+  --motif-sync-fg:       #FAFAF7;
+}
+
+[data-motif="anchor"] { --m: var(--motif-anchor); --m-accent: var(--motif-anchor); --m-band: var(--motif-anchor-band); --m-line: var(--motif-anchor-veil); --m-veil: var(--motif-anchor-veil); --m-fg: var(--motif-anchor-fg); }
+[data-motif="focus"]  { --m: var(--motif-focus);  --m-accent: var(--motif-focus);  --m-band: var(--motif-focus-band);  --m-line: var(--motif-focus-veil);  --m-veil: var(--motif-focus-veil);  --m-fg: var(--motif-focus-fg); }
+[data-motif="calm"]   { --m: var(--motif-calm);   --m-accent: var(--motif-calm);   --m-band: var(--motif-calm-band);   --m-line: var(--motif-calm-veil);   --m-veil: var(--motif-calm-veil);   --m-fg: var(--motif-calm-fg); }
+[data-motif="energy"] { --m: var(--motif-energy); --m-accent: var(--motif-energy); --m-band: var(--motif-energy-band); --m-line: var(--motif-energy-veil); --m-veil: var(--motif-energy-veil); --m-fg: var(--motif-energy-fg); }
+[data-motif="care"]   { --m: var(--motif-care);   --m-accent: var(--motif-care);   --m-band: var(--motif-care-band);   --m-line: var(--motif-care-veil);   --m-veil: var(--motif-care-veil);   --m-fg: var(--motif-care-fg); }
+[data-motif="flow"]   { --m: var(--motif-flow);   --m-accent: var(--motif-flow);   --m-band: var(--motif-flow-band);   --m-line: var(--motif-flow-veil);   --m-veil: var(--motif-flow-veil);   --m-fg: var(--motif-flow-fg); }
+[data-motif="dusk"]   { --m: var(--motif-dusk);   --m-accent: var(--motif-dusk);   --m-band: var(--motif-dusk-band);   --m-line: var(--motif-dusk-veil);   --m-veil: var(--motif-dusk-veil);   --m-fg: var(--motif-dusk-fg); }
+[data-motif="quiet"]  { --m: var(--motif-quiet);  --m-accent: var(--motif-quiet);  --m-band: var(--motif-quiet-band);  --m-line: var(--motif-quiet-veil);  --m-veil: var(--motif-quiet-veil);  --m-fg: var(--motif-quiet-fg); }
+[data-motif="urgent"] { --m: var(--motif-urgent); --m-accent: var(--motif-urgent); --m-band: var(--motif-urgent-band); --m-line: var(--motif-urgent-veil); --m-veil: var(--motif-urgent-veil); --m-fg: var(--motif-urgent-fg); }
+[data-motif="launch"] { --m: var(--motif-launch); --m-accent: var(--motif-launch); --m-band: var(--motif-launch-band); --m-line: var(--motif-launch-veil); --m-veil: var(--motif-launch-veil); --m-fg: var(--motif-launch-fg); }
+[data-motif="sync"]   { --m: var(--motif-sync);   --m-accent: var(--motif-sync);   --m-band: var(--motif-sync-band);   --m-line: var(--motif-sync-veil);   --m-veil: var(--motif-sync-veil);   --m-fg: var(--motif-sync-fg); }
