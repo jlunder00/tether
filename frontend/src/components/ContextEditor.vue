@@ -81,18 +81,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6"
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6"
        @dragover="autoScrollDragOver"
        @drop="autoScrollCleanup">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Context</h2>
-      <label class="flex items-center gap-1.5 text-xs text-white/40 hover:text-white/60 cursor-pointer select-none">
+      <label class="flex items-center gap-1.5 text-xs text-[--fg-4] hover:text-[--fg-2] cursor-pointer select-none">
         <input type="checkbox" v-model="contextStore.showArchived"
                class="accent-blue-500 w-3.5 h-3.5" />
         Show archived
       </label>
     </div>
-    <p v-if="error" class="text-red-400 text-sm mb-2">{{ error }}</p>
+    <p v-if="error" class="text-[--status-block-fg] text-sm mb-2">{{ error }}</p>
 
     <div class="flex flex-col gap-3">
       <ContextTreeNode
@@ -104,7 +104,7 @@ onMounted(async () => {
 
     <!-- Root-level drop zone for reparenting nodes to root -->
     <div class="mt-3 border-2 border-dashed rounded-lg px-4 py-2 text-center text-xs transition-colors"
-         :class="rootDropOver ? 'border-blue-400/60 bg-blue-400/10 text-blue-300' : 'border-white/10 text-white/30'"
+         :class="rootDropOver ? 'border-[--accent] bg-[--accent-veil] text-[--accent]' : 'border-[--border-1] text-[--fg-5]'"
          @dragover="onRootDragOver"
          @dragleave="onRootDragLeave"
          @drop="onRootDrop">
@@ -114,9 +114,9 @@ onMounted(async () => {
     <!-- Add root entry form -->
     <div class="mt-4 flex gap-2">
       <input v-model="newName" placeholder="New context entry name..."
-             class="flex-1 bg-white/10 text-white rounded-lg px-3 py-2 outline-none"
+             class="flex-1 bg-[--bg-input] text-[--fg-1] border border-[--border-input] rounded-lg px-3 py-2 outline-none focus:border-[--accent]"
              @keyup.enter="addRootNode" />
-      <button @click="addRootNode" class="px-4 py-2 bg-blue-500/20 text-blue-300 rounded-lg text-sm">
+      <button @click="addRootNode" class="px-4 py-2 bg-[--accent-veil] text-[--accent] rounded-lg text-sm hover:bg-[--accent-soft]">
         + Add
       </button>
     </div>
