@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 import { useTheme } from '../composables/useTheme'
 
 const props = defineProps<{ modelValue: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [open: boolean] }>()
 
 const { THEMES, activeTheme, activeMode, isThemeUnlocked, applyTheme, previewTheme, setMode } = useTheme()
+
+const closeBtn = ref<HTMLButtonElement | null>(null)
+let lastFocused: HTMLElement | null = null
 
 function close() {
   emit('update:modelValue', false)
@@ -33,8 +36,16 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => document.addEventListener('keydown', onKeydown))
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
-watch(() => props.modelValue, (open) => {
-  if (!open) onRestore()
+watch(() => props.modelValue, async (open) => {
+  if (open) {
+    lastFocused = (document.activeElement as HTMLElement) ?? null
+    await nextTick()
+    closeBtn.value?.focus()
+  } else {
+    onRestore()
+    lastFocused?.focus?.()
+    lastFocused = null
+  }
 })
 </script>
 
@@ -54,6 +65,7 @@ watch(() => props.modelValue, (open) => {
         v-if="modelValue"
         data-testid="theme-drawer"
         role="dialog"
+        aria-modal="true"
         aria-label="Theme picker"
         class="fixed top-0 right-0 z-50 h-full w-full sm:w-[420px] bg-gray-900 border-l border-white/10 shadow-2xl overflow-y-auto"
       >
@@ -61,6 +73,7 @@ watch(() => props.modelValue, (open) => {
           <span class="text-sm font-semibold text-white/80">Theme</span>
           <div class="flex-1" />
           <button
+            ref="closeBtn"
             data-testid="theme-drawer-close"
             class="text-white/30 hover:text-white transition-colors p-1 rounded hover:bg-white/10"
             title="Close (Esc)"
