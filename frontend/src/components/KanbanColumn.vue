@@ -131,9 +131,9 @@ function onColumnDrop(evt: DragEvent) {
 <template>
   <div class="flex flex-col min-w-[320px] max-w-[380px] bg-[--bg-elev-1] border border-[--border-1] rounded-xl flex-shrink-0 min-h-0">
     <!-- Column header (fixed, does not scroll) -->
-    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-[--border-1] flex-shrink-0">
+    <div class="flex items-center gap-2 px-3 py-2.5 border-b border-[--border-1] bg-[--bg-elev-2] flex-shrink-0">
       <span v-if="column.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: column.color }" />
-      <span class="text-sm font-semibold uppercase tracking-wide"
+      <span class="text-sm font-semibold uppercase tracking-wide text-[--fg-1]"
             :style="column.color ? { color: column.color } : {}">
         {{ column.name }}
       </span>
@@ -142,7 +142,7 @@ function onColumnDrop(evt: DragEvent) {
 
     <!-- Scrollable body (fills remaining column height) -->
     <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0 transition-all"
-         :class="dragEnterCount > 0 ? 'ring-2 ring-blue-400/50 bg-blue-400/5' : ''"
+         :class="dragEnterCount > 0 ? 'ring-2 ring-[--accent] bg-[--accent-veil]' : ''"
          @dragenter="onColumnDragEnter"
          @dragover="onColumnDragOver"
          @dragleave="onColumnDragLeave"
