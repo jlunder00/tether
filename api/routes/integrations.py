@@ -27,6 +27,8 @@ import tempfile
 import time
 import urllib.parse
 
+import pexpect
+
 import asyncpg
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -68,6 +70,10 @@ _start_locks: dict[str, asyncio.Lock] = {}
 
 _SETUP_TTL = 600  # seconds
 _ANTHROPIC_URL_RE = re.compile(r"https://\S+")
+# Strip ANSI CSI escape sequences emitted by TUI programs on a PTY.
+# Note: does not strip OSC8 hyperlinks (\x1b]8;;URL\x07...\x1b]8;;\x07) — if
+# claude setup-token ever uses them, extend this regex or post-process the URL.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _ANTHROPIC_URL_SCHEME = "https"
 _ANTHROPIC_URL_NETLOC = "console.anthropic.com"
 
@@ -103,22 +109,107 @@ class AnthropicCompleteBody(BaseModel):
 # Anthropic OAuth helpers
 # ---------------------------------------------------------------------------
 
-async def _reap_proc(proc) -> None:
-    """Kill a subprocess and await it to release transport/pipe FDs."""
+def _close_child_sync(child) -> None:
+    """Kill a pexpect child and close its PTY file descriptor."""
     try:
-        proc.kill()
+        child.close(force=True)
     except Exception:
         pass
+
+
+async def _reap_child(child) -> None:
+    """Async wrapper: close pexpect child in an executor to avoid blocking the event loop."""
+    loop = asyncio.get_running_loop()
     try:
-        await proc.wait()
+        await loop.run_in_executor(None, _close_child_sync, child)
     except Exception:
         pass
+
+
+def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
+    """Spawn ``claude setup-token`` in a PTY, wait for the auth URL, return ``(child, url)``.
+
+    The child process stays alive after this returns, waiting for the user to
+    paste the OAuth code via :func:`_complete_pexpect_sync`.
+
+    A wide PTY (220 cols) prevents the URL from line-wrapping, which would
+    break the URL regex. Returns ``(None, None)`` on any failure.
+    """
+    try:
+        child = pexpect.spawn(
+            "claude",
+            args=["setup-token"],
+            env=env,
+            dimensions=(24, 220),
+            timeout=15,
+        )
+    except Exception:
+        logger.exception("pexpect.spawn failed for claude setup-token")
+        return None, None
+
+    buf = ""
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(4096, timeout=1)
+            # Accumulate raw bytes first, then strip ANSI from the full buffer
+            # so CSI sequences that straddle read boundaries are handled correctly.
+            buf += chunk.decode(errors="replace")
+            clean = _ANSI_ESCAPE_RE.sub("", buf)
+            url = _extract_anthropic_url(clean)
+            if url:
+                return child, url
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            # Process exited before showing a URL.
+            break
+        except Exception:
+            logger.exception("Unexpected error reading pexpect child output")
+            break
+
+    _close_child_sync(child)
+    return None, None
+
+
+def _complete_pexpect_sync(child, code: str) -> str:
+    """Send the OAuth code to the waiting pexpect child and wait for it to exit.
+
+    Returns:
+      ``"ok"``      — process exited with code 0 (credentials written)
+      ``"failed"``  — process exited with non-zero code (setup rejected the code)
+      ``"timeout"`` — process did not exit within 30 seconds
+      ``"error"``   — unexpected error (e.g. sendline raised, process died early)
+    """
+    try:
+        child.sendline(code)
+    except Exception:
+        logger.exception("pexpect sendline failed — child likely already exited")
+        return "error"
+
+    try:
+        child.expect(pexpect.EOF, timeout=30)
+    except pexpect.TIMEOUT:
+        return "timeout"
+    except Exception:
+        logger.exception("pexpect expect(EOF) failed")
+        return "error"
+
+    # Reap the process so that exitstatus is populated.
+    try:
+        child.close()
+    except Exception:
+        pass
+
+    if child.exitstatus not in (0, None):
+        return "failed"
+    return "ok"
 
 
 async def _sweep_expired_setups() -> None:
     """Kill and remove any pending setups older than _SETUP_TTL seconds.
 
-    Each killed process is reaped via an asyncio task so pipe FDs are released
+    Each killed child is reaped via an asyncio task so PTY FDs are released
     without blocking the current request.
     """
     now = time.time()
@@ -128,9 +219,9 @@ async def _sweep_expired_setups() -> None:
     ]
     for uid in expired_users:
         entry = _pending_setups.pop(uid)
-        proc = entry.get("proc")
-        if proc is not None:
-            asyncio.create_task(_reap_proc(proc))
+        child = entry.get("child")
+        if child is not None:
+            asyncio.create_task(_reap_child(child))
         temp_dir = entry.get("temp_dir")
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -470,50 +561,36 @@ async def anthropic_start(
 
 
 async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
-    """Inner /start logic — called while holding the per-user _start_locks entry."""
+    """Inner /start logic — called while holding the per-user _start_locks entry.
+
+    Spawns ``claude setup-token`` in a PTY via :func:`_start_pexpect_sync` (run
+    in a thread-pool executor so the event loop is not blocked). The pexpect child
+    stays alive waiting for the user to paste their OAuth code.
+    """
     if user_id in _pending_setups:
         old = _pending_setups.pop(user_id)
-        asyncio.create_task(_reap_proc(old["proc"]))
+        asyncio.create_task(_reap_child(old["child"]))
         shutil.rmtree(old.get("temp_dir", ""), ignore_errors=True)
 
     temp_dir = tempfile.mkdtemp()
     env_override = {**os.environ, "CLAUDE_CONFIG_DIR": temp_dir}
 
+    loop = asyncio.get_running_loop()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "setup-token",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.PIPE,
-            env=env_override,
+        child, url = await loop.run_in_executor(
+            None, _start_pexpect_sync, temp_dir, env_override
         )
     except Exception as exc:
         shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.exception("Failed to spawn claude setup-token: %s", exc)
+        logger.exception("Unexpected error from _start_pexpect_sync: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to spawn setup process")
 
-    async def _read_stream(stream):
-        try:
-            return await asyncio.wait_for(stream.read(65536), timeout=10.0)
-        except asyncio.TimeoutError:
-            return b""
-
-    stdout_bytes, stderr_bytes = await asyncio.gather(
-        _read_stream(proc.stdout),
-        _read_stream(proc.stderr),
-    )
-
-    combined = stdout_bytes.decode(errors="replace") + stderr_bytes.decode(errors="replace")
-    url = _extract_anthropic_url(combined)
-
     if url is None:
-        proc.kill()
-        await proc.wait()
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail="Auth URL not found in claude output")
 
     _pending_setups[user_id] = {
-        "proc": proc,
+        "child": child,
         "temp_dir": temp_dir,
         "started_at": time.time(),
     }
@@ -531,43 +608,41 @@ async def anthropic_complete(
     body: AnthropicCompleteBody,
     _auth: dict = Depends(auth_dependency),
 ):
-    """Submit the OAuth code to the waiting subprocess and persist credentials."""
+    """Submit the OAuth code to the waiting pexpect child and persist credentials."""
     user_id = request.state.user_id
 
     entry = _pending_setups.get(user_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
 
-    proc = entry["proc"]
+    child = entry["child"]
     temp_dir = entry["temp_dir"]
 
-    # Write code to subprocess stdin — guard against broken pipe if process already exited.
-    try:
-        proc.stdin.write((body.code + "\n").encode())
-        await asyncio.wait_for(proc.stdin.drain(), timeout=5.0)
-    except (BrokenPipeError, ConnectionResetError, asyncio.TimeoutError, OSError) as exc:
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
+
+    if result == "error":
         _pending_setups.pop(user_id, None)
-        asyncio.create_task(_reap_proc(proc))
+        asyncio.create_task(_reap_child(child))
         shutil.rmtree(temp_dir, ignore_errors=True)
-        logger.warning("anthropic_complete: stdin write failed (%s)", exc)
         raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
 
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=30.0)
-    except asyncio.TimeoutError:
+    if result == "timeout":
         _pending_setups.pop(user_id, None)
-        asyncio.create_task(_reap_proc(proc))
+        asyncio.create_task(_reap_child(child))
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
-    if proc.returncode != 0:
-        _pending_setups.pop(user_id, None)
+    # "ok" or "failed" — child already reaped by _complete_pexpect_sync.
+    _pending_setups.pop(user_id, None)
+
+    if result == "failed":
         shutil.rmtree(temp_dir, ignore_errors=True)
         return {"ok": False, "error": "setup failed"}
 
+    # result == "ok"
     creds_file = pathlib.Path(temp_dir) / ".credentials.json"
     if not creds_file.exists():
-        _pending_setups.pop(user_id, None)
         shutil.rmtree(temp_dir, ignore_errors=True)
         return {"ok": False, "error": "credentials file not found"}
 
@@ -577,7 +652,6 @@ async def anthropic_complete(
     if vault is not None:
         await vault.store_initial(user_id, blob_dict)
 
-    _pending_setups.pop(user_id, None)
     shutil.rmtree(temp_dir, ignore_errors=True)
 
     return {"ok": True}

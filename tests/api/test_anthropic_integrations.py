@@ -64,23 +64,15 @@ def clear_pending_setups():
 
 @pytest.mark.asyncio
 async def test_start_returns_url(auth_app_client):
-    """Mock subprocess that outputs a URL on stdout; response contains url + expires_in."""
+    """Mock _start_pexpect_sync returning a URL; response contains url + expires_in."""
     client, mock_vault, app = auth_app_client
 
-    url_line = b"Visit https://console.anthropic.com/oauth/authorize?code=abc123 to authorize\n"
-
-    mock_proc = AsyncMock()
-    mock_proc.stdout = AsyncMock()
-    mock_proc.stderr = AsyncMock()
-    mock_proc.stdout.read = AsyncMock(return_value=url_line)
-    mock_proc.stderr.read = AsyncMock(return_value=b"")
-    mock_proc.pid = 12345
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock(return_value=None)
+    mock_child = MagicMock()
+    expected_url = "https://console.anthropic.com/oauth/authorize?code=abc123"
 
     with patch(
-        "api.routes.integrations.asyncio.create_subprocess_exec",
-        return_value=mock_proc,
+        "api.routes.integrations._start_pexpect_sync",
+        return_value=(mock_child, expected_url),
     ):
         resp = await client.post("/api/integrations/anthropic/start")
 
@@ -101,21 +93,12 @@ async def test_start_returns_url(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_start_no_url_returns_502(auth_app_client):
-    """When subprocess returns no URL, endpoint returns 502."""
+    """When _start_pexpect_sync finds no URL, endpoint returns 502."""
     client, mock_vault, app = auth_app_client
 
-    mock_proc = AsyncMock()
-    mock_proc.stdout = AsyncMock()
-    mock_proc.stderr = AsyncMock()
-    mock_proc.stdout.read = AsyncMock(return_value=b"some garbage output no url here\n")
-    mock_proc.stderr.read = AsyncMock(return_value=b"error: something went wrong\n")
-    mock_proc.pid = 12346
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock(return_value=None)
-
     with patch(
-        "api.routes.integrations.asyncio.create_subprocess_exec",
-        return_value=mock_proc,
+        "api.routes.integrations._start_pexpect_sync",
+        return_value=(None, None),
     ):
         resp = await client.post("/api/integrations/anthropic/start")
 
@@ -137,24 +120,23 @@ async def test_complete_success(auth_app_client, tmp_path):
     creds_file = tmp_path / ".credentials.json"
     creds_file.write_text(json.dumps(creds_data))
 
-    mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
-    mock_proc.stdin.write = MagicMock()
-    mock_proc.stdin.drain = AsyncMock()
-    mock_proc.wait = AsyncMock(return_value=0)
-    mock_proc.returncode = 0
+    mock_child = MagicMock()
 
     # Stash fake pending entry for TEST_USER_ID
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "proc": mock_proc,
+        "child": mock_child,
         "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
-    resp = await client.post(
-        "/api/integrations/anthropic/complete",
-        json={"code": "auth_code_123"},
-    )
+    with patch(
+        "api.routes.integrations._complete_pexpect_sync",
+        return_value="ok",
+    ):
+        resp = await client.post(
+            "/api/integrations/anthropic/complete",
+            json={"code": "auth_code_123"},
+        )
 
     assert resp.status_code == 200
     data = resp.json()
@@ -185,29 +167,22 @@ async def test_complete_no_pending_returns_404(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
-    """If asyncio.wait_for times out on proc.wait(), endpoint returns 504."""
+    """If _complete_pexpect_sync returns 'timeout', endpoint returns 504."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
-    mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
-    mock_proc.stdin.write = MagicMock()
-    mock_proc.stdin.drain = AsyncMock()
-    # wait() returns 0 immediately; asyncio.wait_for is patched below to raise TimeoutError
-    # so the direct await proc.wait() after kill() won't hang
-    mock_proc.wait = AsyncMock(return_value=0)
-    mock_proc.kill = MagicMock()
+    mock_child = MagicMock()
 
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "proc": mock_proc,
+        "child": mock_child,
         "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
-    # wait_for is called twice: once for stdin.drain (should succeed → None),
-    # once for proc.wait (should timeout). Use a side_effect list.
-    mock_wait_for = AsyncMock(side_effect=[None, asyncio.TimeoutError()])
-    with patch("api.routes.integrations.asyncio.wait_for", mock_wait_for):
+    with patch(
+        "api.routes.integrations._complete_pexpect_sync",
+        return_value="timeout",
+    ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "code"},
@@ -300,27 +275,26 @@ async def test_start_requires_auth():
 
 @pytest.mark.asyncio
 async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
-    """If stdin.drain raises BrokenPipeError (process already exited), return 502."""
+    """If _complete_pexpect_sync returns 'error' (e.g. sendline failed), return 502."""
     import api.routes.integrations as routes
     client, mock_vault, app = auth_app_client
 
-    mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
-    mock_proc.stdin.write = MagicMock()
-    mock_proc.stdin.drain = AsyncMock(side_effect=BrokenPipeError("pipe broken"))
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock(return_value=None)
+    mock_child = MagicMock()
 
     routes._pending_setups[TEST_USER_ID] = {
-        "proc": mock_proc,
+        "child": mock_child,
         "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
-    resp = await client.post(
-        "/api/integrations/anthropic/complete",
-        json={"code": "code"},
-    )
+    with patch(
+        "api.routes.integrations._complete_pexpect_sync",
+        return_value="error",
+    ):
+        resp = await client.post(
+            "/api/integrations/anthropic/complete",
+            json={"code": "code"},
+        )
 
     assert resp.status_code == 502
     # Entry should be cleaned up
