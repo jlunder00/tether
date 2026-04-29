@@ -67,7 +67,7 @@ watch(() => props.modelValue, async (open) => {
         role="dialog"
         aria-modal="true"
         aria-label="Theme picker"
-        class="fixed top-0 right-0 z-50 h-full w-full sm:w-[340px] bg-[--bg-canvas] border-l border-[--border-1] shadow-2xl overflow-y-auto"
+        class="fixed top-0 right-0 z-50 h-full w-full sm:w-[320px] bg-[--bg-canvas] border-l border-[--border-1] shadow-2xl overflow-y-auto"
       >
         <div class="flex items-center gap-2 px-4 py-3 border-b border-[--border-1]">
           <span class="text-sm font-semibold text-[--fg-2]">Theme</span>
