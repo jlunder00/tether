@@ -17,6 +17,7 @@ const props = defineProps<{
   time: string
   color: string
   date?: string
+  motif?: string | null
 }>()
 
 const store = usePlanStore()
@@ -136,12 +137,15 @@ function onDrop(evt: DragEvent, toIndex: number) {
 </script>
 
 <template>
+  <div :data-motif="motif ?? 'anchor'" class="relative">
+    <div class="absolute left-0 top-0 bottom-0 w-1 rounded-full pointer-events-none" :style="{ background: 'var(--m)' }" />
+    <div class="pl-3">
   <GroupContainer :label="`${anchorName} · ${time}`" :color="color" :collapsible="true" :level="0">
     <template #header-right>
       <span class="text-xs text-white/30">{{ anchorPlan.tasks.length }}</span>
     </template>
 
-    <div ref="tasksRef" class="space-y-1">
+    <div ref="tasksRef" class="space-y-px">
       <template v-for="[ctxName, ctx] in groupedByContext" :key="ctxName">
         <!-- Context has only 1 task total — show standalone (no context GroupContainer) -->
         <template v-if="contextTaskCount(ctx) === 1">
@@ -225,4 +229,6 @@ function onDrop(evt: DragEvent, toIndex: number) {
     <button type="button" @click="onAddNewTask()"
             class="mt-2 text-xs text-white/40 hover:text-white/70">+ Add task</button>
   </GroupContainer>
+    </div>
+  </div>
 </template>

@@ -20,6 +20,7 @@ export interface Anchor {
   color: string
   position: number
   followup_config: FollowupConfig | null
+  motif?: string | null
 }
 
 export const useAnchorStore = defineStore('anchors', () => {

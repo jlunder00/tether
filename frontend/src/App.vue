@@ -16,7 +16,7 @@ async function logout() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white">
+  <div class="crt relative min-h-screen bg-gray-900 text-white">
     <!-- Navigation bar (shown when authenticated) -->
     <nav v-if="authStore.isAuthenticated"
          class="flex items-center justify-between px-6 py-3 border-b border-white/10 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">
