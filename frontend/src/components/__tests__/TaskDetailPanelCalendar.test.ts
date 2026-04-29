@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ref } from 'vue'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { ref, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
@@ -269,5 +269,211 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     }
 
     expect(eventStore.events.find(e => e.id === 'ev-standalone-2')?.color).toBe('#00aaff')
+  })
+})
+
+// ─── Recurring-event color scope dialog ───────────────────────────────────────
+// Bug 1+3: Color changes on recurring events must gate behind RecurrenceEditDialog
+// before issuing any PATCH so the user can choose 'this' / 'future' / 'all'.
+// The dialog is teleported to document.body — tests must use attachTo.
+
+const RECURRING_EVENT = {
+  id: 'ev-recurring',
+  title: 'Weekly meeting',
+  start_time: '2024-06-10T09:00:00Z',
+  end_time: '2024-06-10T10:00:00Z',
+  source: 'tether' as const,
+  external_id: null,
+  task_id: 'task-1',
+  anchor_id: null,
+  color: null,
+  is_recurring: true,
+  is_occurrence: false,
+  is_all_day: false,
+  rrule: 'FREQ=WEEKLY;BYDAY=MO',
+  context_subject: null,
+}
+
+describe('TaskDetailPanel — Color change scope dialog for recurring events', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    backlogTasksRef.value = []
+  })
+
+  afterEach(() => {
+    // Remove all children added by Teleport/attachTo without using innerHTML
+    while (document.body.firstChild) {
+      document.body.removeChild(document.body.firstChild)
+    }
+  })
+
+  // Contract / green-anchor: non-recurring event color change calls PATCH immediately.
+  it('non-recurring: color change calls PATCH /api/events/:id with color payload', async () => {
+    const { api } = await import('../../lib/api')
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    backlogTasksRef.value = [MOCK_TASK]
+    eventStore.events.push({
+      id: 'ev-nonrecurring',
+      title: 'Test task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      source: 'tether' as const,
+      external_id: null,
+      task_id: 'task-1',
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    await wrapper.vm.$nextTick()
+
+    vi.useFakeTimers()
+    try {
+      await wrapper.find('[data-testid="event-color-input"]').setValue('#aa3300')
+      vi.runAllTimers()
+      await wrapper.vm.$nextTick()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // PATCH must have been called with the color in the body
+    const patchCall = (api as ReturnType<typeof vi.fn>).mock.calls.find(
+      (args: any[]) =>
+        typeof args[0] === 'string' && args[0].includes('ev-nonrecurring') && args[1]?.method === 'PATCH',
+    )
+    expect(patchCall).toBeDefined()
+    const body = JSON.parse(patchCall![1].body)
+    expect(body.color).toBe('#aa3300')
+  })
+
+  // Recurring event: color change via @change must show the scope dialog, NOT patch immediately.
+  it('recurring: color change shows RecurrenceEditDialog instead of patching immediately', async () => {
+    const { api } = await import('../../lib/api')
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    backlogTasksRef.value = [MOCK_TASK]
+    eventStore.events.push({ ...RECURRING_EVENT })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+
+    // Trigger the color picker's change event (fires on dismiss, not during drag).
+    // vue-test-utils forbids setting target.value in trigger(); set the element
+    // property directly first, then dispatch the event.
+    const colorInput = wrapper.find('[data-testid="event-color-input"]')
+    expect(colorInput.exists()).toBe(true)
+    ;(colorInput.element as HTMLInputElement).value = '#ff0000'
+    await colorInput.trigger('change')
+    await nextTick()
+
+    // Dialog must be visible
+    expect(document.body.querySelector('[data-testid="recurrence-edit-dialog"]')).not.toBeNull()
+
+    // No PATCH must have been sent yet
+    const patchCalls = (api as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (args: any[]) =>
+        typeof args[0] === 'string' && args[0].includes('ev-recurring') && args[1]?.method === 'PATCH',
+    )
+    expect(patchCalls).toHaveLength(0)
+
+    wrapper.unmount()
+  })
+
+  // Recurring event: confirming the scope dialog sends PATCH with color + scope.
+  it('recurring: confirming scope dialog sends PATCH with color and scope', async () => {
+    const { api } = await import('../../lib/api')
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    backlogTasksRef.value = [MOCK_TASK]
+    eventStore.events.push({ ...RECURRING_EVENT })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+
+    // Open the scope dialog
+    const colorInput = wrapper.find('[data-testid="event-color-input"]')
+    ;(colorInput.element as HTMLInputElement).value = '#bb2200'
+    await colorInput.trigger('change')
+    await nextTick()
+
+    // Select 'this_and_future' scope and confirm
+    const futureRadio = document.body.querySelector('[data-testid="scope-future"]') as HTMLInputElement
+    if (futureRadio) {
+      futureRadio.click()
+      await nextTick()
+    }
+    const confirmBtn = document.body.querySelector('[data-testid="recurrence-edit-confirm"]') as HTMLElement
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn.click()
+    await nextTick()
+
+    // PATCH must have been called with color and scope
+    const patchCall = (api as ReturnType<typeof vi.fn>).mock.calls.find(
+      (args: any[]) =>
+        typeof args[0] === 'string' && args[0].includes('ev-recurring') && args[1]?.method === 'PATCH',
+    )
+    expect(patchCall).toBeDefined()
+    const body = JSON.parse(patchCall![1].body)
+    expect(body.color).toBe('#bb2200')
+    expect(body.scope).toBe('this_and_future')
+
+    wrapper.unmount()
+  })
+
+  // Recurring event: cancelling the scope dialog leaves the store color unchanged.
+  it('recurring: cancelling scope dialog leaves event color unchanged in store', async () => {
+    const { useEventStore } = await import('../../stores/events')
+    const eventStore = useEventStore()
+
+    backlogTasksRef.value = [MOCK_TASK]
+    eventStore.events.push({ ...RECURRING_EVENT })
+
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
+      attachTo: document.body,
+    })
+    await wrapper.vm.$nextTick()
+
+    // Open the scope dialog
+    const colorInput = wrapper.find('[data-testid="event-color-input"]')
+    ;(colorInput.element as HTMLInputElement).value = '#cc1100'
+    await colorInput.trigger('change')
+    await nextTick()
+
+    // Cancel the dialog
+    const cancelBtn = document.body.querySelector('[data-testid="recurrence-edit-cancel"]') as HTMLElement
+    expect(cancelBtn).not.toBeNull()
+    cancelBtn.click()
+    await nextTick()
+
+    // Store color must remain null — no phantom optimistic update
+    expect(eventStore.events.find(e => e.id === 'ev-recurring')?.color).toBeNull()
+
+    wrapper.unmount()
   })
 })
