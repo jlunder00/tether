@@ -441,6 +441,48 @@
   --motif-quiet-fg:      #0B1418;
 }
 
+[data-theme="solstice"][data-mode="light"] {
+  --motif-anchor:        #1F7A98;
+  --motif-anchor-band:   rgba(31, 122, 152, 0.06);
+  --motif-anchor-veil:   rgba(31, 122, 152, 0.14);
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #C04A28;
+  --motif-focus-band:    rgba(192, 74, 40, 0.06);
+  --motif-focus-veil:    rgba(192, 74, 40, 0.14);
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #3F7A88;
+  --motif-calm-band:     rgba(63, 122, 136, 0.06);
+  --motif-calm-veil:     rgba(63, 122, 136, 0.14);
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #6E8C1A;
+  --motif-energy-band:   rgba(110, 140, 26, 0.06);
+  --motif-energy-veil:   rgba(110, 140, 26, 0.14);
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #B5527A;
+  --motif-care-band:     rgba(181, 82, 122, 0.06);
+  --motif-care-veil:     rgba(181, 82, 122, 0.14);
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #2E9A8A;
+  --motif-flow-band:     rgba(46, 154, 138, 0.06);
+  --motif-flow-veil:     rgba(46, 154, 138, 0.14);
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #6B4FAE;
+  --motif-dusk-band:     rgba(107, 79, 174, 0.06);
+  --motif-dusk-veil:     rgba(107, 79, 174, 0.14);
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #5E7A82;
+  --motif-quiet-band:    rgba(94, 122, 130, 0.05);
+  --motif-quiet-veil:    rgba(94, 122, 130, 0.12);
+  --motif-quiet-fg:      #FFFFFF;
+}
+
 
 /* =========================================================================
    6. DRACULA·TETHER  (vivid dev classic — distinctive 6-color palette)
@@ -486,6 +528,48 @@
   --motif-quiet-band:    rgba(80, 250, 123, 0.05);
   --motif-quiet-veil:    rgba(80, 250, 123, 0.12);
   --motif-quiet-fg:      #282A36;
+}
+
+[data-theme="dracula"][data-mode="light"] {
+  --motif-anchor:        #6B3DCC;  /* purple, darkened from BD93F9 */
+  --motif-anchor-band:   rgba(107, 61, 204, 0.06);
+  --motif-anchor-veil:   rgba(107, 61, 204, 0.14);
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #C92020;  /* red, darkened from FF5555 */
+  --motif-focus-band:    rgba(201, 32, 32, 0.06);
+  --motif-focus-veil:    rgba(201, 32, 32, 0.14);
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #4A5683;  /* comment blue, darkened from 6272A4 */
+  --motif-calm-band:     rgba(74, 86, 131, 0.07);
+  --motif-calm-veil:     rgba(74, 86, 131, 0.15);
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #8C7000;  /* yellow, darkened from F1FA8C */
+  --motif-energy-band:   rgba(140, 112, 0, 0.06);
+  --motif-energy-veil:   rgba(140, 112, 0, 0.14);
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #C0468C;  /* pink, darkened from FF79C6 */
+  --motif-care-band:     rgba(192, 70, 140, 0.06);
+  --motif-care-veil:     rgba(192, 70, 140, 0.14);
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #00829E;  /* cyan, darkened from 8BE9FD */
+  --motif-flow-band:     rgba(0, 130, 158, 0.06);
+  --motif-flow-veil:     rgba(0, 130, 158, 0.14);
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #B0682E;  /* orange, darkened from FFB86C */
+  --motif-dusk-band:     rgba(176, 104, 46, 0.06);
+  --motif-dusk-veil:     rgba(176, 104, 46, 0.14);
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #1F8A4A;  /* green, darkened from 50FA7B */
+  --motif-quiet-band:    rgba(31, 138, 74, 0.05);
+  --motif-quiet-veil:    rgba(31, 138, 74, 0.12);
+  --motif-quiet-fg:      #FFFFFF;
 }
 
 
@@ -710,8 +794,9 @@
   --motif-sync-fg:       #F2F1E8;
 }
 
-/* Solstice, Dracula, Paper — inherit from Tether/Terminal/Paper as reasonable defaults */
-[data-theme="solstice"] {
+/* Solstice dark */
+[data-theme="solstice"][data-mode="dark"],
+[data-theme="solstice"]:not([data-mode]) {
   --motif-urgent:        #FF7A6B;
   --motif-urgent-band:   rgba(255, 122, 107, 0.07);
   --motif-urgent-veil:   rgba(255, 122, 107, 0.16);
@@ -727,7 +812,26 @@
   --motif-sync-veil:     rgba(191, 166, 229, 0.16);
   --motif-sync-fg:       #0B1418;
 }
-[data-theme="dracula"] {
+[data-theme="solstice"][data-mode="light"] {
+  --motif-urgent:        #B23A28;
+  --motif-urgent-band:   rgba(178, 58, 40, 0.07);
+  --motif-urgent-veil:   rgba(178, 58, 40, 0.15);
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #6E8C1A;
+  --motif-launch-band:   rgba(110, 140, 26, 0.07);
+  --motif-launch-veil:   rgba(110, 140, 26, 0.15);
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #6B4FAE;
+  --motif-sync-band:     rgba(107, 79, 174, 0.07);
+  --motif-sync-veil:     rgba(107, 79, 174, 0.15);
+  --motif-sync-fg:       #FFFFFF;
+}
+
+/* Dracula dark */
+[data-theme="dracula"][data-mode="dark"],
+[data-theme="dracula"]:not([data-mode]) {
   --motif-urgent:        #FF5555;
   --motif-urgent-band:   rgba(255, 85, 85, 0.08);
   --motif-urgent-veil:   rgba(255, 85, 85, 0.18);
@@ -742,6 +846,22 @@
   --motif-sync-band:     rgba(189, 147, 249, 0.08);
   --motif-sync-veil:     rgba(189, 147, 249, 0.18);
   --motif-sync-fg:       #282A36;
+}
+[data-theme="dracula"][data-mode="light"] {
+  --motif-urgent:        #C92020;
+  --motif-urgent-band:   rgba(201, 32, 32, 0.07);
+  --motif-urgent-veil:   rgba(201, 32, 32, 0.15);
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #8C7000;
+  --motif-launch-band:   rgba(140, 112, 0, 0.07);
+  --motif-launch-veil:   rgba(140, 112, 0, 0.15);
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #6B3DCC;
+  --motif-sync-band:     rgba(107, 61, 204, 0.07);
+  --motif-sync-veil:     rgba(107, 61, 204, 0.15);
+  --motif-sync-fg:       #FFFFFF;
 }
 [data-theme="paper"] {
   --motif-urgent:        #8A1818;
