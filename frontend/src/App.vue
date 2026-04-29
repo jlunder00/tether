@@ -1,12 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
+import { loadPremiumThemes } from './composables/usePremiumThemes'
 import BotChat from './components/BotChat.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
+
+// Load premium theme CSS once the user is known to be authenticated.
+// isPaid is always false today; this fires when backend adds the field.
+watch(
+  () => authStore.user,
+  (user) => {
+    if (user && (user as any).is_paid) {
+      // token not available client-side via cookie auth — pass empty string;
+      // the endpoint will use session cookie instead when implemented
+      loadPremiumThemes('')
+    }
+  },
+  { immediate: true },
+)
 const chatOpen = ref(false)
 
 async function logout() {
@@ -16,7 +31,7 @@ async function logout() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white">
+  <div class="min-h-screen bg-gray-900 text-white crt" style="position: relative">
     <!-- Navigation bar (shown when authenticated) -->
     <nav v-if="authStore.isAuthenticated"
          class="flex items-center justify-between px-6 py-3 border-b border-white/10 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10">

@@ -1,0 +1,226 @@
+/* =========================================================================
+   Theme Distinctives — visual treatments that go beyond color tokens.
+   --------------------------------------------------------------------------
+   Color tokens (themes.css) and motif slots (motifs.css) handle most of
+   what makes themes look different. But some themes earn their character
+   through *structural* details — scanlines, drop caps, ornament dividers.
+   Those live here.
+
+   This file is loaded AFTER themes.css and motifs.css, BEFORE component
+   stylesheets, so component rules can still override individual properties.
+
+   Conventions:
+     - Every selector is scoped to a [data-theme="..."] root.
+     - Where possible we hook into [data-type-voice] so future themes that
+       opt into "editorial" or "terminal" voice get the treatment for free.
+   ========================================================================= */
+
+
+/* =========================================================================
+   TERMINAL — CRT phosphor + scanlines + box-drawing
+   ========================================================================= */
+
+/* CRT scanline overlay on the canvas root.
+   Pseudo-element on body so it sits above all content but below nothing. */
+[data-theme="terminal"] .crt,
+[data-theme="terminal"].crt {
+  position: relative;
+  isolation: isolate;
+}
+[data-theme="terminal"] .crt::after,
+[data-theme="terminal"].crt::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 99;
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 1px,
+    rgba(0, 0, 0, 0.16) 1px,
+    rgba(0, 0, 0, 0.16) 2px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.55;
+}
+/* Terminal day mode: NO background scanlines — too much of a line-printer effect.
+   Scanlines only on interactive elements (buttons) in day mode. */
+[data-theme="terminal"][data-mode="light"] .crt::after,
+[data-theme="terminal"][data-mode="light"].crt::after {
+  display: none;
+}
+
+/* Day-terminal buttons get a subtle horizontal line texture instead */
+[data-theme="terminal"][data-mode="light"] .pa-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: repeating-linear-gradient(
+    180deg,
+    transparent 0,
+    transparent 2px,
+    rgba(100, 120, 100, 0.10) 2px,
+    rgba(100, 120, 100, 0.10) 3px
+  );
+  mix-blend-mode: multiply;
+}
+[data-theme="terminal"][data-mode="light"] .pa-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+/* Phosphor glow on accent text.
+   Applied to titles, the brand name, anything that should "burn" into the
+   tube. Use class .glow OR rely on h1/h2/h3 inside [data-type-voice="terminal"]. */
+[data-theme="terminal"][data-mode="dark"] .glow,
+[data-theme="terminal"][data-mode="dark"] [data-type-voice="terminal"] h1,
+[data-theme="terminal"][data-mode="dark"] [data-type-voice="terminal"] h2,
+[data-theme="terminal"][data-mode="dark"] .pa-anchor__title,
+[data-theme="terminal"][data-mode="dark"] .pa-login__brand,
+[data-theme="terminal"][data-mode="dark"] .pa-chat__name {
+  text-shadow:
+    0 0 1px var(--accent),
+    0 0 6px rgba(80, 250, 123, 0.45),
+    0 0 14px rgba(80, 250, 123, 0.25);
+  color: var(--accent);
+}
+/* Day-mode terminal — no glow, but the same titles get a heavier weight + ink color */
+[data-theme="terminal"][data-mode="light"] .pa-anchor__title,
+[data-theme="terminal"][data-mode="light"] .pa-login__brand,
+[data-theme="terminal"][data-mode="light"] .pa-chat__name {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* Replace card/panel borders with box-drawing characters.
+   Done via background-image with the corner glyphs as foreground letters. */
+[data-theme="terminal"] .pa-chat,
+[data-theme="terminal"] .pa-cal {
+  border: 1px solid var(--border-1);
+  border-radius: 0;
+  position: relative;
+}
+[data-theme="terminal"] .pa-chat::before,
+[data-theme="terminal"] .pa-chat::after,
+[data-theme="terminal"] .pa-cal::before,
+[data-theme="terminal"] .pa-cal::after {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--border-2);
+  background: var(--bg-canvas);
+  padding: 0 2px;
+  pointer-events: none;
+}
+[data-theme="terminal"] .pa-chat::before { content: "┌"; top: -8px; left: -1px; }
+[data-theme="terminal"] .pa-chat::after  { content: "┘"; bottom: -8px; right: -1px; }
+[data-theme="terminal"] .pa-cal::before  { content: "┌"; top: -8px; left: -1px; }
+[data-theme="terminal"] .pa-cal::after   { content: "┘"; bottom: -8px; right: -1px; }
+
+/* Tab/PgDn/Esc hint strip on chat bottom (decorative). */
+[data-theme="terminal"] .pa-chat__compose {
+  position: relative;
+}
+[data-theme="terminal"] .pa-chat__compose::before {
+  content: "[Enter] send  [Esc] close  [↑] history";
+  position: absolute;
+  bottom: -16px;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-5);
+  letter-spacing: 0.05em;
+}
+
+/* Blinking block cursor inside the chat input */
+[data-theme="terminal"] .pa-chat__input {
+  caret-color: var(--accent);
+}
+[data-theme="terminal"] .pa-chat__input:focus {
+  background: var(--bg-canvas) !important;
+}
+
+/* Field labels get a leading "│ " glyph */
+[data-theme="terminal"] .pa-field__lbl::before { content: "│ "; color: var(--accent); }
+
+
+/* =========================================================================
+   HORIZON — drop caps, oldstyle figures, ornament dividers
+   ========================================================================= */
+
+/* Subtle warm-paper noise on the canvas.
+   Achieved by a faint repeating gradient — no asset needed. */
+[data-theme="horizon"] .crt,
+[data-theme="horizon"].crt {
+  position: relative;
+  background-image:
+    radial-gradient(circle at 25% 30%, rgba(212, 168, 95, 0.025) 0%, transparent 40%),
+    radial-gradient(circle at 75% 70%, rgba(212, 168, 95, 0.02) 0%, transparent 50%);
+}
+
+/* Drop cap on the first letter of bot quotes (italic + serif). */
+[data-theme="horizon"] [data-type-voice="editorial"] .pa-chat__msg--bot:first-child .pa-chat__bubble::first-letter {
+  font-family: var(--font-display);
+  font-size: 2.6em;
+  line-height: 0.85;
+  float: left;
+  margin: 0.05em 0.08em -0.05em 0;
+  font-weight: 400;
+  font-style: normal;
+  color: var(--accent);
+}
+
+/* Section divider ornament (horizontal rule with center glyph).
+   Use class .pa-ornament between sections. */
+[data-theme="horizon"] .pa-ornament {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--fg-5);
+  font-family: var(--font-display);
+  font-size: 16px;
+  margin: 16px 0;
+}
+[data-theme="horizon"] .pa-ornament::before,
+[data-theme="horizon"] .pa-ornament::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-soft);
+}
+[data-theme="horizon"] .pa-ornament-glyph::before { content: "❦"; color: var(--accent); }
+
+/* Time labels in oldstyle figures — fake it with small caps + spacing.
+   Source Serif Pro variants ship with oldstyle nums via font-feature-settings. */
+[data-theme="horizon"] .pa-anchor__time,
+[data-theme="horizon"] .pa-cal__hour,
+[data-theme="horizon"] .pa-cal__evt-time {
+  font-feature-settings: "onum" 1, "tnum" 0;
+  font-variant-numeric: oldstyle-nums proportional-nums;
+}
+
+/* Anchor titles in Horizon get a tiny § ornament before the now-pill */
+[data-theme="horizon"] .pa-anchor__head .pa-anchor__title::after { content: ''; }
+[data-theme="horizon"] .pa-anchor--now .pa-anchor__title::before {
+  content: "§ ";
+  color: var(--accent);
+  font-style: italic;
+  font-weight: 400;
+}
+
+
+/* =========================================================================
+   PAPER — minimal serif, hairline rules
+   ========================================================================= */
+[data-theme="paper"] .pa-anchor__time,
+[data-theme="paper"] .pa-cal__hour,
+[data-theme="paper"] .pa-cal__evt-time {
+  font-feature-settings: "onum" 1;
+  font-variant-numeric: oldstyle-nums proportional-nums;
+  font-style: italic;
+}
+[data-theme="paper"] .pa-anchor__title { font-style: italic; }
