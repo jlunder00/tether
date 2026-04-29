@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '../lib/api'
 import type { CalendarEvent } from '../types/events'
+import type { RecurrenceEditScope } from '../types/recurrence'
 
 export const useEventStore = defineStore('events', () => {
   const events = ref<CalendarEvent[]>([])
@@ -187,16 +188,35 @@ export const useEventStore = defineStore('events', () => {
   /**
    * Update the color of a calendar event. Pass null to reset to default.
    * PATCH /api/events/:id with { color } — updates optimistically.
+   *
+   * For recurring events the caller must have already obtained user consent via
+   * RecurrenceEditDialog and should pass:
+   *   scope            — 'this' | 'this_and_future' | 'all'
+   *   originalStartTime — required when scope !== 'all' and the event is an
+   *                        occurrence (is_occurrence: true), so the backend can
+   *                        identify which instance to split.
    */
-  async function updateEventColor(eventId: string, color: string | null): Promise<void> {
+  async function updateEventColor(
+    eventId: string,
+    color: string | null,
+    scope?: RecurrenceEditScope,
+    originalStartTime?: string,
+  ): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
     if (!ev) return
+    // Optimistic update — always safe because the caller has already confirmed
+    // (recurring path gates this call behind RecurrenceEditDialog).
     ev.color = color
+    const body: Record<string, unknown> = { color }
+    if (scope) {
+      body.scope = scope
+      if (originalStartTime) body.original_start_time = originalStartTime
+    }
     try {
       await api(`/api/events/${eventId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ color }),
+        body: JSON.stringify(body),
       })
     } catch { /* ignore — optimistic update stays */ }
   }

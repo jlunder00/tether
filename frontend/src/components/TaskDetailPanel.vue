@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { api } from '../lib/api'
 import SearchAutocomplete from './SearchAutocomplete.vue'
 import RecurrencePicker from './RecurrencePicker.vue'
+import RecurrenceEditDialog from './RecurrenceEditDialog.vue'
 import type { SearchResult } from './SearchAutocomplete.vue'
 import { usePlanStore } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
@@ -16,6 +17,7 @@ import { useTaskContexts } from '../composables/useTaskContexts'
 import { useSlideOver } from '../composables/useSlideOver'
 import type { TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
+import type { RecurrenceEditScope } from '../types/recurrence'
 
 const props = defineProps<{ taskId: string }>()
 const { push: pushPanel, pop: popPanel } = useSlideOver()
@@ -320,17 +322,91 @@ async function onRecurrenceChange(rrule: string | null) {
   await eventStore.setRecurrence(taskEvent.value.id, rrule)
 }
 
-// Debounce timer so rapid @input firings during color-picker drag
-// collapse to a single PATCH instead of one per mouse-move event.
+// ── Color picker handlers ────────────────────────────────────────────────────
+// For non-recurring events: debounce the @input so we PATCH at most once per
+// 150 ms instead of once per mouse-move during the color drag.
+//
+// For recurring events: we must NOT PATCH until the user confirms a scope in
+// RecurrenceEditDialog.  @input only buffers a preview value; @change (which
+// fires once on picker dismiss) opens the dialog.  The actual PATCH is deferred
+// until onColorScopeConfirm().
+
+// Debounce timer — only used for non-recurring events.
 let _colorDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
-function onEventColorChange(color: string | null) {
+// Pending color buffered from @input for recurring events (preview-only, no PATCH yet).
+const pendingColorValue = ref<string | null | undefined>(undefined)
+
+// Controls whether RecurrenceEditDialog is visible.
+const showColorScopeDialog = ref(false)
+
+// The displayed color: pending preview while dialog is open, else the stored value.
+// When pendingColorValue is null (reset pending), show the default swatch so
+// the picker visually reflects the "clear" state while the dialog is open.
+const displayColor = computed(
+  () =>
+    pendingColorValue.value !== undefined
+      ? (pendingColorValue.value ?? '#6366f1')
+      : (taskEvent.value?.color ?? '#6366f1'),
+)
+
+/** Called on @input for color picker. */
+function onColorInput(e: Event) {
   if (!taskEvent.value) return
-  if (_colorDebounceTimer !== null) clearTimeout(_colorDebounceTimer)
-  _colorDebounceTimer = setTimeout(async () => {
-    _colorDebounceTimer = null
-    if (taskEvent.value) await eventStore.updateEventColor(taskEvent.value.id, color)
-  }, 150)
+  const color = (e.target as HTMLInputElement).value
+  if (taskEvent.value.rrule) {
+    // Recurring: buffer for live preview only — don't PATCH yet.
+    pendingColorValue.value = color
+  } else {
+    // Non-recurring: debounced immediate PATCH.
+    if (_colorDebounceTimer !== null) clearTimeout(_colorDebounceTimer)
+    _colorDebounceTimer = setTimeout(async () => {
+      _colorDebounceTimer = null
+      if (taskEvent.value) await eventStore.updateEventColor(taskEvent.value.id, color)
+    }, 150)
+  }
+}
+
+/** Called on @change for color picker (fires once on picker dismiss). */
+function onColorChange(e: Event) {
+  if (!taskEvent.value) return
+  if (!taskEvent.value.rrule) return  // non-recurring already handled by @input
+  const color = (e.target as HTMLInputElement).value
+  pendingColorValue.value = color
+  showColorScopeDialog.value = true
+}
+
+/** Called when RecurrenceEditDialog emits 'confirm'. */
+async function onColorScopeConfirm(scope: RecurrenceEditScope) {
+  showColorScopeDialog.value = false
+  const color = pendingColorValue.value ?? null
+  pendingColorValue.value = undefined
+  if (!taskEvent.value) return
+  const originalStartTime = taskEvent.value.is_occurrence
+    ? taskEvent.value.start_time
+    : undefined
+  await eventStore.updateEventColor(taskEvent.value.id, color, scope, originalStartTime)
+}
+
+/** Called when RecurrenceEditDialog emits 'cancel' — discard the pending color. */
+function onColorScopeCancel() {
+  showColorScopeDialog.value = false
+  pendingColorValue.value = undefined
+}
+
+/** Reset button: clear color immediately for non-recurring; open scope dialog for recurring. */
+function onColorReset() {
+  if (!taskEvent.value) return
+  if (taskEvent.value.rrule) {
+    pendingColorValue.value = null
+    showColorScopeDialog.value = true
+  } else {
+    if (_colorDebounceTimer !== null) clearTimeout(_colorDebounceTimer)
+    _colorDebounceTimer = setTimeout(async () => {
+      _colorDebounceTimer = null
+      if (taskEvent.value) await eventStore.updateEventColor(taskEvent.value.id, null)
+    }, 150)
+  }
 }
 
 onMounted(async () => {
@@ -396,21 +472,30 @@ onMounted(async () => {
               <input
                 type="color"
                 data-testid="event-color-input"
-                :value="taskEvent.color ?? '#6366f1'"
+                :value="displayColor"
                 class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
-                @input="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
+                @input="onColorInput"
+                @change="onColorChange"
               />
               <button
-                v-if="taskEvent.color"
+                v-if="taskEvent.color || pendingColorValue != null"
                 data-testid="event-color-reset"
                 class="text-[10px] text-white/30 hover:text-white/60"
-                @click="onEventColorChange(null)"
+                @click="onColorReset"
               >Reset</button>
             </div>
             <RecurrencePicker
               :model-value="taskEvent.rrule"
               :start-time="taskEvent.start_time"
               @update:model-value="onRecurrenceChange"
+            />
+            <!-- Scope dialog for recurring-event color edits (teleported to body) -->
+            <RecurrenceEditDialog
+              :visible="showColorScopeDialog"
+              mode="event"
+              action="edit"
+              @confirm="onColorScopeConfirm"
+              @cancel="onColorScopeCancel"
             />
           </div>
         </div>
@@ -461,23 +546,25 @@ onMounted(async () => {
                   @change="onCalendarEndChange"
                   class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
               </label>
-              <!-- Color picker — overrides milestone/context-node color -->
-              <!-- @input fires continuously during drag; @change only fires on dismiss.
-                   Using @input ensures Linux/Chromium users see live updates. -->
+              <!-- Color picker — overrides milestone/context-node color.
+                   @input fires continuously during drag for live preview;
+                   @change fires once on picker dismiss to gate the scope dialog
+                   for recurring events. -->
               <div class="flex items-center gap-2">
                 <span class="text-xs text-white/40 w-20">Color</span>
                 <input
                   type="color"
                   data-testid="event-color-input"
-                  :value="taskEvent.color ?? '#6366f1'"
+                  :value="displayColor"
                   class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
-                  @input="(e) => onEventColorChange((e.target as HTMLInputElement).value)"
+                  @input="onColorInput"
+                  @change="onColorChange"
                 />
                 <button
-                  v-if="taskEvent.color"
+                  v-if="taskEvent.color || pendingColorValue != null"
                   data-testid="event-color-reset"
                   class="text-[10px] text-white/30 hover:text-white/60"
-                  @click="onEventColorChange(null)"
+                  @click="onColorReset"
                 >Reset</button>
               </div>
               <!-- Recurrence picker — shown only when event exists -->
@@ -485,6 +572,14 @@ onMounted(async () => {
                 :model-value="taskEvent.rrule"
                 :start-time="taskEvent.start_time"
                 @update:model-value="onRecurrenceChange"
+              />
+              <!-- Scope dialog for recurring-event color edits (teleported to body) -->
+              <RecurrenceEditDialog
+                :visible="showColorScopeDialog"
+                mode="event"
+                action="edit"
+                @confirm="onColorScopeConfirm"
+                @cancel="onColorScopeCancel"
               />
             </div>
           </template>
