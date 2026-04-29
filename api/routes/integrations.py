@@ -27,8 +27,6 @@ import tempfile
 import time
 import urllib.parse
 
-import pexpect
-
 import asyncpg
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
@@ -135,6 +133,8 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
     A wide PTY (220 cols) prevents the URL from line-wrapping, which would
     break the URL regex. Returns ``(None, None)`` on any failure.
     """
+    import pexpect  # lazy — keeps module importable when pexpect is not installed
+
     try:
         child = pexpect.spawn(
             "claude",
@@ -180,6 +180,8 @@ def _complete_pexpect_sync(child, code: str) -> str:
       ``"timeout"`` — process did not exit within 30 seconds
       ``"error"``   — unexpected error (e.g. sendline raised, process died early)
     """
+    import pexpect  # lazy — keeps module importable when pexpect is not installed
+
     try:
         child.sendline(code)
     except Exception:
