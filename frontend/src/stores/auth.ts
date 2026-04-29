@@ -3,7 +3,8 @@ import { ref, computed } from 'vue'
 import { setBotTransport, getBotTransport, createWebSocketTransport } from '../composables/useBotTransport'
 
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<{ user_id: string; username: string; is_admin: boolean } | null>(null)
+  // TODO: add is_paid to /auth/me response when backend ships tier support
+  const user = ref<{ user_id: string; username: string; is_admin: boolean; is_paid?: boolean } | null>(null)
   const checked = ref(false)
   const isAuthenticated = computed(() => !!user.value)
 

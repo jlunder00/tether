@@ -27,6 +27,7 @@ export interface Task {
   rrule?: string | null
   is_recurring_master?: boolean
   original_date?: string
+  color?: string | null
 }
 
 export interface AnchorPlan { tasks: Task[]; notes: string }

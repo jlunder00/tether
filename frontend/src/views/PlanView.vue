@@ -172,7 +172,8 @@ async function onAnchorColumnDrop(e: DragEvent) {
             :anchor-id="anchor.id"
             :anchor-name="anchor.name"
             :time="anchor.time"
-            :color="anchor.color" />
+            :color="anchor.color"
+            :motif="anchor.motif" />
         </div>
         <!-- Right: day timeline -->
         <DayTimeline

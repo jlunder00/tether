@@ -3,7 +3,8 @@
  *  exist yet — the call is a no-op until the backend ships it. */
 export async function loadPremiumThemes(token: string): Promise<void> {
   const res = await fetch('/api/premium/themes', {
-    headers: { Authorization: `Bearer ${token}` },
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
   if (!res.ok) return
   const { themes } = await res.json() as { themes: { id: string; name: string; css: string }[] }

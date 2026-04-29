@@ -46,6 +46,7 @@ const label = computed(() => {
         :anchor-name="anchor.name"
         :time="anchor.time"
         :color="anchor.color"
+        :motif="anchor.motif"
         :date="date" />
     </div>
     <div v-else class="flex flex-col gap-1 mt-1">

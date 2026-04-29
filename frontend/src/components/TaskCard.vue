@@ -116,12 +116,15 @@ function toggleFollowup(enabled: boolean) {
 </script>
 
 <template>
-  <div class="group rounded-lg transition-colors border border-white/[0.08] cursor-pointer relative"
+  <div class="group rounded-md transition-colors cursor-pointer relative"
       :style="STATUS_CARD_STYLE[task.status]"
       :draggable="!editable && !!task.id"
       @dragstart="onDragStart"
       @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })">
-    <div class="flex flex-col gap-1 p-2">
+    <div v-if="task.color"
+         class="absolute left-0 top-1 bottom-1 w-1 rounded-full pointer-events-none"
+         :style="{ background: task.color }" />
+    <div class="flex flex-col gap-1 p-2 pl-3">
     <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
     <div class="absolute top-1.5 right-1.5">
       <button

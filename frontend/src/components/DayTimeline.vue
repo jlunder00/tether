@@ -293,11 +293,10 @@ function onDragover(e: DragEvent) {
 // --- Anchor color helper ---
 
 function anchorBandStyle(anchor: { color: string; id: string }) {
-  const color = anchor.color ?? '#6366f1'
   const layout = anchorOverlapLayouts.value[anchor.id] ?? { leftPercent: 0, widthPercent: 100 }
   return {
-    backgroundColor: color + '44',  // ~26% opacity
-    borderLeft: '2px solid ' + color,
+    background: 'var(--m-band)',
+    borderLeft: '2px solid var(--m)',
     top: `${anchorBandTopPx(anchor as Parameters<typeof anchorBandTopPx>[0], dateObj.value)}px`,
     height: `${anchorBandHeightPx(anchor as Parameters<typeof anchorBandHeightPx>[0], dateObj.value)}px`,
     left: `${layout.leftPercent}%`,
@@ -365,6 +364,7 @@ function timedEventStyle(event: CalendarEvent) {
         <div
           v-for="anchor in anchorStore.anchors"
           :key="anchor.id"
+          :data-motif="anchor.motif ?? 'anchor'"
           :data-testid="`anchor-band-${anchor.id}`"
           class="absolute pointer-events-none rounded-sm"
           :style="anchorBandStyle(anchor)"
