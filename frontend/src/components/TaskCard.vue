@@ -30,7 +30,7 @@ const emit = defineEmits<{
 
 // Status pill colors (text + bg for the clickable pill)
 const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string }> = {
-  pending:     { bg: 'bg-white/10', text: 'text-white/50', label: 'todo' },
+  pending:     { bg: 'bg-[--status-todo-bg]', text: 'text-[--status-todo-fg]', label: 'todo' },
   in_progress: { bg: 'bg-blue-500/20', text: 'text-blue-300', label: 'doing' },
   done:        { bg: 'bg-green-500/20', text: 'text-green-300', label: 'done' },
   skipped:     { bg: 'bg-orange-500/20', text: 'text-orange-300', label: 'skip' },
@@ -39,11 +39,11 @@ const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string 
 
 // Card background — opaque colors to prevent parent GroupContainer color bleed
 const STATUS_CARD_STYLE: Record<TaskStatus, Record<string, string>> = {
-  pending:     { backgroundColor: 'rgb(22,29,44)' },           // slight lift from base
-  in_progress: { backgroundColor: 'rgb(20,30,55)' },           // blue tint
-  done:        { backgroundColor: 'rgb(19,30,38)', opacity: '0.7' },  // green tint, dimmed
-  skipped:     { backgroundColor: 'rgb(28,27,37)', opacity: '0.5' },  // orange tint, more dimmed
-  blocked:     { backgroundColor: 'rgb(30,22,37)' },           // red tint
+  pending:     { backgroundColor: 'var(--bg-elev-1)' },
+  in_progress: { backgroundColor: 'var(--status-doing-card)' },
+  done:        { backgroundColor: 'var(--status-done-card)', opacity: '0.7' },
+  skipped:     { backgroundColor: 'var(--status-skip-card)', opacity: '0.5' },
+  blocked:     { backgroundColor: 'var(--status-block-card)' },
 }
 
 const isOverdue = computed(() => {
@@ -136,12 +136,12 @@ function toggleFollowup(enabled: boolean) {
       </button>
       <Teleport to="body">
         <div v-if="showStatusDropdown"
-             class="fixed z-50 bg-gray-800 border border-white/20 rounded-lg shadow-xl py-1 min-w-[100px]"
+             class="fixed z-50 bg-[--bg-popover] border border-[--border-2] rounded-lg shadow-xl py-1 min-w-[100px]"
              :style="statusDropdownStyle">
           <button
             v-for="s in ALL_STATUSES" :key="s"
             @click.stop="setStatus(s)"
-            :class="[STATUS_PILL[s].bg, STATUS_PILL[s].text, s === task.status ? 'ring-1 ring-white/30' : '']"
+            :class="[STATUS_PILL[s].bg, STATUS_PILL[s].text, s === task.status ? 'ring-1 ring-[--fg-5]' : '']"
             class="block w-full text-left text-xs px-3 py-1.5 hover:bg-white/10 transition-colors">
             {{ STATUS_PILL[s].label }}
           </button>
@@ -157,7 +157,7 @@ function toggleFollowup(enabled: boolean) {
         :class="task.status === 'done' ? 'line-through opacity-40' : ''"
         @click.stop
         @change="updateText"
-        class="w-full bg-transparent border-b border-white/20 focus:border-white/60 outline-none text-sm py-0.5" />
+        class="w-full bg-transparent border-b border-[--border-1] focus:border-[--border-2] outline-none text-sm py-0.5" />
       <span
         v-else
         class="text-sm break-words"
@@ -180,7 +180,7 @@ function toggleFollowup(enabled: boolean) {
         <span
           v-if="task.context_subject"
           @click.stop
-          class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-white/40">
+          class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[--fg-4]">
           {{ task.context_subject }}
         </span>
         <span
@@ -188,7 +188,7 @@ function toggleFollowup(enabled: boolean) {
           @click.stop="pushPanel({ kind: 'milestone', entityId: m.id })"
           :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
           class="text-[10px] px-1.5 py-0.5 rounded border cursor-pointer"
-          :class="m.color ? '' : 'bg-white/10 text-white/50 border-transparent hover:bg-white/20'">
+          :class="m.color ? '' : 'bg-white/10 text-[--fg-3] border-transparent hover:bg-white/20'">
           {{ m.name }}
         </span>
       </template>
@@ -199,19 +199,19 @@ function toggleFollowup(enabled: boolean) {
       <button
         v-if="showRemove"
         @click.stop="emit('remove')"
-        class="text-white/30 hover:text-white/70 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+        class="text-[--fg-5] hover:text-[--fg-2] text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
     </div>
     <div v-if="showDetailLink && !compact">
       <button
         @click="openFollowup"
-        class="text-white/20 hover:text-white/50 text-xs opacity-0 group-hover:opacity-100 transition-opacity ml-1">
+        class="text-[--fg-6] hover:text-[--fg-3] text-xs opacity-0 group-hover:opacity-100 transition-opacity ml-1">
         ⚙
       </button>
       <Teleport to="body">
       <div v-if="showFollowup"
-           class="fixed z-50 bg-gray-800 border border-white/20 rounded-xl p-3 min-w-[200px] shadow-xl"
+           class="fixed z-50 bg-[--bg-popover] border border-[--border-2] rounded-xl p-3 min-w-[200px] shadow-xl"
            :style="popoverStyle">
-        <label class="flex items-center gap-2 text-xs text-white/70 mb-2">
+        <label class="flex items-center gap-2 text-xs text-[--fg-2] mb-2">
           <input type="checkbox"
                  :checked="task.followup_config?.enabled ?? false"
                  @change="(e) => toggleFollowup((e.target as HTMLInputElement).checked)"
@@ -219,14 +219,14 @@ function toggleFollowup(enabled: boolean) {
           Override anchor follow-up
         </label>
         <template v-if="task.followup_config?.enabled">
-          <div class="grid grid-cols-2 gap-2 text-xs text-white/50">
+          <div class="grid grid-cols-2 gap-2 text-xs text-[--fg-3]">
             <label class="flex flex-col gap-0.5">
               Pre interval
               <input
                 :value="task.followup_config.pre_ack_interval_min"
                 type="number" min="1"
                 @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_interval_min: +($event.target as HTMLInputElement).value } })"
-                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                class="bg-white/10 text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
             <label class="flex flex-col gap-0.5">
               Max pings
@@ -234,11 +234,11 @@ function toggleFollowup(enabled: boolean) {
                 :value="task.followup_config.pre_ack_max_pings"
                 type="number" min="1"
                 @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_max_pings: +($event.target as HTMLInputElement).value } })"
-                class="bg-white/10 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                class="bg-white/10 text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
           </div>
         </template>
-        <button @click="showFollowup = false" class="mt-2 text-xs text-white/40 hover:text-white/70 w-full text-right">
+        <button @click="showFollowup = false" class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-right">
           done
         </button>
       </div>
