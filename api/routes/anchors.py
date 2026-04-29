@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
+from typing import Literal
 import asyncpg
 from db.pg_queries import get_anchors, upsert_anchor, delete_anchor
 from db.pool_middleware import get_db_conn
@@ -19,6 +20,7 @@ class AnchorUpdate(BaseModel):
     color: str
     position: int
     followup_config: dict | None = None
+    motif: Literal["anchor", "focus", "calm", "energy", "care", "flow", "dusk", "quiet"] = "anchor"
 
 
 @router.get("/anchors")

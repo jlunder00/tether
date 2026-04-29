@@ -10,9 +10,9 @@ async def upsert_anchor(conn: asyncpg.Connection, anchor: dict) -> None:
         """
         INSERT INTO anchors
             (id, user_id, name, time, duration_minutes, flexibility,
-             strictness, color, position, followup_config)
+             strictness, color, position, followup_config, motif)
         VALUES ($1, current_setting('app.current_user_id', true)::uuid,
-                $2, $3, $4, $5, $6, $7, $8, $9)
+                $2, $3, $4, $5, $6, $7, $8, $9, $10)
         ON CONFLICT (id) DO UPDATE SET
             name             = EXCLUDED.name,
             time             = EXCLUDED.time,
@@ -21,7 +21,8 @@ async def upsert_anchor(conn: asyncpg.Connection, anchor: dict) -> None:
             strictness       = EXCLUDED.strictness,
             color            = EXCLUDED.color,
             position         = EXCLUDED.position,
-            followup_config  = EXCLUDED.followup_config
+            followup_config  = EXCLUDED.followup_config,
+            motif            = EXCLUDED.motif
         """,
         _uuid.UUID(anchor["id"]),
         anchor["name"],
@@ -32,6 +33,7 @@ async def upsert_anchor(conn: asyncpg.Connection, anchor: dict) -> None:
         anchor.get("color", "#888888"),
         anchor.get("position", 0),
         anchor.get("followup_config"),
+        anchor.get("motif", "anchor"),
     )
 
 
@@ -63,7 +65,7 @@ async def get_anchors(conn: asyncpg.Connection) -> list[dict]:
 
 async def patch_anchor(conn: asyncpg.Connection, anchor_id: str, fields: dict) -> None:
     allowed = {"name", "time", "duration_minutes", "flexibility", "strictness",
-               "color", "position", "followup_config"}
+               "color", "position", "followup_config", "motif"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return
