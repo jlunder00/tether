@@ -27,6 +27,7 @@ async def create_milestone(
     description: str | None = None,
     target_date: str | None = None,
     color: str | None = None,
+    motif: str = "anchor",
 ) -> dict:
     user_uuid = await conn.fetchval(
         "SELECT current_setting('app.current_user_id', true)::uuid"
@@ -38,12 +39,12 @@ async def create_milestone(
     row = await conn.fetchrow(
         """
         INSERT INTO milestones
-            (id, user_id, context_entry_id, name, description, target_date, color)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, name, description, target_date, color, status, status_override,
+            (id, user_id, context_entry_id, name, description, target_date, color, motif)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, name, description, target_date, color, motif, status, status_override,
                   created_at, updated_at, version
         """,
-        _uuid.uuid4(), user_uuid, entry_id, name, description, target_date, color,
+        _uuid.uuid4(), user_uuid, entry_id, name, description, target_date, color, motif,
     )
     return {
         "id": str(row["id"]),
@@ -52,6 +53,7 @@ async def create_milestone(
         "description": row["description"],
         "target_date": row["target_date"],
         "color": row["color"],
+        "motif": row["motif"],
         "status": "pending",
         "status_override": False,
         "created_at": row["created_at"],
@@ -129,6 +131,7 @@ async def get_milestones(
             "description": m["description"],
             "target_date": m["target_date"],
             "color": m["color"],
+            "motif": m["motif"],
             "status": m["status"] if m["status_override"] else _derive_milestone_status(statuses),
             "status_override": bool(m["status_override"]),
             "created_at": m["created_at"],
@@ -164,6 +167,9 @@ async def patch_milestone(
     if "color" in fields:
         params.append(fields["color"])
         set_parts.append(f"color = ${len(params)}")
+    if "motif" in fields:
+        params.append(fields["motif"])
+        set_parts.append(f"motif = ${len(params)}")
     if "status" in fields:
         params.append(fields["status"])
         set_parts.append(f"status = ${len(params)}")

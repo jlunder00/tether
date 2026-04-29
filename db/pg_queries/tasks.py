@@ -108,7 +108,7 @@ async def upsert_tasks(
     all_rows = await conn.fetch(
         """
         SELECT uuid, text, status, position, followup_config,
-               description, context_subject, context_node_id, version
+               description, context_subject, context_node_id, motif, version
         FROM tasks
         WHERE plan_date = $1 AND anchor_id = $2
         ORDER BY position
@@ -163,6 +163,9 @@ async def patch_task_fields(
         val = fields["end_time"]
         params.append(_parse_ts(val) if val is not None else None)
         set_parts.append(f"end_time = ${len(params)}")
+    if "motif" in fields:
+        params.append(fields["motif"])
+        set_parts.append(f"motif = ${len(params)}")
 
     if not set_parts:
         return None
@@ -193,7 +196,7 @@ async def patch_task_fields(
     row = await conn.fetchrow(
         """
         SELECT uuid, text, status, position, followup_config,
-               description, context_subject, context_node_id, version
+               description, context_subject, context_node_id, motif, version
         FROM tasks WHERE uuid = $1
         """,
         _uuid.UUID(task_uuid),
@@ -212,7 +215,7 @@ async def patch_task_fields(
         row = await conn.fetchrow(
             """
             SELECT uuid, text, status, position, followup_config,
-                   description, context_subject, context_node_id, version
+                   description, context_subject, context_node_id, motif, version
             FROM tasks WHERE uuid = $1
             """,
             _uuid.UUID(task_uuid),
@@ -226,7 +229,7 @@ async def get_task_by_uuid(conn: asyncpg.Connection, task_uuid: str) -> dict | N
     row = await conn.fetchrow(
         """
         SELECT uuid, plan_date, anchor_id, text, status, position,
-               followup_config, description, context_subject, context_node_id, version,
+               followup_config, description, context_subject, context_node_id, motif, version,
                rrule, exdates
         FROM tasks WHERE uuid = $1
         """,
@@ -244,7 +247,7 @@ async def get_all_tasks(conn: asyncpg.Connection) -> list[dict]:
     rows = await conn.fetch(
         """
         SELECT uuid, plan_date, anchor_id, text, status, position,
-               followup_config, description, context_subject, context_node_id, version
+               followup_config, description, context_subject, context_node_id, motif, version
         FROM tasks
         ORDER BY plan_date DESC NULLS LAST, anchor_id, position
         """
@@ -258,6 +261,7 @@ async def create_unscheduled_task(
     description: str | None = None,
     status: str = "pending",
     context_subject: str | None = None,
+    motif: str = "anchor",
 ) -> dict:
     """Create a task with no plan_date or anchor_id (backlog task)."""
     user_uuid = await conn.fetchval(
@@ -266,11 +270,11 @@ async def create_unscheduled_task(
     new_uuid = _uuid.uuid4()
     row = await conn.fetchrow(
         """
-        INSERT INTO tasks (uuid, user_id, text, status, description, context_subject)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING uuid, text, status, position, followup_config, description, context_subject, context_node_id, version
+        INSERT INTO tasks (uuid, user_id, text, status, description, context_subject, motif)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING uuid, text, status, position, followup_config, description, context_subject, context_node_id, motif, version
         """,
-        new_uuid, user_uuid, text, status, description, context_subject,
+        new_uuid, user_uuid, text, status, description, context_subject, motif,
     )
     new_task = _row_to_task(row)
     await resolve_blocked_status(conn, new_task["id"])
@@ -281,7 +285,7 @@ async def get_unscheduled_tasks(conn: asyncpg.Connection) -> list[dict]:
     rows = await conn.fetch(
         """
         SELECT uuid, text, status, position, followup_config,
-               description, context_subject, context_node_id, version
+               description, context_subject, context_node_id, motif, version
         FROM tasks WHERE plan_date IS NULL
         ORDER BY position
         """

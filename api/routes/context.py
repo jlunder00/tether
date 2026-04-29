@@ -12,6 +12,9 @@ from api.auth import auth_dependency
 router = APIRouter()
 
 
+VALID_MOTIFS = {"anchor", "focus", "calm", "energy", "care", "flow", "dusk", "quiet"}
+
+
 @router.get("/context")
 async def list_context(_auth=Depends(auth_dependency),
                        conn: asyncpg.Connection = Depends(get_db_conn),
@@ -34,7 +37,10 @@ async def get_context(subject: str, _auth=Depends(auth_dependency),
 async def put_context(subject: str, body: dict, request: Request,
                       _auth=Depends(auth_dependency),
                       conn: asyncpg.Connection = Depends(get_db_conn)):
-    await upsert_context_entry(conn, subject, body.get("body", ""))
+    motif = body.get("motif")
+    if motif is not None and motif not in VALID_MOTIFS:
+        raise HTTPException(status_code=422, detail=f"Invalid motif: {motif!r}")
+    await upsert_context_entry(conn, subject, body.get("body", ""), motif=motif)
     await manager.broadcast({"type": "context_updated"}, request.state.user_id)
     return {"ok": True}
 
