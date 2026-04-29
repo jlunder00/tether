@@ -47,6 +47,11 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
       - ADMIN_DATABASE_URL=postgresql://tether:${POSTGRES_PASSWORD:-tether_dev}@postgres:5432/tether
+      # Fernet key for per-user Anthropic OAuth credential encryption.
+      # Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # WARNING: losing this key makes all stored Anthropic credentials unrecoverable.
+      # Back it up separately from your Postgres dump.
+      - TETHER_VAULT_KEY=${TETHER_VAULT_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

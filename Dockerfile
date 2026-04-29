@@ -22,9 +22,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev cron git gosu \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy Node 20 from the frontend build stage so we can install the Claude Code CLI
+# without pulling a second (older) Node version from Debian apt.
+COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=frontend-build /usr/local/lib/node_modules /usr/local/lib/node_modules
+COPY --from=frontend-build /usr/local/bin/npm /usr/local/bin/npm
+
+# Claude Code CLI — required for `claude setup-token` in the Anthropic OAuth flow.
+# Pin to a specific version for reproducible image builds.
+ARG CLAUDE_CODE_VERSION=2.1.116
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+
 # Non-root user for running services. UID 1000 matches the default Pi user
 # so bind-mounted /data files are accessible without permission issues.
 RUN useradd -m -u 1000 -s /bin/bash tether
+
+# Runtime directory for ephemeral Anthropic credential files (vault materialize).
+# Created here so the tether user owns it from the start; mode 0700 prevents
+# other users from listing or reading decrypted credential files.
+RUN mkdir -p /run/tether/creds \
+    && chown tether:tether /run/tether/creds \
+    && chmod 0700 /run/tether/creds
 
 WORKDIR /app
 
