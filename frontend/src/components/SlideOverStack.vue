@@ -62,7 +62,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKeydown))
           </button>
           <div class="flex-1" />
           <button
-            class="text-[--fg-5] hover:text-[--fg-1] transition-colors p-1 rounded hover:bg-white/10"
+            class="text-[--fg-5] hover:text-[--fg-1] transition-colors p-1 rounded hover:bg-[--bg-elev-3]"
             title="Close all (Esc)"
             @click="close"
           >

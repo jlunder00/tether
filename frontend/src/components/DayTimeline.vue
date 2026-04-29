@@ -375,7 +375,7 @@ function timedEventStyle(event: CalendarEvent) {
           v-for="(band, bi) in overlapBands"
           :key="'overlap-' + bi"
           data-testid="overlap-background"
-          class="absolute inset-x-0 bg-white/5 pointer-events-none rounded-sm"
+          class="absolute inset-x-0 bg-[--bg-elev-1] pointer-events-none rounded-sm"
           :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
         />
 
@@ -409,7 +409,7 @@ function timedEventStyle(event: CalendarEvent) {
         >
           <!-- Drag grip (HTML5 demote drag) — narrow left strip -->
           <div
-            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-white/20 transition-opacity"
+            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-[--bg-elev-4] transition-opacity"
             :title="'Drag to anchor column to un-schedule'"
             draggable="true"
             @dragstart.stop="(de) => onEventDragstart(ev, de)"

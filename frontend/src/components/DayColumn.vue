@@ -31,7 +31,7 @@ const label = computed(() => {
     <button
       @click="expanded = !expanded"
       class="text-center py-2 px-1 rounded-t-lg text-xs font-medium"
-      :class="isToday ? 'bg-white/20 text-[--fg-1]' : 'bg-[--bg-elev-1] text-[--fg-3] hover:bg-[--bg-elev-3]'">
+      :class="isToday ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'bg-[--bg-elev-1] text-[--fg-3] hover:bg-[--bg-elev-3]'">
       {{ label }}
       <span class="block text-[--fg-4] text-xs font-normal mt-0.5">
         {{ doneTasks }}/{{ totalTasks }} ✓

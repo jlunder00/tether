@@ -143,7 +143,7 @@ function toggleFollowup(enabled: boolean) {
             v-for="s in ALL_STATUSES" :key="s"
             @click.stop="setStatus(s)"
             :class="[STATUS_PILL[s].bg, STATUS_PILL[s].text, s === task.status ? 'ring-1 ring-[--fg-5]' : '']"
-            class="block w-full text-left text-xs px-3 py-1.5 hover:bg-white/10 transition-colors">
+            class="block w-full text-left text-xs px-3 py-1.5 hover:bg-[--bg-elev-3] transition-colors">
             {{ STATUS_PILL[s].label }}
           </button>
         </div>
@@ -174,14 +174,14 @@ function toggleFollowup(enabled: boolean) {
         {{ (task as any).plan_date }}{{ (task as any).anchor_id ? ' · ' + (task as any).anchor_id : '' }}
       </span>
       <span v-if="isOverdue" @click.stop
-            class="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300 font-medium">
+            class="text-[10px] px-1.5 py-0.5 rounded bg-[--status-block-bg] text-[--status-block-fg] font-medium">
         overdue
       </span>
       <template v-if="!hideTags">
         <span
           v-if="task.context_subject"
           @click.stop
-          class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[--fg-4]">
+          class="text-[10px] px-1.5 py-0.5 rounded bg-[--bg-elev-3] text-[--fg-4]">
           {{ task.context_subject }}
         </span>
         <span
@@ -189,7 +189,7 @@ function toggleFollowup(enabled: boolean) {
           @click.stop="pushPanel({ kind: 'milestone', entityId: m.id })"
           :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
           class="text-[10px] px-1.5 py-0.5 rounded border cursor-pointer"
-          :class="m.color ? '' : 'bg-white/10 text-[--fg-3] border-transparent hover:bg-white/20'">
+          :class="m.color ? '' : 'bg-[--bg-elev-3] text-[--fg-3] border-transparent hover:bg-[--bg-elev-4]'">
           {{ m.name }}
         </span>
       </template>
@@ -227,7 +227,7 @@ function toggleFollowup(enabled: boolean) {
                 :value="task.followup_config.pre_ack_interval_min"
                 type="number" min="1"
                 @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_interval_min: +($event.target as HTMLInputElement).value } })"
-                class="bg-white/10 text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
+                class="bg-[--bg-elev-3] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
             <label class="flex flex-col gap-0.5">
               Max pings
@@ -235,7 +235,7 @@ function toggleFollowup(enabled: boolean) {
                 :value="task.followup_config.pre_ack_max_pings"
                 type="number" min="1"
                 @change="emit('update', { ...task, followup_config: { ...task.followup_config!, pre_ack_max_pings: +($event.target as HTMLInputElement).value } })"
-                class="bg-white/10 text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
+                class="bg-[--bg-elev-3] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
             </label>
           </div>
         </template>
