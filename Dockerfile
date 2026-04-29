@@ -24,9 +24,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy Node 20 from the frontend build stage so we can install the Claude Code CLI
 # without pulling a second (older) Node version from Debian apt.
+# npm is a symlink in node:20-slim (/usr/local/bin/npm → ../lib/node_modules/npm/bin/npm).
+# Docker COPY dereferences symlinks, breaking npm's relative require('../lib/cli.js').
+# Recreate the symlink manually instead of copying the dereferenced file.
 COPY --from=frontend-build /usr/local/bin/node /usr/local/bin/node
 COPY --from=frontend-build /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=frontend-build /usr/local/bin/npm /usr/local/bin/npm
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm /usr/local/bin/npm \
+    && ln -sf /usr/local/lib/node_modules/npm/bin/npx /usr/local/bin/npx
 
 # Claude Code CLI — required for `claude setup-token` in the Anthropic OAuth flow.
 # Pin to a specific version for reproducible image builds.
