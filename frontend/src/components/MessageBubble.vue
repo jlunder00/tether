@@ -41,7 +41,7 @@ const renderedHtml = computed(() => {
 <style scoped>
 /* Tailwind's `prose` hard-codes color via --tw-prose-* variables. Re-point
    them at theme tokens so bot replies stay readable in every theme/mode. */
-.bot-bubble :deep() {
+.bot-bubble {
   --tw-prose-body: var(--fg-1);
   --tw-prose-headings: var(--fg-1);
   --tw-prose-lead: var(--fg-2);

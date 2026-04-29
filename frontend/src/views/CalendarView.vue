@@ -774,7 +774,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               v-for="task in tasks"
               :key="task.id"
               draggable="true"
-              class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-2] hover:text-[--fg-2] transition-colors truncate"
+              class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-3] hover:text-[--fg-1] transition-colors truncate"
               :class="task.status === 'done' ? 'line-through opacity-40' : ''"
               @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
               @dragstart="(e: DragEvent) => {
@@ -1016,7 +1016,7 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <!-- Focused day highlight (stronger than today) -->
               <div
                 v-if="focusedDay === dayKeys[i]"
-                class="absolute inset-0 bg-[--accent-soft] pointer-events-none"
+                class="absolute inset-0 bg-[--accent-veil] pointer-events-none"
               />
 
               <!-- Overlap background bands — light tint over time windows with simultaneous events -->
