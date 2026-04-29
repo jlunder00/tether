@@ -1,12 +1,48 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth'
+import { useTheme } from '../composables/useTheme'
 import { api } from '../lib/api'
 import GoogleCalendarSection from '../components/GoogleCalendarSection.vue'
 import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
 
 const auth = useAuthStore()
+
+// ---------------------------------------------------------------------------
+// Appearance / Theme
+// ---------------------------------------------------------------------------
+
+const { THEMES, activeTheme, isThemeUnlocked, applyTheme, previewTheme } = useTheme()
+const showUpgradeNudge = ref(false)
+const upgradeNudgeTheme = ref('')
+
+function onPreviewTheme(themeId: string) {
+  previewTheme(themeId)
+}
+
+function onSelectTheme(themeId: string) {
+  const theme = THEMES.find(t => t.id === themeId)
+  if (!theme) return
+
+  // Always apply locally for immediate visual feedback
+  previewTheme(themeId)
+
+  if (isThemeUnlocked(theme)) {
+    // Persist permanently for unlocked themes
+    applyTheme(themeId)
+    showUpgradeNudge.value = false
+  } else {
+    // Locked theme: preview only, show upgrade nudge
+    upgradeNudgeTheme.value = theme.name
+    showUpgradeNudge.value = true
+  }
+
+  // Future: when isPaid && endpoint exists, persist server-side
+  // if (isPaid.value) {
+  //   fetch('/api/user/preferences', { method: 'PATCH', ... })
+  // }
+}
 
 // ---------------------------------------------------------------------------
 // LLM configuration
@@ -194,6 +230,59 @@ async function linkTelegram() {
           <div>
             <div class="text-xs text-gray-400 mb-1">Username</div>
             <div class="text-white font-medium">{{ auth.user?.username ?? '—' }}</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Appearance -->
+      <section class="mb-8">
+        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Appearance</h2>
+        <div class="bg-gray-800 rounded-xl p-4 space-y-4">
+          <p class="text-xs text-white/40">Select a theme. Free previews are available for all themes — upgrade to keep a paid theme across sessions.</p>
+          <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <button
+              v-for="theme in THEMES"
+              :key="theme.id"
+              @click="onSelectTheme(theme.id)"
+              @mouseenter="onPreviewTheme(theme.id)"
+              @mouseleave="onPreviewTheme(activeTheme)"
+              :title="theme.name"
+              :aria-pressed="activeTheme === theme.id"
+              class="relative flex flex-col items-start gap-1.5 rounded-lg p-2.5 border transition-all text-left"
+              :class="[
+                activeTheme === theme.id
+                  ? 'border-indigo-500 ring-1 ring-indigo-500'
+                  : 'border-gray-700 hover:border-gray-500',
+              ]"
+            >
+              <!-- Canvas/accent swatch -->
+              <span
+                class="w-full h-6 rounded"
+                :style="{ background: `linear-gradient(135deg, ${theme.canvas} 60%, ${theme.accent} 100%)` }"
+              />
+              <span class="text-xs text-white/80 font-medium leading-tight">{{ theme.name }}</span>
+              <!-- Tier badge -->
+              <span
+                v-if="theme.tier !== 'free'"
+                class="absolute top-1.5 right-1.5 text-[9px] font-bold uppercase tracking-wide px-1 py-0.5 rounded"
+                :class="isThemeUnlocked(theme) ? 'bg-emerald-700/70 text-emerald-200' : 'bg-gray-700/80 text-white/40'"
+              >{{ isThemeUnlocked(theme) ? 'oss' : 'paid' }}</span>
+            </button>
+          </div>
+
+          <!-- Upgrade nudge -->
+          <div
+            v-if="showUpgradeNudge"
+            class="flex items-center justify-between gap-3 rounded-lg bg-indigo-900/40 border border-indigo-700/50 px-3 py-2.5 text-sm"
+          >
+            <span class="text-white/70">
+              <strong class="text-white">{{ upgradeNudgeTheme }}</strong> is a paid theme — upgrade to keep it.
+            </span>
+            <button
+              @click="showUpgradeNudge = false"
+              class="text-white/30 hover:text-white/70 text-xs shrink-0"
+              aria-label="Dismiss"
+            >✕</button>
           </div>
         </div>
       </section>

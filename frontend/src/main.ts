@@ -13,6 +13,7 @@ const savedMode = localStorage.getItem('tether-mode') ?? (new Date().getHours() 
 document.documentElement.dataset.theme = savedTheme
 document.documentElement.dataset.mode = savedMode as 'light' | 'dark'
 
+// Also set type-voice to match theme
 const VOICE: Record<string, string> = {
   tether: 'sharp', horizon: 'editorial', contrast: 'sharp',
   terminal: 'terminal', solstice: 'sharp', dracula: 'terminal', paper: 'editorial',

@@ -1,12 +1,27 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
+import { loadPremiumThemes } from './composables/usePremiumThemes'
 import BotChat from './components/BotChat.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 
 const authStore = useAuthStore()
 const router = useRouter()
+
+// Load premium theme CSS once the user is known to be authenticated.
+// isPaid is always false today; this fires when backend adds the field.
+watch(
+  () => authStore.user,
+  (user) => {
+    if (user?.is_paid) {
+      // token not available client-side via cookie auth — pass empty string;
+      // the endpoint will use session cookie instead when implemented
+      loadPremiumThemes('')
+    }
+  },
+  { immediate: true },
+)
 const chatOpen = ref(false)
 
 async function logout() {
