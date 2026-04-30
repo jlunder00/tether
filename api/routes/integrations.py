@@ -78,6 +78,7 @@ _OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 _ANTHROPIC_URL_SCHEME = "https"
 # claude setup-token may emit URLs on either domain depending on version.
 _VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}
+_OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 
 
 def _extract_anthropic_url(text: str) -> str | None:
@@ -202,18 +203,24 @@ def _complete_pexpect_sync(child, code: str) -> str:
 
     logger.info("anthropic/complete: sending code (length=%d) to pexpect child", len(code))
     try:
-        child.sendline(code)
+        # child.sendline(code)
+        child.send(code+'\r\n')
     except Exception:
         logger.exception("pexpect sendline failed — child likely already exited")
         return "error"
 
     try:
-        child.expect(pexpect.EOF, timeout=30)
+        child.expect(pexpect.EOF, timeout=120)
         post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
         safe_output = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", post_output)
         logger.debug("anthropic/complete: child output after code submission: %r", safe_output[-500:])
     except pexpect.TIMEOUT:
-        logger.warning("anthropic/complete: pexpect timed out waiting for EOF after code submission")
+        post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
+        logger.warning(
+            "anthropic/complete: pexpect timed out waiting for EOF; "
+            "child output so far: %r",
+            post_output[-500:],
+        )
         return "timeout"
     except Exception:
         logger.exception("pexpect expect(EOF) failed")
