@@ -190,41 +190,52 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
     return None, None
 
 
-def _complete_pexpect_sync(child, code: str) -> str:
+def _complete_pexpect_sync(child, code: str) -> tuple[str, bytes]:
     """Send the OAuth code to the waiting pexpect child and wait for it to exit.
 
-    Returns:
-      ``"ok"``      — process exited with code 0 (credentials written)
-      ``"failed"``  — process exited with non-zero code (setup rejected the code)
-      ``"timeout"`` — process did not exit within 30 seconds
-      ``"error"``   — unexpected error (e.g. sendline raised, process died early)
+    Returns a (result, output_bytes) tuple where result is one of:
+      ``"ok"``      — process exited with code 0
+      ``"failed"``  — process exited with non-zero code
+      ``"timeout"`` — process did not exit within 120 seconds
+      ``"error"``   — unexpected error (e.g. send raised, process died early)
+    and output_bytes is everything the child printed after the code was sent.
     """
     import pexpect  # lazy — keeps module importable when pexpect is not installed
 
     logger.info("anthropic/complete: sending code (length=%d) to pexpect child", len(code))
     try:
-        # child.sendline(code)
-        child.send(code+'\r\n')
+        child.send(code + '\r')  # \r alone = one Enter in PTY canonical mode
     except Exception:
         logger.exception("pexpect sendline failed — child likely already exited")
-        return "error"
+        return "error", b""
 
-    try:
-        child.expect(pexpect.EOF, timeout=120)
-        post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
-        safe_output = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", post_output)
-        logger.debug("anthropic/complete: child output after code submission: %r", safe_output[-500:])
-    except pexpect.TIMEOUT:
-        post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
+    # Stream output after code submission so we can see exactly what happens,
+    # rather than waiting silently for 120s and only logging on timeout.
+    buf = b""
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(4096, timeout=1)
+            buf += chunk
+            clean = _ANSI_ESCAPE_RE.sub("", chunk.decode(errors="replace"))
+            safe = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", clean)
+            logger.info("anthropic/complete: child output chunk: %r", safe)
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            logger.info("anthropic/complete: child EOF reached")
+            break
+        except Exception:
+            logger.exception("pexpect read_nonblocking failed")
+            return "error", buf
+    else:
+        post_output = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
         logger.warning(
             "anthropic/complete: pexpect timed out waiting for EOF; "
             "child output so far: %r",
             post_output[-500:],
         )
-        return "timeout"
-    except Exception:
-        logger.exception("pexpect expect(EOF) failed")
-        return "error"
+        return "timeout", buf
 
     # Reap the process so that exitstatus is populated.
     try:
@@ -239,7 +250,7 @@ def _complete_pexpect_sync(child, code: str) -> str:
         child.exitstatus,
         child.signalstatus,
     )
-    return "ok" if child.exitstatus == 0 else "failed"
+    return ("ok" if child.exitstatus == 0 else "failed"), buf
 
 
 async def _sweep_expired_setups() -> None:
@@ -667,7 +678,7 @@ async def anthropic_complete(
     logger.debug("anthropic/complete: pending setup age=%.1fs temp_dir=%s", age, temp_dir)
 
     loop = asyncio.get_running_loop()
-    result = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
+    result, post_buf = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
     logger.info("anthropic/complete: pexpect result=%r for user_id=%s", result, user_id)
 
     if result == "error":
@@ -690,8 +701,7 @@ async def anthropic_complete(
     # `claude setup-token`. The CLI does not write a credentials file — it
     # prints a long-lived sk-ant-oat-… token, which we persist as the only
     # field in the credentials blob.
-    raw_after_code = child.before.decode(errors="replace") if getattr(child, "before", None) else ""
-    cleaned = _ANSI_ESCAPE_RE.sub("", raw_after_code)
+    cleaned = _ANSI_ESCAPE_RE.sub("", post_buf.decode(errors="replace"))
     match = _OAUTH_TOKEN_RE.search(cleaned)
     if not match:
         safe_tail = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", cleaned)
