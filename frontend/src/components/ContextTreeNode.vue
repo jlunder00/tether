@@ -63,8 +63,8 @@ const hasChildren = computed(() =>
 const nodeBody = computed(() => contextStore.sectionCache[`${props.node.id}::details::main`]?.body ?? '')
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-white/20', in_progress: 'bg-blue-400',
-  done: 'bg-green-400', blocked: 'bg-red-400',
+  pending: 'bg-[--bg-elev-2]', in_progress: 'bg-[--status-doing-fg]',
+  done: 'bg-[--status-done-fg]', blocked: 'bg-[--status-block-fg]',
 }
 
 const allSectionTypes = computed(() => {
@@ -443,7 +443,7 @@ async function addChild() {
 
 <template>
   <div :style="depthStyle">
-    <div class="border border-white/10 rounded-xl p-4 transition-shadow"
+    <div class="border border-[--border-soft] rounded-xl p-4 transition-shadow"
          :class="[dragOver ? 'ring-2 ring-blue-400/50' : '', node.archived ? 'opacity-50' : '']"
          :style="cardStyle"
          :draggable="true"
@@ -459,7 +459,7 @@ async function addChild() {
         <div class="flex items-center gap-2 flex-1 min-w-0">
           <button v-if="hasChildren"
                   @click="toggleExpand"
-                  class="text-white/40 hover:text-white/80 text-xs w-4 shrink-0">
+                  class="text-[--fg-4] hover:text-[--fg-2] text-xs w-4 shrink-0">
             {{ expanded ? '\u25BC' : '\u25B6' }}
           </button>
           <span v-else class="w-4 shrink-0" />
@@ -468,7 +468,7 @@ async function addChild() {
             <input v-model="renameValue"
                    @keyup.enter="saveRename"
                    @keyup.escape="renaming = false"
-                   class="flex-1 bg-transparent border-b border-white/40 text-sm outline-none" />
+                   class="flex-1 bg-transparent border-b border-[--border-2] text-sm outline-none" />
             <span v-if="children.length > 0"
                   class="text-xs text-yellow-400/70 ml-1">
               (renames node, {{ children.length }} children unaffected)
@@ -478,24 +478,24 @@ async function addChild() {
             <!-- Milestone color dot -->
             <span v-if="node.node_type === 'milestone'"
                   class="w-2 h-2 rounded-full shrink-0"
-                  :class="node.color ? '' : (STATUS_COLORS[node.status ?? ''] ?? 'bg-white/20')"
+                  :class="node.color ? '' : (STATUS_COLORS[node.status ?? ''] ?? 'bg-[--bg-elev-2]')"
                   :style="node.color ? { backgroundColor: node.color } : {}" />
-            <h3 class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-white/40' : ''">{{ node.name }}</h3>
+            <h3 class="font-semibold text-sm truncate" :class="node.archived ? 'line-through text-[--fg-4]' : ''">{{ node.name }}</h3>
           </template>
           <!-- Milestone status badge -->
           <span v-if="node.node_type === 'milestone' && node.status"
                 class="text-[9px] px-1.5 py-0.5 rounded shrink-0"
                 :class="{
-                  'bg-white/10 text-white/50': node.status === 'pending',
-                  'bg-blue-500/20 text-blue-300': node.status === 'in_progress',
-                  'bg-green-500/20 text-green-300': node.status === 'done',
-                  'bg-red-500/20 text-red-300': node.status === 'blocked',
+                  'bg-[--bg-elev-2] text-[--fg-3]': node.status === 'pending',
+                  'bg-[--status-doing-bg] text-[--status-doing-fg]': node.status === 'in_progress',
+                  'bg-[--status-done-bg] text-[--status-done-fg]': node.status === 'done',
+                  'bg-[--status-block-bg] text-[--status-block-fg]': node.status === 'blocked',
                 }">
             {{ node.status.replace('_', ' ') }}
           </span>
           <!-- Milestone target date -->
           <span v-if="node.node_type === 'milestone' && node.target_date"
-                class="text-[9px] text-white/40 shrink-0">
+                class="text-[9px] text-[--fg-4] shrink-0">
             {{ node.target_date }}
           </span>
           <span v-if="node.archived" class="text-[9px] px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-400/80 shrink-0">Archived</span>
@@ -507,18 +507,18 @@ async function addChild() {
                   class="text-xs text-blue-400/60 hover:text-blue-400">Detail</button>
           <template v-if="renaming">
             <button @click="saveRename" class="text-xs text-green-400/70 hover:text-green-400">Save</button>
-            <button @click="renaming = false" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+            <button @click="renaming = false" class="text-xs text-[--fg-4] hover:text-[--fg-2]">Cancel</button>
           </template>
           <button v-else @click="startRename"
-                  class="text-xs text-white/50 hover:text-white">Rename</button>
+                  class="text-xs text-[--fg-3] hover:text-[--fg-1]">Rename</button>
           <button v-if="node.archived"
                   @click="setArchived(false)"
                   class="text-xs text-yellow-400/60 hover:text-yellow-400">Unarchive</button>
           <button v-else
                   @click="setArchived(true)"
-                  class="text-xs text-white/40 hover:text-white/70">Archive</button>
+                  class="text-xs text-[--fg-4] hover:text-[--fg-2]">Archive</button>
           <button @click="deleteWithConfirm"
-                  class="text-xs text-red-400/60 hover:text-red-400">Delete</button>
+                  class="text-xs text-[--status-block-fg]/60 hover:text-[--status-block-fg]">Delete</button>
         </div>
       </div>
 
@@ -532,7 +532,7 @@ async function addChild() {
       </div>
 
       <!-- Collapsed: show description or details preview -->
-      <p v-if="!expanded" class="text-xs text-white/50 line-clamp-2">{{ collapsedPreview }}</p>
+      <p v-if="!expanded" class="text-xs text-[--fg-3] line-clamp-2">{{ collapsedPreview }}</p>
 
       <!-- Expanded: description + section tabs + content -->
       <template v-if="expanded">
@@ -540,17 +540,17 @@ async function addChild() {
         <div class="mb-2">
           <div v-if="editingDescription" class="flex flex-col gap-1">
             <textarea v-model="descriptionDraft" rows="2" placeholder="Node description..."
-                      class="w-full bg-transparent border border-white/20 rounded p-2 text-xs outline-none focus:border-white/50 resize-none" />
+                      class="w-full bg-transparent border border-[--border-1] rounded p-2 text-xs outline-none focus:border-[--fg-3] resize-none" />
             <div class="flex gap-2">
               <button @click="saveDescription" class="text-[10px] text-green-400/70 hover:text-green-400">Save</button>
-              <button @click="editingDescription = false" class="text-[10px] text-white/40 hover:text-white/70">Cancel</button>
+              <button @click="editingDescription = false" class="text-[10px] text-[--fg-4] hover:text-[--fg-2]">Cancel</button>
             </div>
           </div>
           <div v-else class="flex items-start gap-1">
-            <p v-if="node.description" class="text-xs text-white/60 italic flex-1">{{ node.description }}</p>
-            <p v-else class="text-xs text-white/30 italic flex-1">(no description)</p>
+            <p v-if="node.description" class="text-xs text-[--fg-3] italic flex-1">{{ node.description }}</p>
+            <p v-else class="text-xs text-[--fg-5] italic flex-1">(no description)</p>
             <button @click="startDescriptionEdit"
-                    class="text-[10px] text-white/30 hover:text-white/60 shrink-0">edit</button>
+                    class="text-[10px] text-[--fg-5] hover:text-[--fg-3] shrink-0">edit</button>
           </div>
         </div>
 
@@ -559,25 +559,25 @@ async function addChild() {
           <button v-for="st in allSectionTypes" :key="st"
                   @click.stop="switchTab(st)"
                   class="text-[10px] px-2 py-0.5 rounded-full"
-                  :class="activeTab === st ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40 hover:bg-white/20'">
+                  :class="activeTab === st ? 'bg-[--status-doing-bg] text-[--status-doing-fg]' : 'bg-[--bg-elev-2] text-[--fg-4] hover:bg-[--bg-elev-3]'">
             {{ st }}
           </button>
           <button @click.stop="switchTab('tasks')"
                   class="text-[10px] px-2 py-0.5 rounded-full"
-                  :class="activeTab === 'tasks' ? 'bg-blue-500/30 text-blue-300' : 'bg-white/10 text-white/40 hover:bg-white/20'">
+                  :class="activeTab === 'tasks' ? 'bg-[--status-doing-bg] text-[--status-doing-fg]' : 'bg-[--bg-elev-2] text-[--fg-4] hover:bg-[--bg-elev-3]'">
             tasks
           </button>
           <div v-if="showAddSection" class="flex items-center gap-1">
             <input v-model="newSectionName" placeholder="section name..."
                    @keydown.enter="addSection"
                    @keydown.escape="showAddSection = false; newSectionName = ''"
-                   class="bg-transparent border-b border-white/30 outline-none text-[10px] w-24" />
-            <button @click="addSection" class="text-[10px] text-white/60 hover:text-white">add</button>
+                   class="bg-transparent border-b border-[--border-1] outline-none text-[10px] w-24" />
+            <button @click="addSection" class="text-[10px] text-[--fg-3] hover:text-[--fg-1]">add</button>
             <button @click="showAddSection = false; newSectionName = ''"
-                    class="text-[10px] text-white/40">cancel</button>
+                    class="text-[10px] text-[--fg-4]">cancel</button>
           </div>
           <button v-else @click.stop="showAddSection = true"
-                  class="text-[10px] px-2 py-0.5 rounded-full bg-white/5 text-white/30 hover:text-white/50">
+                  class="text-[10px] px-2 py-0.5 rounded-full bg-[--bg-elev-1] text-[--fg-5] hover:text-[--fg-3]">
             +
           </button>
         </div>
@@ -591,9 +591,9 @@ async function addChild() {
                     class="text-[10px] px-1.5 py-0.5 rounded border flex items-center gap-1 group"
                     :class="activeFileName === f.name
                       ? 'border-blue-400/40 bg-blue-500/15 text-blue-200'
-                      : 'border-white/10 bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'">
+                      : 'border-[--border-soft] bg-[--bg-elev-1] text-[--fg-4] hover:bg-[--bg-elev-2] hover:text-[--fg-3]'">
               {{ f.name }}
-              <span class="text-white/20 text-[8px]">{{ f.size }}c</span>
+              <span class="text-[--fg-6] text-[8px]">{{ f.size }}c</span>
               <span v-if="sectionFiles.length > 1"
                     @click.stop="deleteFile(f.name)"
                     class="text-red-400/0 group-hover:text-red-400/50 hover:!text-red-400 cursor-pointer ml-0.5"
@@ -603,13 +603,13 @@ async function addChild() {
               <input v-model="newFileName" placeholder="file name..."
                      @keydown.enter="addFile"
                      @keydown.escape="addingFile = false; newFileName = ''"
-                     class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
-              <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+                     class="bg-transparent border-b border-[--border-1] outline-none text-[10px] w-20" />
+              <button @click="addFile" class="text-[10px] text-[--fg-3] hover:text-[--fg-1]">add</button>
               <button @click="addingFile = false; newFileName = ''"
-                      class="text-[10px] text-white/40">cancel</button>
+                      class="text-[10px] text-[--fg-4]">cancel</button>
             </div>
             <button v-else @click.stop="addingFile = true"
-                    class="text-[10px] px-1 py-0.5 text-white/25 hover:text-white/50">+ file</button>
+                    class="text-[10px] px-1 py-0.5 text-[--fg-5] hover:text-[--fg-3]">+ file</button>
           </div>
           <!-- If only one file (or none), just show a small add-file button -->
           <div v-else class="mt-1">
@@ -617,29 +617,29 @@ async function addChild() {
               <input v-model="newFileName" placeholder="file name..."
                      @keydown.enter="addFile"
                      @keydown.escape="addingFile = false; newFileName = ''"
-                     class="bg-transparent border-b border-white/30 outline-none text-[10px] w-20" />
-              <button @click="addFile" class="text-[10px] text-white/60 hover:text-white">add</button>
+                     class="bg-transparent border-b border-[--border-1] outline-none text-[10px] w-20" />
+              <button @click="addFile" class="text-[10px] text-[--fg-3] hover:text-[--fg-1]">add</button>
               <button @click="addingFile = false; newFileName = ''"
-                      class="text-[10px] text-white/40">cancel</button>
+                      class="text-[10px] text-[--fg-4]">cancel</button>
             </div>
             <button v-else @click.stop="addingFile = true"
-                    class="text-[10px] text-white/25 hover:text-white/50">+ file</button>
+                    class="text-[10px] text-[--fg-5] hover:text-[--fg-3]">+ file</button>
           </div>
 
           <!-- Active tab content -->
           <div class="mt-2">
             <div v-if="editingSection === activeTab">
               <textarea v-model="editBody" rows="4"
-                        class="w-full bg-transparent border border-white/20 rounded p-2 text-sm outline-none focus:border-white/50 resize-none" />
+                        class="w-full bg-transparent border border-[--border-1] rounded p-2 text-sm outline-none focus:border-[--fg-3] resize-none" />
               <div class="flex gap-2 mt-2">
-                <button @click="saveEdit" class="text-xs bg-white/10 hover:bg-white/20 px-3 py-1 rounded">Save</button>
-                <button @click="editingSection = null" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
+                <button @click="saveEdit" class="text-xs bg-[--bg-elev-2] hover:bg-[--bg-elev-3] px-3 py-1 rounded">Save</button>
+                <button @click="editingSection = null" class="text-xs text-[--fg-4] hover:text-[--fg-2]">Cancel</button>
               </div>
             </div>
             <div v-else>
-              <p class="text-xs text-white/50 whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
+              <p class="text-xs text-[--fg-3] whitespace-pre-wrap">{{ activeBody || '(empty)' }}</p>
               <button @click="startEdit"
-                      class="mt-1 text-xs text-white/40 hover:text-white/70">Edit {{ activeTab }}/{{ activeFileName }}</button>
+                      class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2]">Edit {{ activeTab }}/{{ activeFileName }}</button>
             </div>
           </div>
         </template>
@@ -649,17 +649,17 @@ async function addChild() {
           <!-- Milestone progress bar -->
           <div v-if="node.node_type === 'milestone' && tasksTotalCount > 0" class="mb-3">
             <div class="flex items-center justify-between mb-1">
-              <span class="text-[10px] text-white/50">Progress</span>
-              <span class="text-[10px] text-white/50">{{ tasksDoneCount }}/{{ tasksTotalCount }} ({{ tasksProgressPct }}%)</span>
+              <span class="text-[10px] text-[--fg-3]">Progress</span>
+              <span class="text-[10px] text-[--fg-3]">{{ tasksDoneCount }}/{{ tasksTotalCount }} ({{ tasksProgressPct }}%)</span>
             </div>
-            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-              <div class="h-full bg-green-500 rounded-full transition-all"
+            <div class="w-full h-1.5 bg-[--bg-elev-2] rounded-full overflow-hidden">
+              <div class="h-full bg-[--status-done-fg] rounded-full transition-all"
                    :style="{ width: tasksProgressPct + '%' }" />
             </div>
           </div>
 
-          <div v-if="loadingTasks" class="text-xs text-white/40">Loading tasks...</div>
-          <div v-else-if="nodeTasks.length === 0" class="text-xs text-white/40">(no linked tasks)</div>
+          <div v-if="loadingTasks" class="text-xs text-[--fg-4]">Loading tasks...</div>
+          <div v-else-if="nodeTasks.length === 0" class="text-xs text-[--fg-4]">(no linked tasks)</div>
           <div v-else class="flex flex-col gap-2">
             <GroupContainer
               v-for="group in taskGroups"
@@ -699,21 +699,21 @@ async function addChild() {
           <input v-model="newChildName" placeholder="New child name..."
                  @keyup.enter="addChild"
                  @keyup.escape="addingChild = false; newChildType = 'context'; newChildTargetDate = ''; newChildColor = '#3b82f6'"
-                 class="flex-1 bg-transparent border-b border-white/30 outline-none text-xs min-w-[120px]" />
-          <select v-model="newChildType" class="bg-white/10 text-white text-xs rounded px-1 py-0.5">
+                 class="flex-1 bg-transparent border-b border-[--border-1] outline-none text-xs min-w-[120px]" />
+          <select v-model="newChildType" class="bg-[--bg-elev-2] text-[--fg-1] text-xs rounded px-1 py-0.5">
             <option value="context">Context</option>
             <option value="milestone">Milestone</option>
           </select>
           <template v-if="newChildType === 'milestone'">
-            <input v-model="newChildTargetDate" type="date" class="bg-white/10 text-white text-xs rounded px-2 py-0.5" />
+            <input v-model="newChildTargetDate" type="date" class="bg-[--bg-elev-2] text-[--fg-1] text-xs rounded px-2 py-0.5" />
             <input v-model="newChildColor" type="color" class="w-6 h-6 rounded cursor-pointer" />
           </template>
-          <button @click="addChild" class="text-xs text-white/60 hover:text-white">Add</button>
+          <button @click="addChild" class="text-xs text-[--fg-3] hover:text-[--fg-1]">Add</button>
           <button @click="addingChild = false; newChildName = ''; newChildType = 'context'; newChildTargetDate = ''; newChildColor = '#3b82f6'"
-                  class="text-xs text-white/40">cancel</button>
+                  class="text-xs text-[--fg-4]">cancel</button>
         </div>
         <button v-else @click="addingChild = true"
-                class="mt-2 text-xs text-white/40 hover:text-white/70"
+                class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2]"
                 :style="{ paddingLeft: (depth + 1) * 16 + 'px' }">
           + Add child
         </button>

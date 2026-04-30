@@ -286,11 +286,11 @@ function openDep(type: string, id: string) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-white/20',
-  in_progress: 'bg-blue-400',
-  done: 'bg-green-400',
+  pending: 'bg-[--bg-elev-2]',
+  in_progress: 'bg-[--status-doing-fg]',
+  done: 'bg-[--status-done-fg]',
   skipped: 'bg-orange-400',
-  blocked: 'bg-red-400',
+  blocked: 'bg-[--status-block-fg]',
 }
 
 // Resolve dependency entity_id to a display name
@@ -519,58 +519,58 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-5 flex flex-col gap-5 text-white min-h-full">
+  <div class="p-5 flex flex-col gap-5 text-[--fg-1] min-h-full">
 
       <!-- Header context info (close button is in SlideOverStack) -->
       <div class="flex items-start justify-between gap-2">
         <div class="flex items-center gap-2 flex-wrap">
-          <span v-if="anchorId" class="text-xs px-2 py-0.5 rounded-full bg-white/10 text-white/60">
+          <span v-if="anchorId" class="text-xs px-2 py-0.5 rounded-full bg-[--bg-elev-2] text-[--fg-3]">
             {{ anchorId }}
           </span>
-          <span class="text-xs text-white/40">{{ planStore.activeDate }}</span>
+          <span class="text-xs text-[--fg-4]">{{ planStore.activeDate }}</span>
         </div>
       </div>
 
       <!-- Not found: only when neither a task nor a standalone event was resolved -->
-      <div v-if="!task && !taskEvent" class="text-white/40 text-sm">Not found.</div>
+      <div v-if="!task && !taskEvent" class="text-[--fg-4] text-sm">Not found.</div>
 
       <!-- Standalone calendar event (opened via kind:'event'): show title + calendar controls only -->
       <template v-else-if="!task && taskEvent">
-        <div class="text-xl font-semibold border-b border-white/20 pb-1">{{ taskEvent.title }}</div>
+        <div class="text-xl font-semibold border-b border-[--border-1] pb-1">{{ taskEvent.title }}</div>
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Calendar</span>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Calendar</span>
           <div class="flex flex-col gap-2">
             <label class="flex flex-col gap-0.5">
-              <span class="text-xs text-white/40">Start</span>
+              <span class="text-xs text-[--fg-4]">Start</span>
               <input
                 type="datetime-local"
                 :value="isoToDatetimeLocal(taskEvent.start_time)"
                 @change="onCalendarStartChange"
-                class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+                class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
             </label>
             <label class="flex flex-col gap-0.5">
-              <span class="text-xs text-white/40">End</span>
+              <span class="text-xs text-[--fg-4]">End</span>
               <input
                 type="datetime-local"
                 :value="isoToDatetimeLocal(taskEvent.end_time)"
                 @change="onCalendarEndChange"
-                class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+                class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
             </label>
             <!-- Color picker -->
             <div class="flex items-center gap-2">
-              <span class="text-xs text-white/40 w-20">Color</span>
+              <span class="text-xs text-[--fg-4] w-20">Color</span>
               <input
                 type="color"
                 data-testid="event-color-input"
                 :value="displayColor"
-                class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
+                class="w-8 h-7 rounded cursor-pointer bg-transparent border border-[--border-soft]"
                 @input="onColorInput"
                 @change="onColorChange"
               />
               <button
                 v-if="taskEvent.color || pendingColorValue != null"
                 data-testid="event-color-reset"
-                class="text-[10px] text-white/30 hover:text-white/60"
+                class="text-[10px] text-[--fg-5] hover:text-[--fg-3]"
                 @click="onColorReset"
               >Reset</button>
             </div>
@@ -597,16 +597,16 @@ onMounted(async () => {
         <input
           :value="task.text"
           @change="onTextChange"
-          class="bg-transparent text-xl font-semibold outline-none border-b border-white/20 focus:border-white/50 pb-1 w-full"
+          class="bg-transparent text-xl font-semibold outline-none border-b border-[--border-1] focus:border-[--fg-3] pb-1 w-full"
           placeholder="Task title" />
 
         <!-- Status -->
         <div class="flex items-center gap-3">
-          <label class="text-xs text-white/50 uppercase tracking-wide">Status</label>
+          <label class="text-xs text-[--fg-3] uppercase tracking-wide">Status</label>
           <select
             :value="task.status"
             @change="onStatusChange"
-            class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none">
+            class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
             <option value="pending">Pending</option>
             <option value="in_progress">In Progress</option>
             <option value="done">Done</option>
@@ -625,43 +625,43 @@ onMounted(async () => {
 
         <!-- Calendar -->
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Calendar</span>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Calendar</span>
           <template v-if="taskEvent">
             <div class="flex flex-col gap-2">
               <label class="flex flex-col gap-0.5">
-                <span class="text-xs text-white/40">Start</span>
+                <span class="text-xs text-[--fg-4]">Start</span>
                 <input
                   type="datetime-local"
                   :value="isoToDatetimeLocal(taskEvent.start_time)"
                   @change="onCalendarStartChange"
-                  class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+                  class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
               </label>
               <label class="flex flex-col gap-0.5">
-                <span class="text-xs text-white/40">End</span>
+                <span class="text-xs text-[--fg-4]">End</span>
                 <input
                   type="datetime-local"
                   :value="isoToDatetimeLocal(taskEvent.end_time)"
                   @change="onCalendarEndChange"
-                  class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none focus:border-white/40" />
+                  class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
               </label>
               <!-- Color picker — overrides milestone/context-node color.
                    @input fires continuously during drag for live preview;
                    @change fires once on picker dismiss to gate the scope dialog
                    for recurring events. -->
               <div class="flex items-center gap-2">
-                <span class="text-xs text-white/40 w-20">Color</span>
+                <span class="text-xs text-[--fg-4] w-20">Color</span>
                 <input
                   type="color"
                   data-testid="event-color-input"
                   :value="displayColor"
-                  class="w-8 h-7 rounded cursor-pointer bg-transparent border border-white/10"
+                  class="w-8 h-7 rounded cursor-pointer bg-transparent border border-[--border-soft]"
                   @input="onColorInput"
                   @change="onColorChange"
                 />
                 <button
                   v-if="taskEvent.color || pendingColorValue != null"
                   data-testid="event-color-reset"
-                  class="text-[10px] text-white/30 hover:text-white/60"
+                  class="text-[10px] text-[--fg-5] hover:text-[--fg-3]"
                   @click="onColorReset"
                 >Reset</button>
               </div>
@@ -683,7 +683,7 @@ onMounted(async () => {
           </template>
           <template v-else-if="task?.anchor_id && !task?.start_time">
             <!-- Anchor task (not on calendar): show recurrence picker -->
-            <div class="text-xs text-white/30 italic mb-1">Anchor task — drag to calendar to schedule</div>
+            <div class="text-xs text-[--fg-5] italic mb-1">Anchor task — drag to calendar to schedule</div>
             <RecurrencePicker
               :model-value="task.rrule ?? null"
               :start-time="''"
@@ -691,39 +691,39 @@ onMounted(async () => {
             />
           </template>
           <template v-else>
-            <div class="text-xs text-white/30 italic">Not on calendar — drag it onto the time grid to schedule</div>
+            <div class="text-xs text-[--fg-5] italic">Not on calendar — drag it onto the time grid to schedule</div>
           </template>
         </div>
 
         <!-- Schedule / Location -->
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Location</span>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Location</span>
           <template v-if="isBacklog">
-            <div class="text-xs text-white/30 italic mb-1">Unscheduled (backlog)</div>
+            <div class="text-xs text-[--fg-5] italic mb-1">Unscheduled (backlog)</div>
             <div class="flex items-center gap-2">
               <input v-model="scheduleDate" type="date"
-                     class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none" />
+                     class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none" />
               <select v-model="scheduleAnchor"
-                      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none">
+                      class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
                 <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
               </select>
               <button @click="scheduleTask"
-                      class="text-xs px-3 py-1 rounded bg-blue-500/20 text-blue-300 hover:bg-blue-500/30">
+                      class="text-xs px-3 py-1 rounded bg-[--status-doing-bg] text-[--status-doing-fg] hover:opacity-80">
                 Schedule
               </button>
             </div>
           </template>
           <template v-else>
             <div class="flex items-center gap-2 text-sm">
-              <span class="text-white/60">{{ planStore.activeDate }}</span>
-              <span class="text-white/40">·</span>
+              <span class="text-[--fg-3]">{{ planStore.activeDate }}</span>
+              <span class="text-[--fg-4]">·</span>
               <select :value="anchorId" @change="moveToAnchor(($event.target as HTMLSelectElement).value)"
-                      class="bg-gray-800 text-white text-sm rounded px-2 py-1 border border-white/20 outline-none">
+                      class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
                 <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
               </select>
             </div>
             <button @click="moveToBacklog"
-                    class="text-xs text-white/40 hover:text-white/70 self-start">
+                    class="text-xs text-[--fg-4] hover:text-[--fg-2] self-start">
               Move to backlog
             </button>
           </template>
@@ -731,20 +731,20 @@ onMounted(async () => {
 
         <!-- Description -->
         <div class="flex flex-col gap-1">
-          <label class="text-xs text-white/50 uppercase tracking-wide">Description</label>
+          <label class="text-xs text-[--fg-3] uppercase tracking-wide">Description</label>
           <textarea
             :value="task.description ?? ''"
             @blur="onDescBlur"
             rows="3"
             placeholder="Add a description..."
-            class="bg-gray-800 text-sm text-white/80 rounded px-3 py-2 border border-white/10 outline-none focus:border-white/30 resize-none" />
+            class="bg-[--bg-elev-1] text-sm text-[--fg-2] rounded px-3 py-2 border border-[--border-soft] outline-none focus:border-[--border-1] resize-none" />
         </div>
 
         <!-- Subtasks -->
         <div class="flex flex-col gap-2">
           <div class="flex items-center gap-2">
-            <span class="text-xs text-white/50 uppercase tracking-wide">Subtasks</span>
-            <span class="text-xs text-white/30">{{ subtasksDone }}/{{ subtasks.length }}</span>
+            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Subtasks</span>
+            <span class="text-xs text-[--fg-5]">{{ subtasksDone }}/{{ subtasks.length }}</span>
           </div>
           <ul class="flex flex-col gap-1">
             <li v-for="s in subtasks" :key="s.id" class="flex items-center gap-2 group">
@@ -753,10 +753,10 @@ onMounted(async () => {
                 :checked="s.done"
                 @change="updateSubtask(s.id, { done: !s.done })"
                 class="accent-green-400 flex-shrink-0" />
-              <span :class="s.done ? 'line-through text-white/30' : 'text-white/80'" class="flex-1 text-sm">{{ s.text }}</span>
+              <span :class="s.done ? 'line-through text-[--fg-5]' : 'text-[--fg-2]'" class="flex-1 text-sm">{{ s.text }}</span>
               <button
                 @click="removeSubtask(s.id)"
-                class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
             </li>
           </ul>
           <div class="flex gap-2">
@@ -764,18 +764,18 @@ onMounted(async () => {
               v-model="newSubtaskText"
               @keydown.enter="addSubtask"
               placeholder="Add subtask..."
-              class="flex-1 bg-gray-800 text-sm text-white/80 rounded px-2 py-1 border border-white/10 outline-none focus:border-white/30" />
+              class="flex-1 bg-[--bg-elev-1] text-sm text-[--fg-2] rounded px-2 py-1 border border-[--border-soft] outline-none focus:border-[--border-1]" />
             <button
               @click="addSubtask"
-              class="text-xs text-white/40 hover:text-white/70 px-2">Add</button>
+              class="text-xs text-[--fg-4] hover:text-[--fg-2] px-2">Add</button>
           </div>
         </div>
 
         <!-- Links -->
         <div class="flex flex-col gap-2">
           <div class="flex items-center justify-between">
-            <span class="text-xs text-white/50 uppercase tracking-wide">Links</span>
-            <button @click="showAddLink = !showAddLink" class="text-xs text-white/40 hover:text-white/70">+ Add link</button>
+            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Links</span>
+            <button @click="showAddLink = !showAddLink" class="text-xs text-[--fg-4] hover:text-[--fg-2]">+ Add link</button>
           </div>
           <ul class="flex flex-col gap-1">
             <li v-for="l in links" :key="l.id" class="flex items-center gap-2 group">
@@ -783,16 +783,16 @@ onMounted(async () => {
               <a :href="l.url" target="_blank" class="flex-1 text-sm text-blue-300 hover:text-blue-200 truncate">
                 {{ l.label || l.url }}
               </a>
-              <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40 flex-shrink-0">{{ l.category }}</span>
+              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4] flex-shrink-0">{{ l.category }}</span>
               <button
                 @click="removeLink(l.id)"
-                class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">✕</button>
+                class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">✕</button>
             </li>
           </ul>
-          <div v-if="showAddLink" class="flex flex-col gap-2 bg-gray-800 rounded p-3 border border-white/10">
-            <input v-model="newLinkUrl" placeholder="URL" class="bg-gray-700 text-sm text-white rounded px-2 py-1 outline-none border border-white/10 focus:border-white/30" />
-            <input v-model="newLinkLabel" placeholder="Label (optional)" class="bg-gray-700 text-sm text-white rounded px-2 py-1 outline-none border border-white/10 focus:border-white/30" />
-            <select v-model="newLinkCategory" class="bg-gray-700 text-sm text-white rounded px-2 py-1 outline-none border border-white/10">
+          <div v-if="showAddLink" class="flex flex-col gap-2 bg-[--bg-elev-1] rounded p-3 border border-[--border-soft]">
+            <input v-model="newLinkUrl" placeholder="URL" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft] focus:border-[--border-1]" />
+            <input v-model="newLinkLabel" placeholder="Label (optional)" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft] focus:border-[--border-1]" />
+            <select v-model="newLinkCategory" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft]">
               <option value="document">Document</option>
               <option value="meeting">Meeting</option>
               <option value="pr">PR</option>
@@ -800,43 +800,43 @@ onMounted(async () => {
               <option value="other">Other</option>
             </select>
             <div class="flex gap-2 justify-end">
-              <button @click="showAddLink = false" class="text-xs text-white/40 hover:text-white/70">Cancel</button>
-              <button @click="addLink" class="text-xs text-white/60 hover:text-white px-2 py-1 rounded bg-white/10">Add</button>
+              <button @click="showAddLink = false" class="text-xs text-[--fg-4] hover:text-[--fg-2]">Cancel</button>
+              <button @click="addLink" class="text-xs text-[--fg-3] hover:text-[--fg-1] px-2 py-1 rounded bg-[--bg-elev-2]">Add</button>
             </div>
           </div>
         </div>
 
         <!-- Dependencies -->
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Dependencies</span>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Dependencies</span>
 
           <!-- Blocked by -->
           <div class="flex flex-col gap-1">
-            <span class="text-xs text-white/40">Blocked by</span>
-            <div v-if="!deps.blocked_by.length" class="text-xs text-white/20 italic">None</div>
+            <span class="text-xs text-[--fg-4]">Blocked by</span>
+            <div v-if="!deps.blocked_by.length" class="text-xs text-[--fg-6] italic">None</div>
             <button
               v-for="d in deps.blocked_by" :key="d.id"
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
-              <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
-              <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
+              <span class="text-sm text-[--fg-2] hover:text-[--fg-1] flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
+              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4]">{{ d.type }}</span>
+              <button @click.stop="removeDep(d.id)" class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>
           </div>
 
           <!-- Blocks -->
           <div class="flex flex-col gap-1">
-            <span class="text-xs text-white/40">Blocks</span>
-            <div v-if="!deps.blocks.length" class="text-xs text-white/20 italic">None</div>
+            <span class="text-xs text-[--fg-4]">Blocks</span>
+            <div v-if="!deps.blocks.length" class="text-xs text-[--fg-6] italic">None</div>
             <button
               v-for="d in deps.blocks" :key="d.id"
               @click="openDep(d.type, d.entity_id)"
               class="flex items-center gap-2 text-left group">
               <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-white/70 hover:text-white flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
-              <span class="text-xs px-1 py-0.5 rounded bg-white/10 text-white/40">{{ d.type }}</span>
-              <button @click.stop="removeDep(d.id)" class="text-white/20 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100">✕</button>
+              <span class="text-sm text-[--fg-2] hover:text-[--fg-1] flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
+              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4]">{{ d.type }}</span>
+              <button @click.stop="removeDep(d.id)" class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100">✕</button>
             </button>
           </div>
 
@@ -845,30 +845,30 @@ onMounted(async () => {
 
         <!-- Milestones -->
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Milestones</span>
-          <div v-if="!(milestoneStore.taskMilestones[taskId] ?? []).length" class="text-xs text-white/20 italic">None</div>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Milestones</span>
+          <div v-if="!(milestoneStore.taskMilestones[taskId] ?? []).length" class="text-xs text-[--fg-6] italic">None</div>
           <button
             v-for="m in (milestoneStore.taskMilestones[taskId] ?? [])" :key="m.id"
             @click="openMilestone(m.id)"
             class="flex items-center gap-2 text-left">
             <span v-if="m.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: m.color }" />
-            <span class="text-sm text-white/70 hover:text-white"
+            <span class="text-sm text-[--fg-2] hover:text-[--fg-1]"
                   :style="m.color ? { color: m.color } : {}">{{ m.name }}</span>
-            <span class="text-xs px-1 py-0.5 rounded text-white/40"
+            <span class="text-xs px-1 py-0.5 rounded text-[--fg-4]"
                   :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-                  :class="m.color ? 'border' : 'bg-white/10'">{{ m.status }}</span>
+                  :class="m.color ? 'border' : 'bg-[--bg-elev-2]'">{{ m.status }}</span>
           </button>
           <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones..." @select="linkMilestoneFromSearch" />
         </div>
 
         <!-- Context entries -->
         <div class="flex flex-col gap-2">
-          <span class="text-xs text-white/50 uppercase tracking-wide">Context</span>
-          <div v-if="!contexts.length" class="text-xs text-white/20 italic">None</div>
+          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Context</span>
+          <div v-if="!contexts.length" class="text-xs text-[--fg-6] italic">None</div>
           <div v-for="subject in contexts" :key="subject"
                class="flex items-center justify-between text-sm">
-            <router-link :to="'/context'" class="text-white/70 hover:text-white">{{ subject }}</router-link>
-            <button @click="unlinkContext(subject)" class="text-white/20 hover:text-white/50 text-xs ml-2">✕</button>
+            <router-link :to="'/context'" class="text-[--fg-2] hover:text-[--fg-1]">{{ subject }}</router-link>
+            <button @click="unlinkContext(subject)" class="text-[--fg-6] hover:text-[--fg-4] text-xs ml-2">✕</button>
           </div>
           <SearchAutocomplete :search-fn="searchForContext" placeholder="Link context entry..." @select="linkContextFromSearch" />
         </div>
@@ -876,17 +876,17 @@ onMounted(async () => {
         <!-- Follow-up config -->
         <div class="flex flex-col gap-2">
           <div class="flex items-center justify-between">
-            <span class="text-xs text-white/50 uppercase tracking-wide">Follow-up</span>
-            <button @click="showFollowup = !showFollowup" class="text-xs text-white/40 hover:text-white/70">
+            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Follow-up</span>
+            <button @click="showFollowup = !showFollowup" class="text-xs text-[--fg-4] hover:text-[--fg-2]">
               {{ showFollowup ? 'Hide' : 'Edit' }}
             </button>
           </div>
-          <div v-if="task.followup_config && !showFollowup" class="text-xs text-white/40">
+          <div v-if="task.followup_config && !showFollowup" class="text-xs text-[--fg-4]">
             {{ task.followup_config.enabled ? `Enabled — pre every ${task.followup_config.pre_ack_interval_min}m` : 'Disabled (override)' }}
           </div>
-          <div v-else-if="!task.followup_config && !showFollowup" class="text-xs text-white/20 italic">Using anchor default</div>
-          <div v-if="showFollowup" class="flex flex-col gap-2 bg-gray-800 rounded p-3 border border-white/10">
-            <label class="flex items-center gap-2 text-xs text-white/70">
+          <div v-else-if="!task.followup_config && !showFollowup" class="text-xs text-[--fg-6] italic">Using anchor default</div>
+          <div v-if="showFollowup" class="flex flex-col gap-2 bg-[--bg-elev-1] rounded p-3 border border-[--border-soft]">
+            <label class="flex items-center gap-2 text-xs text-[--fg-2]">
               <input
                 type="checkbox"
                 :checked="task.followup_config?.enabled ?? false"
@@ -895,14 +895,14 @@ onMounted(async () => {
               Override anchor follow-up
             </label>
             <template v-if="task.followup_config?.enabled">
-              <div class="grid grid-cols-2 gap-2 text-xs text-white/50">
+              <div class="grid grid-cols-2 gap-2 text-xs text-[--fg-3]">
                 <label class="flex flex-col gap-0.5">
                   Pre interval (min)
                   <input
                     :value="task.followup_config.pre_ack_interval_min"
                     type="number" min="1"
                     @change="patchFollowup({ pre_ack_interval_min: +($event.target as HTMLInputElement).value })"
-                    class="bg-gray-700 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
                 </label>
                 <label class="flex flex-col gap-0.5">
                   Max pings
@@ -910,7 +910,7 @@ onMounted(async () => {
                     :value="task.followup_config.pre_ack_max_pings"
                     type="number" min="1"
                     @change="patchFollowup({ pre_ack_max_pings: +($event.target as HTMLInputElement).value })"
-                    class="bg-gray-700 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
                 </label>
                 <label class="flex flex-col gap-0.5">
                   Post interval (min)
@@ -918,7 +918,7 @@ onMounted(async () => {
                     :value="task.followup_config.post_ack_interval_min"
                     type="number" min="1"
                     @change="patchFollowup({ post_ack_interval_min: +($event.target as HTMLInputElement).value })"
-                    class="bg-gray-700 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
                 </label>
                 <label class="flex flex-col gap-0.5">
                   Post pings
@@ -926,7 +926,7 @@ onMounted(async () => {
                     :value="task.followup_config.post_ack_pings"
                     type="number" min="1"
                     @change="patchFollowup({ post_ack_pings: +($event.target as HTMLInputElement).value })"
-                    class="bg-gray-700 text-white rounded px-1.5 py-0.5 outline-none w-16" />
+                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
                 </label>
               </div>
             </template>
@@ -934,7 +934,7 @@ onMounted(async () => {
         </div>
 
         <!-- Delete -->
-        <div class="mt-auto pt-4 border-t border-white/10">
+        <div class="mt-auto pt-4 border-t border-[--border-soft]">
           <button
             v-if="task?.anchor_id && !task?.start_time"
             data-testid="delete-task-btn"
