@@ -80,7 +80,7 @@ const filteredKanban = computed(() =>
 
 <template>
   <div
-    class="w-72 max-h-[70vh] overflow-y-auto bg-gray-800 border border-white/20 rounded-xl shadow-xl p-3 space-y-1"
+    class="w-72 max-h-[70vh] overflow-y-auto bg-[--bg-elev-1] border border-[--border-1] rounded-xl shadow-xl p-3 space-y-1"
     tabindex="0"
     @keydown="onKeydown"
   >
@@ -88,11 +88,11 @@ const filteredKanban = computed(() =>
       v-model="search"
       data-testid="filter-search"
       placeholder="Search filters…"
-      class="w-full text-xs bg-white/5 border border-white/10 rounded px-2 py-1.5 text-white placeholder-white/30 outline-none focus:border-indigo-500 mb-2"
+      class="w-full text-xs bg-[--bg-elev-2] border border-[--border-soft] rounded px-2 py-1.5 text-[--fg-1] placeholder:text-[--fg-5] outline-none focus:border-indigo-500 mb-2"
     />
 
     <div class="flex items-center justify-between mb-1">
-      <span class="text-[10px] text-white/30 uppercase tracking-wide">Filters</span>
+      <span class="text-[10px] text-[--fg-5] uppercase tracking-wide">Filters</span>
       <button
         v-if="totalActive > 0"
         class="text-[10px] text-indigo-400 hover:text-indigo-300"
@@ -104,7 +104,7 @@ const filteredKanban = computed(() =>
     <div>
       <button
         data-testid="filter-group-categories"
-        class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
+        class="flex items-center gap-1 w-full text-left text-[10px] text-[--fg-4] uppercase tracking-wide py-1 hover:text-[--fg-3]"
         @click="toggleGroup('categories')"
       >
         <span class="transition-transform" :class="collapsed.categories ? '-rotate-90' : ''">▾</span>
@@ -112,7 +112,7 @@ const filteredKanban = computed(() =>
         <span v-if="modelValue.contextNodeIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.contextNodeIds.size }}</span>
       </button>
       <div v-if="!collapsed.categories" class="pl-1">
-        <div v-if="!rootNodes.length" class="text-[11px] text-white/20 py-0.5">No categories</div>
+        <div v-if="!rootNodes.length" class="text-[11px] text-[--fg-6] py-0.5">No categories</div>
         <ContextTreeFilterNode
           v-for="n in rootNodes"
           :key="n.id"
@@ -130,7 +130,7 @@ const filteredKanban = computed(() =>
     <div>
       <button
         data-testid="filter-group-anchors"
-        class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
+        class="flex items-center gap-1 w-full text-left text-[10px] text-[--fg-4] uppercase tracking-wide py-1 hover:text-[--fg-3]"
         @click="toggleGroup('anchors')"
       >
         <span class="transition-transform" :class="collapsed.anchors ? '-rotate-90' : ''">▾</span>
@@ -138,18 +138,18 @@ const filteredKanban = computed(() =>
         <span v-if="modelValue.anchorIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.anchorIds.size }}</span>
       </button>
       <div v-if="!collapsed.anchors" class="space-y-0.5 pl-2">
-        <div v-if="!filteredAnchors.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
+        <div v-if="!filteredAnchors.length" class="text-[11px] text-[--fg-6] py-0.5">No matches</div>
         <button
           v-for="a in filteredAnchors"
           :key="a.id"
           :data-testid="`filter-item-anchor-${a.id}`"
           class="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors"
-          :class="modelValue.anchorIds.has(a.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
+          :class="modelValue.anchorIds.has(a.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-[--fg-3] hover:bg-[--bg-elev-2]'"
           @click="toggleAnchor(a.id)"
         >
           <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: a.color || '#6366f1' }" />
           <span class="flex-1 truncate">{{ a.name }}</span>
-          <span class="text-[10px] text-white/30">{{ a.time }}</span>
+          <span class="text-[10px] text-[--fg-5]">{{ a.time }}</span>
         </button>
       </div>
     </div>
@@ -158,7 +158,7 @@ const filteredKanban = computed(() =>
     <div>
       <button
         data-testid="filter-group-kanban"
-        class="flex items-center gap-1 w-full text-left text-[10px] text-white/40 uppercase tracking-wide py-1 hover:text-white/60"
+        class="flex items-center gap-1 w-full text-left text-[10px] text-[--fg-4] uppercase tracking-wide py-1 hover:text-[--fg-3]"
         @click="toggleGroup('kanban')"
       >
         <span class="transition-transform" :class="collapsed.kanban ? '-rotate-90' : ''">▾</span>
@@ -166,13 +166,13 @@ const filteredKanban = computed(() =>
         <span v-if="modelValue.kanbanColumnIds.size > 0" class="ml-auto text-indigo-400">{{ modelValue.kanbanColumnIds.size }}</span>
       </button>
       <div v-if="!collapsed.kanban" class="space-y-0.5 pl-2">
-        <div v-if="!filteredKanban.length" class="text-[11px] text-white/20 py-0.5">No matches</div>
+        <div v-if="!filteredKanban.length" class="text-[11px] text-[--fg-6] py-0.5">No matches</div>
         <button
           v-for="c in filteredKanban"
           :key="c.id"
           :data-testid="`filter-item-kanban-${c.id}`"
           class="flex items-center gap-2 w-full text-left px-2 py-1 rounded text-xs transition-colors"
-          :class="modelValue.kanbanColumnIds.has(c.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
+          :class="modelValue.kanbanColumnIds.has(c.id) ? 'bg-indigo-500/20 text-indigo-200' : 'text-[--fg-3] hover:bg-[--bg-elev-2]'"
           @click="toggleKanban(c.id)"
         >
           <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: c.color ?? '#6366f1' }" />
@@ -182,7 +182,7 @@ const filteredKanban = computed(() =>
     </div>
 
     <div class="flex justify-end mt-2">
-      <button class="text-[10px] text-white/30 hover:text-white/60" @click="emit('close')">Done</button>
+      <button class="text-[10px] text-[--fg-5] hover:text-[--fg-3]" @click="emit('close')">Done</button>
     </div>
   </div>
 </template>

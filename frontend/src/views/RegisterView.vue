@@ -35,63 +35,63 @@ async function handleRegister() {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 flex items-center justify-center px-4">
+  <div class="min-h-screen bg-[--bg-canvas] flex items-center justify-center px-4">
     <div class="w-full max-w-sm">
-      <h1 class="text-3xl font-bold text-white text-center mb-8">Tether</h1>
-      <p class="text-gray-400 text-center text-sm mb-6">Create your account</p>
+      <h1 class="text-3xl font-bold text-[--fg-1] text-center mb-8">Tether</h1>
+      <p class="text-[--fg-3] text-center text-sm mb-6">Create your account</p>
 
       <form @submit.prevent="handleRegister" class="space-y-4">
         <div>
-          <label class="block text-sm text-gray-400 mb-1" for="username">Username</label>
+          <label class="block text-sm text-[--fg-3] mb-1" for="username">Username</label>
           <input
             id="username"
             v-model="username"
             type="text"
             autocomplete="username"
             required
-            class="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 border border-gray-700 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
             placeholder="yourname"
           />
         </div>
 
         <div>
-          <label class="block text-sm text-gray-400 mb-1" for="email">Email</label>
+          <label class="block text-sm text-[--fg-3] mb-1" for="email">Email</label>
           <input
             id="email"
             v-model="email"
             type="email"
             autocomplete="email"
             required
-            class="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 border border-gray-700 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
             placeholder="you@example.com"
           />
         </div>
 
         <div>
-          <label class="block text-sm text-gray-400 mb-1" for="password">Password</label>
+          <label class="block text-sm text-[--fg-3] mb-1" for="password">Password</label>
           <input
             id="password"
             v-model="password"
             type="password"
             autocomplete="new-password"
             required
-            class="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 border border-gray-700 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
             placeholder="••••••••"
           />
         </div>
 
         <div>
-          <label class="block text-sm text-gray-400 mb-1" for="invite">Invite token <span class="text-gray-600">(optional)</span></label>
+          <label class="block text-sm text-[--fg-3] mb-1" for="invite">Invite token <span class="text-[--fg-5]">(optional)</span></label>
           <input
             id="invite"
             v-model="inviteToken"
             type="text"
-            class="w-full bg-gray-800 text-white rounded-lg px-4 py-2.5 border border-gray-700 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
             placeholder="abc123"
           />
         </div>
 
-        <div v-if="error" class="text-red-400 text-sm bg-red-900/20 border border-red-800 rounded-lg px-3 py-2">
+        <div v-if="error" class="text-[--status-block-fg] text-sm bg-[--status-block-bg] border border-[--status-block-fg]/30 rounded-lg px-3 py-2">
           {{ error }}
         </div>
 
@@ -104,7 +104,7 @@ async function handleRegister() {
         </button>
       </form>
 
-      <p class="mt-6 text-center text-sm text-gray-500">
+      <p class="mt-6 text-center text-sm text-[--fg-4]">
         Already have an account?
         <router-link to="/login" class="text-indigo-400 hover:text-indigo-300 ml-1">Sign in</router-link>
       </p>
