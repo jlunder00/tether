@@ -73,20 +73,23 @@ _ANTHROPIC_URL_RE = re.compile(r"https://\S+")
 # claude setup-token ever uses them, extend this regex or post-process the URL.
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _ANTHROPIC_URL_SCHEME = "https"
-_ANTHROPIC_URL_NETLOC = "console.anthropic.com"
+# claude setup-token may emit URLs on either domain depending on version.
+_VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}
 
 
 def _extract_anthropic_url(text: str) -> str | None:
     """Extract and strictly validate the Anthropic auth URL from subprocess output.
 
+    Strips CR/LF before matching so PTY line-wrapping doesn't split the URL.
     Uses urlparse to check scheme and netloc exactly — prevents substring-match
-    bypasses where 'console.anthropic.com' appears at an arbitrary position in a
-    crafted URL (e.g. as a query parameter).
+    bypasses where a valid domain appears at an arbitrary position in a crafted URL.
     """
-    for match in _ANTHROPIC_URL_RE.finditer(text):
+    # PTY output uses CRLF; strip both so the URL regex can match across wrap points.
+    joined = text.replace("\r", "").replace("\n", "")
+    for match in _ANTHROPIC_URL_RE.finditer(joined):
         candidate = match.group(0).rstrip(".,;)")  # strip trailing punctuation
         parsed = urllib.parse.urlparse(candidate)
-        if parsed.scheme == _ANTHROPIC_URL_SCHEME and parsed.netloc == _ANTHROPIC_URL_NETLOC:
+        if parsed.scheme == _ANTHROPIC_URL_SCHEME and parsed.netloc in _VALID_ANTHROPIC_NETLOCS:
             return candidate
     return None
 
@@ -141,7 +144,7 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
             "claude",
             args=["setup-token"],
             env=env,
-            dimensions=(24, 220),
+            dimensions=(24, 500),
         )
         logger.debug("anthropic/start: pexpect.spawn ok, pid=%s", child.pid)
     except Exception:
