@@ -135,6 +135,7 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
     """
     import pexpect  # lazy — keeps module importable when pexpect is not installed
 
+    logger.info("anthropic/start: spawning claude setup-token in temp_dir=%s", temp_dir)
     try:
         child = pexpect.spawn(
             "claude",
@@ -142,6 +143,7 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
             env=env,
             dimensions=(24, 220),
         )
+        logger.debug("anthropic/start: pexpect.spawn ok, pid=%s", child.pid)
     except Exception:
         logger.exception("pexpect.spawn failed for claude setup-token")
         return None, None
@@ -155,18 +157,28 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
             # so CSI sequences that straddle read boundaries are handled correctly.
             buf += chunk.decode(errors="replace")
             clean = _ANSI_ESCAPE_RE.sub("", buf)
+            logger.debug("anthropic/start: pexpect buffer so far (clean): %r", clean[-500:])
             url = _extract_anthropic_url(clean)
             if url:
+                logger.info("anthropic/start: auth URL extracted: %s", url)
                 return child, url
         except pexpect.TIMEOUT:
             continue
         except pexpect.EOF:
-            # Process exited before showing a URL.
+            logger.warning(
+                "anthropic/start: pexpect EOF before URL found; full output: %r",
+                _ANSI_ESCAPE_RE.sub("", buf),
+            )
             break
         except Exception:
             logger.exception("Unexpected error reading pexpect child output")
             break
 
+    logger.error(
+        "anthropic/start: gave up waiting for auth URL after 30s; "
+        "last buffer (clean, last 500 chars): %r",
+        _ANSI_ESCAPE_RE.sub("", buf)[-500:],
+    )
     _close_child_sync(child)
     return None, None
 
@@ -182,6 +194,7 @@ def _complete_pexpect_sync(child, code: str) -> str:
     """
     import pexpect  # lazy — keeps module importable when pexpect is not installed
 
+    logger.info("anthropic/complete: sending code (length=%d) to pexpect child", len(code))
     try:
         child.sendline(code)
     except Exception:
@@ -190,7 +203,10 @@ def _complete_pexpect_sync(child, code: str) -> str:
 
     try:
         child.expect(pexpect.EOF, timeout=30)
+        post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
+        logger.debug("anthropic/complete: child output after code submission: %r", post_output[-500:])
     except pexpect.TIMEOUT:
+        logger.warning("anthropic/complete: pexpect timed out waiting for EOF after code submission")
         return "timeout"
     except Exception:
         logger.exception("pexpect expect(EOF) failed")
@@ -204,6 +220,11 @@ def _complete_pexpect_sync(child, code: str) -> str:
 
     # exitstatus is None when the process was killed by a signal — treat that as
     # failure, not success.  Only exitstatus == 0 means the setup succeeded.
+    logger.info(
+        "anthropic/complete: child exited with exitstatus=%s signalstatus=%s",
+        child.exitstatus,
+        child.signalstatus,
+    )
     return "ok" if child.exitstatus == 0 else "failed"
 
 
@@ -568,12 +589,16 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
     in a thread-pool executor so the event loop is not blocked). The pexpect child
     stays alive waiting for the user to paste their OAuth code.
     """
+    logger.info("anthropic/start: request for user_id=%s", user_id)
+
     if user_id in _pending_setups:
+        logger.info("anthropic/start: killing existing pending setup for user_id=%s", user_id)
         old = _pending_setups.pop(user_id)
         asyncio.create_task(_reap_child(old["child"]))
         shutil.rmtree(old.get("temp_dir", ""), ignore_errors=True)
 
     temp_dir = tempfile.mkdtemp()
+    logger.debug("anthropic/start: created temp_dir=%s for user_id=%s", temp_dir, user_id)
     env_override = {**os.environ, "CLAUDE_CONFIG_DIR": temp_dir}
 
     loop = asyncio.get_running_loop()
@@ -588,6 +613,7 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
 
     if url is None:
         shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error("anthropic/start: failed to extract auth URL for user_id=%s", user_id)
         raise HTTPException(status_code=502, detail="Auth URL not found in claude output")
 
     _pending_setups[user_id] = {
@@ -595,6 +621,7 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
         "temp_dir": temp_dir,
         "started_at": time.time(),
     }
+    logger.info("anthropic/start: success, auth URL ready for user_id=%s", user_id)
 
     return {"url": url, "expires_in": _SETUP_TTL}
 
@@ -611,18 +638,23 @@ async def anthropic_complete(
 ):
     """Submit the OAuth code to the waiting pexpect child and persist credentials."""
     user_id = request.state.user_id
+    logger.info("anthropic/complete: request for user_id=%s, code_length=%d", user_id, len(body.code))
 
     # Pop atomically: prevents two concurrent /complete calls from racing on the
     # same child process or temp dir.
     entry = _pending_setups.pop(user_id, None)
     if entry is None:
+        logger.warning("anthropic/complete: no pending setup found for user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
 
     child = entry["child"]
     temp_dir = entry["temp_dir"]
+    age = time.time() - entry["started_at"]
+    logger.debug("anthropic/complete: pending setup age=%.1fs temp_dir=%s", age, temp_dir)
 
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
+    logger.info("anthropic/complete: pexpect result=%r for user_id=%s", result, user_id)
 
     if result == "error":
         asyncio.create_task(_reap_child(child))
@@ -637,19 +669,31 @@ async def anthropic_complete(
     # "ok" or "failed" — child already reaped by _complete_pexpect_sync.
     if result == "failed":
         shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.warning("anthropic/complete: setup process reported failure for user_id=%s", user_id)
         return {"ok": False, "error": "setup failed"}
 
     # result == "ok"
     creds_file = pathlib.Path(temp_dir) / ".credentials.json"
+    logger.debug("anthropic/complete: checking for credentials file at %s", creds_file)
     if not creds_file.exists():
+        logger.error(
+            "anthropic/complete: process exited 0 but credentials file missing at %s; "
+            "temp_dir contents: %s",
+            creds_file,
+            list(pathlib.Path(temp_dir).iterdir()),
+        )
         shutil.rmtree(temp_dir, ignore_errors=True)
         return {"ok": False, "error": "credentials file not found"}
 
     blob_dict = json.loads(creds_file.read_text())
+    logger.debug("anthropic/complete: credentials file found, keys=%s", list(blob_dict.keys()))
 
     vault = request.app.state.vault
-    if vault is not None:
+    if vault is None:
+        logger.error("anthropic/complete: vault is None — credentials cannot be persisted for user_id=%s", user_id)
+    else:
         await vault.store_initial(user_id, blob_dict)
+        logger.info("anthropic/complete: credentials stored in vault for user_id=%s", user_id)
 
     shutil.rmtree(temp_dir, ignore_errors=True)
 
