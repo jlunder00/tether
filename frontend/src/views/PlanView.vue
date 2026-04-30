@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, watch, onMounted } from 'vue'
+import { computed, watch, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlanStore } from '../stores/plan'
-import { useAnchorStore } from '../stores/anchors'
+import { useAnchorStore, computeAnchorStates } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 import { useEventStore } from '../stores/events'
 import { useSlideOver } from '../composables/useSlideOver'
@@ -16,6 +16,11 @@ const props = defineProps<{ view: string; date?: string }>()
 const router = useRouter()
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
+
+// Reactive clock — drives current/past/future dot states
+const now = ref(new Date())
+let clockTimer: ReturnType<typeof setInterval> | null = null
+const anchorStates = computed(() => computeAnchorStates(anchorStore.anchors, now.value))
 const milestoneStore = useMilestoneStore()
 const eventStore = useEventStore()
 const { push: pushPanel } = useSlideOver()
@@ -42,6 +47,11 @@ watch(activeDate, (d) => planStore.fetchPlan(d), { immediate: true })
 onMounted(() => {
   anchorStore.fetchAnchors()
   milestoneStore.fetchAll()
+  clockTimer = setInterval(() => { now.value = new Date() }, 60_000)
+})
+
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
 })
 
 function offsetDate(base: string, days: number): string {
@@ -162,18 +172,21 @@ async function onAnchorColumnDrop(e: DragEvent) {
       <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
         <!-- Left: anchor blocks -->
         <div
-          class="flex flex-col gap-2"
+          class="flex flex-col"
           @dragover.prevent
           @drop="onAnchorColumnDrop"
         >
           <AnchorBlock
-            v-for="anchor in anchorStore.anchors"
+            v-for="(anchor, i) in anchorStore.anchors"
             :key="anchor.id"
             :anchor-id="anchor.id"
             :anchor-name="anchor.name"
             :time="anchor.time"
             :color="anchor.color"
-            :motif="anchor.motif" />
+            :motif="anchor.motif"
+            :is-now="anchorStates.get(anchor.id) === 'now'"
+            :is-past="anchorStates.get(anchor.id) === 'past'"
+            :is-last="i === anchorStore.anchors.length - 1" />
         </div>
         <!-- Right: day timeline -->
         <DayTimeline

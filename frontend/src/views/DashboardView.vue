@@ -6,6 +6,7 @@ import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 import { useEventStore } from '../stores/events'
 import TaskCard from '../components/TaskCard.vue'
+import AnchorFocusWidget from '../components/AnchorFocusWidget.vue'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
@@ -98,10 +99,8 @@ const dayStats = computed(() => {
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <!-- Now Box -->
       <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
-        <div class="flex items-center gap-2 mb-3">
-          <div v-if="currentAnchor" class="w-3 h-3 rounded-full" :style="{ background: currentAnchor.color }" />
-          <h2 class="font-semibold text-lg">{{ currentAnchor?.name ?? 'No active block' }}</h2>
-          <span class="text-[--fg-4] text-sm ml-auto">{{ currentAnchor?.time }}</span>
+        <div class="mb-3">
+          <AnchorFocusWidget />
         </div>
         <div v-if="allDayEventsToday.length" class="flex flex-wrap gap-1 mb-2">
           <div v-for="ev in allDayEventsToday" :key="ev.id"

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { usePlanStore } from '../stores/plan'
-import { useAnchorStore } from '../stores/anchors'
+import { useAnchorStore, computeAnchorStates } from '../stores/anchors'
 import { useAuthStore } from '../stores/auth'
 import AnchorBlock from './AnchorBlock.vue'
 import AnchorEditor from './AnchorEditor.vue'
@@ -14,6 +14,12 @@ const anchorStore = useAnchorStore()
 const authStore = useAuthStore()
 const tab = ref<'plan' | 'context' | 'anchors'>('plan')
 const zoom = ref<'d' | 'w' | 'm'>('d')
+
+// Reactive clock for anchor state updates (refreshes every minute)
+const now = ref(new Date())
+let clockTimer: ReturnType<typeof setInterval> | null = null
+
+const anchorStates = computed(() => computeAnchorStates(anchorStore.anchors, now.value))
 
 const isToday = computed(() => planStore.activeDate === planStore.today)
 
@@ -33,6 +39,11 @@ onMounted(() => {
   planStore.fetchPlan()
   planStore.connectWebSocket()
   anchorStore.fetchAnchors()
+  clockTimer = setInterval(() => { now.value = new Date() }, 60_000)
+})
+
+onUnmounted(() => {
+  if (clockTimer) clearInterval(clockTimer)
 })
 </script>
 
@@ -105,15 +116,18 @@ onMounted(() => {
     <template v-else>
       <div v-if="tab === 'plan'">
         <div v-if="planStore.loading" class="text-white/40">Loading...</div>
-        <div v-else class="flex flex-col gap-2">
+        <div v-else class="flex flex-col">
           <AnchorBlock
-            v-for="anchor in anchorStore.anchors"
+            v-for="(anchor, i) in anchorStore.anchors"
             :key="anchor.id"
             :anchor-id="anchor.id"
             :anchor-name="anchor.name"
             :time="anchor.time"
             :color="anchor.color"
-            :motif="anchor.motif" />
+            :motif="anchor.motif"
+            :is-now="anchorStates.get(anchor.id) === 'now'"
+            :is-past="anchorStates.get(anchor.id) === 'past'"
+            :is-last="i === anchorStore.anchors.length - 1" />
         </div>
       </div>
 
