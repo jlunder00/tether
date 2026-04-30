@@ -27,27 +27,27 @@ function truncateUuid(uuid: string): string {
 
 <template>
   <section class="mb-8">
-    <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Connections</h2>
+    <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Connections</h2>
 
     <!-- Spinner -->
-    <div v-if="store.loading && store.connections.length === 0" class="bg-gray-800 rounded-xl p-4">
-      <p class="text-sm text-white/40">Loading…</p>
+    <div v-if="store.loading && store.connections.length === 0" class="bg-[--bg-elev-1] rounded-xl p-4">
+      <p class="text-sm text-[--fg-4]">Loading…</p>
     </div>
 
     <!-- Error alert -->
     <div
       v-if="store.error"
-      class="bg-red-900/40 border border-red-500/30 rounded-xl p-3 mb-3 flex items-start justify-between gap-2"
+      class="bg-[--status-block-bg] border border-[--status-block-fg]/30 rounded-xl p-3 mb-3 flex items-start justify-between gap-2"
       data-testid="connections-error"
     >
-      <p class="text-sm text-red-400">{{ store.error }}</p>
-      <button @click="dismissError" class="text-red-400/60 hover:text-red-300 text-lg leading-none flex-shrink-0">×</button>
+      <p class="text-sm text-[--status-block-fg]">{{ store.error }}</p>
+      <button @click="dismissError" class="text-[--status-block-fg]/60 hover:text-[--status-block-fg] text-lg leading-none flex-shrink-0">×</button>
     </div>
 
     <!-- Pending incoming requests -->
-    <div class="bg-gray-800 rounded-xl p-4 mb-3">
-      <h3 class="text-xs font-medium text-white/40 uppercase tracking-wide mb-3">Pending Requests</h3>
-      <div v-if="store.pending_incoming.length === 0" class="text-sm text-white/30">
+    <div class="bg-[--bg-elev-1] rounded-xl p-4 mb-3">
+      <h3 class="text-xs font-medium text-[--fg-4] uppercase tracking-wide mb-3">Pending Requests</h3>
+      <div v-if="store.pending_incoming.length === 0" class="text-sm text-[--fg-5]">
         No pending requests
       </div>
       <ul v-else class="space-y-2">
@@ -57,7 +57,7 @@ function truncateUuid(uuid: string): string {
           class="flex items-center justify-between gap-2"
           :data-testid="`incoming-${conn.id}`"
         >
-          <span class="text-sm text-white font-mono" :title="conn.other_user_id">
+          <span class="text-sm text-[--fg-1] font-mono" :title="conn.other_user_id">
             {{ truncateUuid(conn.other_user_id) }}
           </span>
           <div class="flex gap-1.5">
@@ -72,7 +72,7 @@ function truncateUuid(uuid: string): string {
             <button
               :disabled="store.loading"
               @click="store.declineConnection(conn.id, false)"
-              class="text-xs text-white/60 hover:text-white disabled:opacity-50 border border-white/20 hover:border-white/40 rounded-lg px-2.5 py-1 transition-colors"
+              class="text-xs text-[--fg-3] hover:text-[--fg-1] disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-2.5 py-1 transition-colors"
               :data-testid="`decline-${conn.id}`"
             >
               Decline
@@ -80,7 +80,7 @@ function truncateUuid(uuid: string): string {
             <button
               :disabled="store.loading"
               @click="store.declineConnection(conn.id, true)"
-              class="text-xs text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-2.5 py-1 transition-colors"
+              class="text-xs text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-2.5 py-1 transition-colors"
               :data-testid="`block-${conn.id}`"
             >
               Block
@@ -91,9 +91,9 @@ function truncateUuid(uuid: string): string {
     </div>
 
     <!-- Accepted connections -->
-    <div class="bg-gray-800 rounded-xl p-4 mb-3">
-      <h3 class="text-xs font-medium text-white/40 uppercase tracking-wide mb-3">Your Connections</h3>
-      <div v-if="store.accepted.length === 0" class="text-sm text-white/30">
+    <div class="bg-[--bg-elev-1] rounded-xl p-4 mb-3">
+      <h3 class="text-xs font-medium text-[--fg-4] uppercase tracking-wide mb-3">Your Connections</h3>
+      <div v-if="store.accepted.length === 0" class="text-sm text-[--fg-5]">
         No connections yet
       </div>
       <ul v-else class="space-y-3">
@@ -104,20 +104,20 @@ function truncateUuid(uuid: string): string {
           :data-testid="`accepted-${conn.id}`"
         >
           <div class="flex items-center gap-2">
-            <span class="text-sm text-white font-mono" :title="conn.other_user_id">
+            <span class="text-sm text-[--fg-1] font-mono" :title="conn.other_user_id">
               {{ truncateUuid(conn.other_user_id) }}
             </span>
-            <span class="text-[10px] bg-green-900/50 text-green-400 rounded px-1.5 py-0.5 font-medium tracking-wide">
+            <span class="text-[10px] bg-[--status-done-bg] text-[--status-done-fg] rounded px-1.5 py-0.5 font-medium tracking-wide">
               connected
             </span>
           </div>
           <!-- Auto-schedule toggle -->
           <div class="flex items-center gap-2">
-            <span class="text-xs text-white/40">Auto-schedule</span>
+            <span class="text-xs text-[--fg-4]">Auto-schedule</span>
             <button
               :disabled="store.loading"
               @click="store.toggleAutoSchedule(conn.id, !conn.auto_schedule)"
-              :class="conn.auto_schedule ? 'bg-indigo-600' : 'bg-gray-600'"
+              :class="conn.auto_schedule ? 'bg-indigo-600' : 'bg-[--bg-elev-3]'"
               class="relative w-9 h-5 rounded-full transition-colors disabled:opacity-50"
               :data-testid="`auto-schedule-${conn.id}`"
               :aria-pressed="conn.auto_schedule"
@@ -134,14 +134,14 @@ function truncateUuid(uuid: string): string {
     </div>
 
     <!-- Send request + pending outgoing -->
-    <div class="bg-gray-800 rounded-xl p-4">
-      <h3 class="text-xs font-medium text-white/40 uppercase tracking-wide mb-3">Add Connection</h3>
+    <div class="bg-[--bg-elev-1] rounded-xl p-4">
+      <h3 class="text-xs font-medium text-[--fg-4] uppercase tracking-wide mb-3">Add Connection</h3>
       <div class="flex gap-2 mb-3">
         <input
           v-model="requestUsername"
           type="text"
           placeholder="Username"
-          class="flex-1 bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500 placeholder-gray-500"
+          class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
           @keydown.enter="handleSendRequest"
           data-testid="request-username-input"
         />
@@ -157,7 +157,7 @@ function truncateUuid(uuid: string): string {
 
       <!-- Pending outgoing (cancel not yet supported by backend) -->
       <div v-if="store.pending_outgoing.length > 0">
-        <p class="text-xs text-white/30 mb-2">Sent — waiting for response</p>
+        <p class="text-xs text-[--fg-5] mb-2">Sent — waiting for response</p>
         <ul class="space-y-1.5">
           <li
             v-for="conn in store.pending_outgoing"
@@ -165,10 +165,10 @@ function truncateUuid(uuid: string): string {
             class="flex items-center gap-2"
             :data-testid="`outgoing-${conn.id}`"
           >
-            <span class="text-sm text-white/60 font-mono" :title="conn.other_user_id">
+            <span class="text-sm text-[--fg-3] font-mono" :title="conn.other_user_id">
               {{ truncateUuid(conn.other_user_id) }}
             </span>
-            <span class="text-[10px] text-white/20">pending</span>
+            <span class="text-[10px] text-[--fg-6]">pending</span>
           </li>
         </ul>
       </div>

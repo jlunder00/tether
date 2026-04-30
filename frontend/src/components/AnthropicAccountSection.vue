@@ -86,8 +86,8 @@ async function copyUrl() {
 
 <template>
   <section class="mb-8">
-    <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Anthropic Account</h2>
-    <div class="bg-gray-800 rounded-xl p-4">
+    <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Anthropic Account</h2>
+    <div class="bg-[--bg-elev-1] rounded-xl p-4">
       <!-- Status row -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
@@ -96,12 +96,12 @@ async function copyUrl() {
             A
           </div>
           <div>
-            <div class="text-sm font-medium text-white">Anthropic Account</div>
-            <div v-if="store.anthropicConnected" class="text-xs text-green-400 flex items-center gap-1">
+            <div class="text-sm font-medium text-[--fg-1]">Anthropic Account</div>
+            <div v-if="store.anthropicConnected" class="text-xs text-[--status-done-fg] flex items-center gap-1">
               <span>&#10003;</span>
               <span>Connected</span>
             </div>
-            <div v-else class="text-xs text-white/40">Not connected</div>
+            <div v-else class="text-xs text-[--fg-4]">Not connected</div>
           </div>
         </div>
 
@@ -109,18 +109,18 @@ async function copyUrl() {
         <div v-if="store.anthropicConnected">
           <template v-if="showConfirmDisconnect">
             <div class="flex items-center gap-2 flex-wrap">
-              <span class="text-xs text-white/60">Are you sure? You'll need to re-connect.</span>
+              <span class="text-xs text-[--fg-3]">Are you sure? You'll need to re-connect.</span>
               <button
                 data-testid="anthropic-disconnect-confirm"
                 :disabled="store.anthropicLoading"
                 @click="handleDisconnectConfirm"
-                class="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-3 py-1.5 transition-colors"
+                class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-3 py-1.5 transition-colors"
               >
                 {{ store.anthropicLoading ? '…' : 'Confirm Disconnect' }}
               </button>
               <button
                 @click="handleDisconnectCancel"
-                class="text-sm text-white/50 hover:text-white border border-white/20 hover:border-white/40 rounded-lg px-2.5 py-1.5 transition-colors"
+                class="text-sm text-[--fg-3] hover:text-[--fg-1] border border-[--border-1] hover:border-[--border-2] rounded-lg px-2.5 py-1.5 transition-colors"
               >
                 Cancel
               </button>
@@ -131,7 +131,7 @@ async function copyUrl() {
             data-testid="anthropic-disconnect"
             :disabled="store.anthropicLoading"
             @click="handleDisconnectClick"
-            class="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-3 py-1.5 transition-colors"
+            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-3 py-1.5 transition-colors"
           >
             {{ store.anthropicLoading ? '…' : 'Disconnect' }}
           </button>
@@ -148,35 +148,35 @@ async function copyUrl() {
       </div>
 
       <!-- Error shown in connected view (e.g. disconnect failure) -->
-      <p v-if="store.anthropicConnected && store.anthropicError" class="text-xs text-red-400 mt-2">{{ store.anthropicError }}</p>
+      <p v-if="store.anthropicConnected && store.anthropicError" class="text-xs text-[--status-block-fg] mt-2">{{ store.anthropicError }}</p>
 
       <!-- Info text when not connected and modal not open -->
-      <p v-if="!store.anthropicConnected && modalPhase === 'idle'" class="text-xs text-white/40">
+      <p v-if="!store.anthropicConnected && modalPhase === 'idle'" class="text-xs text-[--fg-4]">
         Connect your Anthropic account to use Claude-powered features in Tether.
       </p>
 
       <!-- Error from store when not in modal context -->
-      <p v-if="store.anthropicError && modalPhase === 'idle'" class="text-xs text-red-400 mt-2">
+      <p v-if="store.anthropicError && modalPhase === 'idle'" class="text-xs text-[--status-block-fg] mt-2">
         {{ store.anthropicError }}
       </p>
 
       <!-- Connect Modal (inline overlay inside tile) -->
       <div
         v-if="modalPhase !== 'idle'"
-        class="mt-4 border border-white/10 rounded-xl p-4 bg-gray-900/60 space-y-3"
+        class="mt-4 border border-[--border-soft] rounded-xl p-4 bg-[--bg-canvas]/60 space-y-3"
       >
-        <h3 class="text-sm font-semibold text-white">Connect your Anthropic account</h3>
+        <h3 class="text-sm font-semibold text-[--fg-1]">Connect your Anthropic account</h3>
 
         <!-- Starting spinner -->
-        <div v-if="modalPhase === 'starting'" class="flex items-center gap-2 text-sm text-white/50">
-          <span class="inline-block w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+        <div v-if="modalPhase === 'starting'" class="flex items-center gap-2 text-sm text-[--fg-3]">
+          <span class="inline-block w-4 h-4 border-2 border-[--border-1] border-t-[--fg-1] rounded-full animate-spin"></span>
           <span>Starting connection...</span>
-          <button @click="handleCancel" class="ml-auto text-xs text-white/40 hover:text-white/70 transition-colors" data-testid="anthropic-cancel-starting">Cancel</button>
+          <button @click="handleCancel" class="ml-auto text-xs text-[--fg-4] hover:text-[--fg-2] transition-colors" data-testid="anthropic-cancel-starting">Cancel</button>
         </div>
 
         <!-- Awaiting code phase -->
         <template v-if="modalPhase === 'awaiting_code' || modalPhase === 'completing'">
-          <ol class="text-xs text-white/60 space-y-1 list-decimal list-inside">
+          <ol class="text-xs text-[--fg-3] space-y-1 list-decimal list-inside">
             <li>Click the link below to authorize on Anthropic's site.</li>
             <li>Copy the code shown on that page.</li>
             <li>Paste it here to complete the connection.</li>
@@ -196,14 +196,14 @@ async function copyUrl() {
             <button
               data-testid="anthropic-copy-url"
               @click="copyUrl"
-              class="text-xs text-white/50 hover:text-white border border-white/20 hover:border-white/40 rounded px-2 py-1 transition-colors flex-shrink-0"
+              class="text-xs text-[--fg-3] hover:text-[--fg-1] border border-[--border-1] hover:border-[--border-2] rounded px-2 py-1 transition-colors flex-shrink-0"
             >
               {{ copied ? 'Copied!' : 'Copy URL' }}
             </button>
           </div>
 
           <!-- Error from store (inline, shown in awaiting_code) -->
-          <p v-if="store.anthropicError" class="text-xs text-red-400">
+          <p v-if="store.anthropicError" class="text-xs text-[--status-block-fg]">
             {{ store.anthropicError }}
           </p>
 
@@ -215,7 +215,7 @@ async function copyUrl() {
               type="text"
               placeholder="Paste code here"
               :disabled="modalPhase === 'completing'"
-              class="flex-1 bg-gray-700 text-white rounded-lg px-3 py-2 text-sm border border-gray-600 focus:outline-none focus:border-indigo-500 placeholder-gray-500 disabled:opacity-50"
+              class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5] disabled:opacity-50"
               @keydown.enter="handleSubmit"
             />
             <button
@@ -232,7 +232,7 @@ async function copyUrl() {
           <button
             @click="handleCancel"
             :disabled="modalPhase === 'completing'"
-            class="text-xs text-white/40 hover:text-white/70 disabled:opacity-50 transition-colors"
+            class="text-xs text-[--fg-4] hover:text-[--fg-2] disabled:opacity-50 transition-colors"
           >
             Cancel
           </button>
@@ -240,7 +240,7 @@ async function copyUrl() {
 
         <!-- Error phase (start failed) -->
         <template v-if="modalPhase === 'error'">
-          <p class="text-xs text-red-400">
+          <p class="text-xs text-[--status-block-fg]">
             {{ store.anthropicError ?? 'Failed to start connection. Please try again.' }}
           </p>
           <div class="flex gap-2">
@@ -253,7 +253,7 @@ async function copyUrl() {
             </button>
             <button
               @click="handleCancel"
-              class="text-xs text-white/40 hover:text-white/70 transition-colors"
+              class="text-xs text-[--fg-4] hover:text-[--fg-2] transition-colors"
             >
               Cancel
             </button>
