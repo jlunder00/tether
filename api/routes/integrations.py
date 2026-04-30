@@ -214,6 +214,7 @@ def _complete_pexpect_sync(child, code: str) -> tuple[str, str]:
 
     buf = b""
     token: str | None = None
+    sent_confirm = False
     deadline = time.time() + 120
 
     while time.time() < deadline:
@@ -228,6 +229,13 @@ def _complete_pexpect_sync(child, code: str) -> tuple[str, str]:
                 token = match.group(0)
                 logger.info("anthropic/complete: token found in output stream")
                 break
+            # After the code echo the CLI may sit at a secondary "press Enter"
+            # prompt.  Detect the two-blank-line pattern that follows the
+            # asterisk echo and send a confirming \r once.
+            if not sent_confirm and b"\r\r\n\r\r\n" in buf:
+                logger.info("anthropic/complete: sending confirm \\r after code echo")
+                child.send('\r')
+                sent_confirm = True
         except pexpect.TIMEOUT:
             continue
         except pexpect.EOF:
