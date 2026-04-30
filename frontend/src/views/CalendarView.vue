@@ -13,6 +13,7 @@ import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
 import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
 import { resolveEventColor } from '../composables/useColorResolver'
+import { textOnColor } from '../composables/useTextOnColor'
 import { computeOverlapLayout, computeOverlapBands, type EventLayout, type OverlapBand } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
@@ -901,8 +902,8 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-for="ev in eventsForDay(date).slice(0, 3)"
                 :key="ev.id"
-                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none"
-                :style="{ backgroundColor: resolveColor(ev) }"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium leading-none"
+                :style="{ backgroundColor: resolveColor(ev), color: textOnColor(resolveColor(ev)) }"
               >
                 {{ ev.title }}
               </div>
@@ -957,8 +958,8 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               <div
                 v-for="ev in allDayEventsByDay[dayKeys[i]]"
                 :key="ev.id"
-                class="rounded text-[10px] px-1 py-0.5 truncate font-medium text-white leading-none cursor-pointer"
-                :style="{ backgroundColor: resolveColor(ev) }"
+                class="rounded text-[10px] px-1 py-0.5 truncate font-medium leading-none cursor-pointer"
+                :style="{ backgroundColor: resolveColor(ev), color: textOnColor(resolveColor(ev)) }"
                 data-event-block
                 @click="openEventPanel(ev)"
                 @mousedown.stop="(e: MouseEvent) => onEventMousedown(e, ev)"
