@@ -19,6 +19,9 @@ const props = defineProps<{
   color: string
   date?: string
   motif?: string | null
+  isNow?: boolean
+  isPast?: boolean
+  isLast?: boolean
 }>()
 
 const store = usePlanStore()
@@ -161,9 +164,27 @@ function onDrop(evt: DragEvent, toIndex: number) {
 </script>
 
 <template>
-  <div :data-motif="motif ?? 'anchor'" class="relative">
-    <div class="absolute left-0 top-0 bottom-0 w-1 rounded-full pointer-events-none" :style="{ background: 'var(--m)' }" />
-    <div class="pl-3">
+  <div :data-motif="motif ?? 'anchor'" class="anchor-row">
+    <!-- Rail: dot + connecting line -->
+    <div class="anchor-rail">
+      <div
+        data-testid="anchor-dot"
+        class="anchor-dot"
+        :class="{
+          'anchor-dot--now': isNow,
+          'anchor-dot--past': isPast,
+          'anchor-dot--upcoming': !isNow && !isPast,
+        }"
+      />
+      <div
+        v-if="!isLast"
+        data-testid="anchor-line"
+        class="anchor-line"
+      />
+    </div>
+
+    <!-- Card content -->
+    <div class="min-w-0">
   <GroupContainer :label="`${anchorName} · ${time}`" :collapsible="true" :level="0">
     <template #header-right>
       <span class="text-xs text-[--fg-5]">{{ anchorPlan.tasks.length }}</span>
@@ -272,6 +293,84 @@ function onDrop(evt: DragEvent, toIndex: number) {
     <button type="button" @click="onAddNewTask()"
             class="mt-2 text-xs text-[--fg-4] hover:text-[--fg-2]">+ Add task</button>
   </GroupContainer>
-    </div>
-  </div>
+    </div><!-- end card content -->
+  </div><!-- end anchor-row -->
 </template>
+
+<style scoped>
+/* ── Anchor row: rail column + card column ── */
+.anchor-row {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 12px;
+  padding-bottom: 8px; /* matches gap between rows */
+}
+
+/* Rail: vertically stacked dot + line */
+.anchor-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 10px;
+  position: relative;
+  overflow: visible;
+}
+
+/* Connecting line */
+.anchor-line {
+  flex: 1;
+  width: var(--line-strength, 2px);
+  background: var(--m, var(--line-color));
+  opacity: 0.55;
+  margin-top: 4px;
+  /* Extend 8px past the component to bridge the padding-bottom gap */
+  margin-bottom: -8px;
+  min-height: 16px;
+}
+
+/* Base dot */
+.anchor-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--m, var(--line-color));
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+/* Now: larger with glow ring */
+.anchor-dot--now {
+  width: 16px;
+  height: 16px;
+  box-shadow:
+    0 0 0 4px var(--bg-canvas),
+    0 0 0 6px var(--m-line, var(--line-glow)),
+    0 0 14px 2px var(--m-line, var(--line-glow));
+}
+
+/* Past: faded */
+.anchor-dot--past {
+  opacity: 0.35;
+}
+
+/* Upcoming: slightly faded */
+.anchor-dot--upcoming {
+  opacity: 0.55;
+}
+
+/* Terminal theme: square nodes + dashed line */
+[data-theme="terminal"] .anchor-dot {
+  border-radius: 2px;
+  border: 1px solid var(--m, rgba(80, 250, 123, 0.5));
+  background: var(--bg-canvas);
+}
+[data-theme="terminal"] .anchor-dot--now {
+  background: var(--m, var(--accent));
+}
+[data-theme="terminal"] .anchor-line {
+  background: none;
+  border-left: 1.5px dashed var(--m, rgba(80, 250, 123, 0.35));
+  width: 0;
+}
+</style>

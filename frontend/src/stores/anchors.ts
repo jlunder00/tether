@@ -23,6 +23,36 @@ export interface Anchor {
   motif?: string | null
 }
 
+export type AnchorState = 'past' | 'now' | 'future'
+
+/**
+ * Pure helper — given a list of anchors and a reference time, returns a map of
+ * anchorId → 'past' | 'now' | 'future'.
+ *
+ * Algorithm: sort by time, find the last anchor whose HH:MM ≤ now — that's "now".
+ * Everything before it is "past", everything after is "future". If now is before
+ * the first anchor, the first anchor is still "now" (no prior block active).
+ */
+export function computeAnchorStates(anchors: Anchor[], now: Date): Map<string, AnchorState> {
+  const sorted = [...anchors].sort((a, b) => a.time.localeCompare(b.time))
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+
+  let currentIndex = 0
+  for (let i = 0; i < sorted.length; i++) {
+    const [h, m] = sorted[i].time.split(':').map(Number)
+    if (h * 60 + m <= nowMinutes) currentIndex = i
+    else break
+  }
+
+  const result = new Map<string, AnchorState>()
+  sorted.forEach((a, i) => {
+    if (i < currentIndex) result.set(a.id, 'past')
+    else if (i === currentIndex) result.set(a.id, 'now')
+    else result.set(a.id, 'future')
+  })
+  return result
+}
+
 export const useAnchorStore = defineStore('anchors', () => {
   const anchors = ref<Anchor[]>([])
 
