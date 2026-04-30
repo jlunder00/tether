@@ -115,8 +115,16 @@ async function patchTask(fields: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(fields),
   })
+  // Optimistic in-place merge: mutate the object task.value points to so
+  // the controlled MotifPicker/text/status inputs in this panel reflect
+  // the change immediately, regardless of which store owns the object.
+  // Without this, a calendar event whose task lives on a non-focused
+  // day's plan would never update — fetchPlan() refetches the focused
+  // day, leaving the panel's task ref stale.
+  if (resp.ok && task.value) {
+    Object.assign(task.value, fields)
+  }
   if (isBacklog.value) {
-    // Update standalone task from response if applicable
     if (resp.ok && standaloneTask.value) {
       standaloneTask.value = await resp.json()
     }
