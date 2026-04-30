@@ -7,6 +7,7 @@ import { useMilestoneStore } from '../stores/milestones'
 import { useEventStore } from '../stores/events'
 import TaskCard from '../components/TaskCard.vue'
 import AnchorFocusWidget from '../components/AnchorFocusWidget.vue'
+import { textOnColor } from '../composables/useTextOnColor'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
@@ -105,8 +106,8 @@ const dayStats = computed(() => {
         <div v-if="allDayEventsToday.length" class="flex flex-wrap gap-1 mb-2">
           <div v-for="ev in allDayEventsToday" :key="ev.id"
                data-testid="all-day-event-chip"
-               class="text-xs px-2 py-0.5 rounded text-white font-medium"
-               :style="{ backgroundColor: ev.color ?? '#6366f1' }">
+               class="text-xs px-2 py-0.5 rounded font-medium"
+               :style="{ backgroundColor: ev.color ?? '#6366f1', color: textOnColor(ev.color ?? '#6366f1') }">
             {{ ev.title }}
           </div>
         </div>

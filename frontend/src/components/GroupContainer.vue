@@ -34,9 +34,12 @@ const stickyTop = computed(() => {
     <div class="absolute left-0 top-1 bottom-0 w-px"
          :style="{ background: railColor, opacity: 0.55 }" />
 
-    <!-- Pill heading (sticky below nav bar) -->
+    <!-- Pill heading (sticky below nav bar). Explicit opaque bg so scrolled
+         content beneath the pill doesn't bleed through. --bg-elev-1 matches
+         the kanban column surface (flush) and reads as a subtle header rail
+         on canvas-level surfaces like PlanView. -->
     <div
-      class="flex items-center gap-2 select-none sticky z-10 py-0.5"
+      class="flex items-center gap-2 select-none sticky z-10 py-0.5 bg-[--bg-elev-1]"
       :class="[collapsed ? '' : 'mb-1']"
       :style="{ top: stickyTop }">
       <span class="text-xs font-medium uppercase tracking-wide"

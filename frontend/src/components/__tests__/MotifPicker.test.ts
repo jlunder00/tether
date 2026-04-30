@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import MotifPicker from '../MotifPicker.vue'
 
-const SLOTS = ['anchor','focus','calm','energy','care','flow','dusk','quiet']
+const SLOTS = ['anchor','focus','calm','energy','care','flow','dusk','quiet','light','dark']
 
 describe('MotifPicker', () => {
-  it('renders 8 motif dots', () => {
+  it('renders 10 motif dots', () => {
     const wrapper = mount(MotifPicker, { props: { modelValue: null } })
     const dots = wrapper.findAll('[data-testid="motif-dot"]')
-    expect(dots).toHaveLength(8)
+    expect(dots).toHaveLength(10)
     expect(dots.map(d => d.attributes('data-slot'))).toEqual(SLOTS)
   })
 
