@@ -4,7 +4,9 @@ import logging
 import asyncpg
 from werkzeug.security import safe_join
 
-logging.basicConfig(level=logging.INFO)
+import os
+_log_level = logging.DEBUG if os.environ.get("TETHER_LOG_LEVEL", "").upper() == "DEBUG" else logging.INFO
+logging.basicConfig(level=_log_level)
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
