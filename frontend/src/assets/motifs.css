@@ -880,6 +880,38 @@
   --motif-sync-fg:       #FAFAF7;
 }
 
+/* =========================================================================
+   8. NEUTRAL MOTIFS · "light" and "dark"
+   --------------------------------------------------------------------------
+   Theme-portable: each mode aliases the theme's existing fg/canvas/elev
+   tokens so any current/future theme gets working neutrals automatically.
+   In dark mode: `light` motif = the theme's lightest fg, `dark` motif = the
+   theme's canvas. In light mode: inverted. The chip's fg flips to maintain
+   contrast.
+   ========================================================================= */
+[data-mode="dark"], :root:not([data-mode="light"]) {
+  --motif-light:        var(--fg-1);
+  --motif-light-band:   var(--bg-elev-1);
+  --motif-light-veil:   var(--bg-elev-2);
+  --motif-light-fg:     var(--bg-canvas);
+
+  --motif-dark:         var(--bg-canvas);
+  --motif-dark-band:    var(--bg-elev-1);
+  --motif-dark-veil:    var(--bg-elev-2);
+  --motif-dark-fg:      var(--fg-1);
+}
+[data-mode="light"] {
+  --motif-light:        var(--bg-canvas);
+  --motif-light-band:   var(--bg-elev-1);
+  --motif-light-veil:   var(--bg-elev-2);
+  --motif-light-fg:     var(--fg-1);
+
+  --motif-dark:         var(--fg-1);
+  --motif-dark-band:    var(--bg-elev-2);
+  --motif-dark-veil:    var(--bg-elev-3);
+  --motif-dark-fg:      var(--bg-canvas);
+}
+
 [data-motif="anchor"] { --m: var(--motif-anchor); --m-accent: var(--motif-anchor); --m-band: var(--motif-anchor-band); --m-line: var(--motif-anchor-veil); --m-veil: var(--motif-anchor-veil); --m-fg: var(--motif-anchor-fg); }
 [data-motif="focus"]  { --m: var(--motif-focus);  --m-accent: var(--motif-focus);  --m-band: var(--motif-focus-band);  --m-line: var(--motif-focus-veil);  --m-veil: var(--motif-focus-veil);  --m-fg: var(--motif-focus-fg); }
 [data-motif="calm"]   { --m: var(--motif-calm);   --m-accent: var(--motif-calm);   --m-band: var(--motif-calm-band);   --m-line: var(--motif-calm-veil);   --m-veil: var(--motif-calm-veil);   --m-fg: var(--motif-calm-fg); }
@@ -891,3 +923,5 @@
 [data-motif="urgent"] { --m: var(--motif-urgent); --m-accent: var(--motif-urgent); --m-band: var(--motif-urgent-band); --m-line: var(--motif-urgent-veil); --m-veil: var(--motif-urgent-veil); --m-fg: var(--motif-urgent-fg); }
 [data-motif="launch"] { --m: var(--motif-launch); --m-accent: var(--motif-launch); --m-band: var(--motif-launch-band); --m-line: var(--motif-launch-veil); --m-veil: var(--motif-launch-veil); --m-fg: var(--motif-launch-fg); }
 [data-motif="sync"]   { --m: var(--motif-sync);   --m-accent: var(--motif-sync);   --m-band: var(--motif-sync-band);   --m-line: var(--motif-sync-veil);   --m-veil: var(--motif-sync-veil);   --m-fg: var(--motif-sync-fg); }
+[data-motif="light"]  { --m: var(--motif-light);  --m-accent: var(--motif-light);  --m-band: var(--motif-light-band);  --m-line: var(--motif-light-veil);  --m-veil: var(--motif-light-veil);  --m-fg: var(--motif-light-fg); }
+[data-motif="dark"]   { --m: var(--motif-dark);   --m-accent: var(--motif-dark);   --m-band: var(--motif-dark-band);   --m-line: var(--motif-dark-veil);   --m-veil: var(--motif-dark-veil);   --m-fg: var(--motif-dark-fg); }

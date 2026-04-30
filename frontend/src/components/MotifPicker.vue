@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-const MOTIF_SLOTS = ['anchor','focus','calm','energy','care','flow','dusk','quiet'] as const
+const MOTIF_SLOTS = ['anchor','focus','calm','energy','care','flow','dusk','quiet','light','dark'] as const
 export type MotifSlot = typeof MOTIF_SLOTS[number]
 
 defineProps<{ modelValue: MotifSlot | null | undefined }>()

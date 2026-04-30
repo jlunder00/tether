@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useAuthStore } from '../stores/auth'
 
 export type ThemeTier = 'free' | 'paid-oss' | 'paid' | 'premium'
-export type MotifSlot = 'anchor' | 'focus' | 'calm' | 'energy' | 'care' | 'flow' | 'dusk' | 'quiet'
+export type MotifSlot = 'anchor' | 'focus' | 'calm' | 'energy' | 'care' | 'flow' | 'dusk' | 'quiet' | 'light' | 'dark'
 export type TypeVoice = 'sharp' | 'editorial' | 'terminal'
 
 export interface ThemeDef {
