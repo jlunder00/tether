@@ -733,16 +733,16 @@
   --border-soft:  rgba(11, 32, 40, 0.06);
   --border-input: rgba(11, 32, 40, 0.22);
 
-  --accent:       #1F7A98;
-  --accent-soft:  rgba(31, 122, 152, 0.16);
-  --accent-veil:  rgba(31, 122, 152, 0.08);
+  --accent:       #15607A;
+  --accent-soft:  rgba(21, 96, 122, 0.16);
+  --accent-veil:  rgba(21, 96, 122, 0.08);
   --accent-fg:    #FFFFFF;
 
   --line-color:    #B8CCD3;
-  --line-glow:     rgba(31, 122, 152, 0.30);
+  --line-glow:     rgba(21, 96, 122, 0.30);
   --line-strength: 1.5px;
   --node-fill:     #EAF2F5;
-  --node-now:      #1F7A98;
+  --node-now:      #15607A;
   --node-done:     #B8CCD3;
 
   --status-todo-bg:    rgba(11, 32, 40, 0.06);

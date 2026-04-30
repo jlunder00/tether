@@ -175,9 +175,9 @@
 }
 
 [data-theme="horizon"][data-mode="light"] {
-  --motif-anchor:        #A87330;
-  --motif-anchor-band:   rgba(168, 115, 48, 0.07);
-  --motif-anchor-veil:   rgba(168, 115, 48, 0.16);
+  --motif-anchor:        #7E5210;
+  --motif-anchor-band:   rgba(126, 82, 16, 0.07);
+  --motif-anchor-veil:   rgba(126, 82, 16, 0.16);
   --motif-anchor-fg:     #FBF6E8;
 
   --motif-focus:         #9C4520;
@@ -442,9 +442,9 @@
 }
 
 [data-theme="solstice"][data-mode="light"] {
-  --motif-anchor:        #1F7A98;
-  --motif-anchor-band:   rgba(31, 122, 152, 0.06);
-  --motif-anchor-veil:   rgba(31, 122, 152, 0.14);
+  --motif-anchor:        #15607A;
+  --motif-anchor-band:   rgba(21, 96, 122, 0.06);
+  --motif-anchor-veil:   rgba(21, 96, 122, 0.14);
   --motif-anchor-fg:     #FFFFFF;
 
   --motif-focus:         #C04A28;
