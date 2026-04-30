@@ -58,9 +58,9 @@ watch(weekStart, loadWeek)
 <template>
   <div>
     <div class="flex items-center gap-2 mb-4">
-      <button @click="prevWeek" class="text-white/40 hover:text-white text-lg px-1">‹</button>
+      <button @click="prevWeek" class="text-[--fg-4] hover:text-[--fg-1] text-lg px-1">‹</button>
       <span class="text-sm font-medium min-w-[160px] text-center">{{ weekLabel }}</span>
-      <button @click="nextWeek" class="text-white/40 hover:text-white text-lg px-1">›</button>
+      <button @click="nextWeek" class="text-[--fg-4] hover:text-[--fg-1] text-lg px-1">›</button>
     </div>
     <div class="grid grid-cols-7 gap-2">
       <DayColumn

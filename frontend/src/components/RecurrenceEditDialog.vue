@@ -37,8 +37,8 @@ const optionLabels = computed(() => {
 const confirmLabel = computed(() => props.action === 'delete' ? 'Delete' : 'Confirm')
 const confirmClass = computed(() =>
   props.action === 'delete'
-    ? 'px-3 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-400'
-    : 'px-3 py-1 text-xs rounded bg-indigo-500 text-white hover:bg-indigo-400'
+    ? 'px-3 py-1 text-xs rounded bg-[--status-block-bg] text-[--status-block-fg] hover:opacity-90'
+    : 'px-3 py-1 text-xs rounded bg-[--accent] text-[--accent-fg] hover:opacity-90'
 )
 
 function onConfirm() { emit('confirm', scope.value) }

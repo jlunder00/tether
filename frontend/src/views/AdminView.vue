@@ -95,7 +95,7 @@ onMounted(fetchInvites)
           <button
             @click="generateInvite"
             :disabled="inviteLoading"
-            class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            class="bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
           >
             {{ inviteLoading ? 'Generating…' : 'Generate Invite Link' }}
           </button>

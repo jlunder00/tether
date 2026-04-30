@@ -87,7 +87,7 @@ const lastSyncedLabel = computed(() => {
           data-testid="gcal-connect"
           :disabled="store.loading"
           @click="store.connectGCal()"
-          class="text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-3 py-1.5 transition-colors"
+          class="text-sm bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-3 py-1.5 transition-colors"
         >
           {{ store.loading ? '…' : 'Connect' }}
         </button>

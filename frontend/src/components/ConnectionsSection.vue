@@ -64,7 +64,7 @@ function truncateUuid(uuid: string): string {
             <button
               :disabled="store.loading"
               @click="store.acceptConnection(conn.id)"
-              class="text-xs bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg px-2.5 py-1 transition-colors"
+              class="text-xs bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] rounded-lg px-2.5 py-1 transition-colors"
               :data-testid="`accept-${conn.id}`"
             >
               Accept
@@ -117,7 +117,7 @@ function truncateUuid(uuid: string): string {
             <button
               :disabled="store.loading"
               @click="store.toggleAutoSchedule(conn.id, !conn.auto_schedule)"
-              :class="conn.auto_schedule ? 'bg-indigo-600' : 'bg-[--bg-elev-3]'"
+              :class="conn.auto_schedule ? 'bg-[--accent]' : 'bg-[--bg-elev-3]'"
               class="relative w-9 h-5 rounded-full transition-colors disabled:opacity-50"
               :data-testid="`auto-schedule-${conn.id}`"
               :aria-pressed="conn.auto_schedule"
@@ -148,7 +148,7 @@ function truncateUuid(uuid: string): string {
         <button
           :disabled="store.loading || !requestUsername.trim()"
           @click="handleSendRequest"
-          class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+          class="bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
           data-testid="send-request-btn"
         >
           {{ store.loading ? '…' : 'Send request' }}

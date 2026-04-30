@@ -49,7 +49,7 @@ async function handleRegister() {
             type="text"
             autocomplete="username"
             required
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="yourname"
           />
         </div>
@@ -62,7 +62,7 @@ async function handleRegister() {
             type="email"
             autocomplete="email"
             required
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="you@example.com"
           />
         </div>
@@ -75,7 +75,7 @@ async function handleRegister() {
             type="password"
             autocomplete="new-password"
             required
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="••••••••"
           />
         </div>
@@ -86,7 +86,7 @@ async function handleRegister() {
             id="invite"
             v-model="inviteToken"
             type="text"
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="abc123"
           />
         </div>
@@ -98,7 +98,7 @@ async function handleRegister() {
         <button
           type="submit"
           :disabled="loading"
-          class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-4 py-2.5 transition-colors"
+          class="w-full bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-4 py-2.5 transition-colors"
         >
           {{ loading ? 'Creating account…' : 'Create account' }}
         </button>
@@ -106,7 +106,7 @@ async function handleRegister() {
 
       <p class="mt-6 text-center text-sm text-[--fg-4]">
         Already have an account?
-        <router-link to="/login" class="text-indigo-400 hover:text-indigo-300 ml-1">Sign in</router-link>
+        <router-link to="/login" class="text-[--accent] hover:opacity-80 ml-1">Sign in</router-link>
       </p>
     </div>
   </div>

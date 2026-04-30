@@ -50,7 +50,7 @@ const isMilestone = computed(() => props.node.node_type === 'milestone')
     <div class="flex items-center gap-1 group">
       <button
         v-if="mayHaveChildren"
-        class="w-4 h-4 flex-shrink-0 text-white/40 hover:text-white text-[10px]"
+        class="w-4 h-4 flex-shrink-0 text-[--fg-4] hover:text-[--fg-1] text-[10px]"
         :data-testid="`tree-expand-${node.id}`"
         @click="onToggleExpand"
       >{{ expanded ? '▾' : '▸' }}</button>
@@ -59,12 +59,12 @@ const isMilestone = computed(() => props.node.node_type === 'milestone')
       <button
         :data-testid="`filter-item-context-${node.id}`"
         class="flex items-center gap-2 flex-1 text-left px-2 py-1 rounded text-xs transition-colors min-w-0"
-        :class="isSelected ? 'bg-indigo-500/20 text-indigo-200' : 'text-white/60 hover:bg-white/5'"
+        :class="isSelected ? 'bg-[--accent-soft] text-[--accent]' : 'text-[--fg-3] hover:bg-[--bg-elev-2]'"
         @click="emit('toggle', node.id)"
       >
         <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: node.color ?? '#6366f1' }" />
         <span class="truncate">{{ node.name }}</span>
-        <span v-if="isMilestone" class="text-[9px] text-white/30 uppercase tracking-wide ml-auto flex-shrink-0">M</span>
+        <span v-if="isMilestone" class="text-[9px] text-[--fg-5] uppercase tracking-wide ml-auto flex-shrink-0">M</span>
       </button>
     </div>
 

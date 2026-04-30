@@ -141,7 +141,7 @@ async function copyUrl() {
           data-testid="anthropic-connect"
           :disabled="store.anthropicLoading || modalPhase === 'starting'"
           @click="handleConnect"
-          class="text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-3 py-1.5 transition-colors"
+          class="text-sm bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-3 py-1.5 transition-colors"
         >
           {{ (store.anthropicLoading || modalPhase === 'starting') ? '…' : 'Connect' }}
         </button>
@@ -189,7 +189,7 @@ async function copyUrl() {
               :href="store.anthropicAuthUrl"
               target="_blank"
               rel="noopener noreferrer"
-              class="text-xs text-indigo-400 hover:text-indigo-300 underline truncate max-w-xs"
+              class="text-xs text-[--accent] hover:opacity-80 underline truncate max-w-xs"
             >
               {{ store.anthropicAuthUrl }}
             </a>
@@ -215,14 +215,14 @@ async function copyUrl() {
               type="text"
               placeholder="Paste code here"
               :disabled="modalPhase === 'completing'"
-              class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5] disabled:opacity-50"
+              class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5] disabled:opacity-50"
               @keydown.enter="handleSubmit"
             />
             <button
               data-testid="anthropic-submit"
               :disabled="!codeInput.trim() || modalPhase === 'completing'"
               @click="handleSubmit"
-              class="text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-3 py-2 transition-colors flex-shrink-0"
+              class="text-sm bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-3 py-2 transition-colors flex-shrink-0"
             >
               {{ modalPhase === 'completing' ? '…' : 'Submit' }}
             </button>
@@ -247,7 +247,7 @@ async function copyUrl() {
             <button
               data-testid="anthropic-retry"
               @click="handleConnect"
-              class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg px-3 py-1.5 transition-colors"
+              class="text-xs bg-[--accent] hover:opacity-90 text-[--accent-fg] rounded-lg px-3 py-1.5 transition-colors"
             >
               Retry
             </button>

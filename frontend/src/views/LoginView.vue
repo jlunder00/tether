@@ -39,7 +39,7 @@ async function handleLogin() {
             type="text"
             autocomplete="username"
             required
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="you@example.com"
           />
         </div>
@@ -52,7 +52,7 @@ async function handleLogin() {
             type="password"
             autocomplete="current-password"
             required
-            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+            class="w-full bg-[--bg-elev-1] text-[--fg-1] rounded-lg px-4 py-2.5 border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
             placeholder="••••••••"
           />
         </div>
@@ -64,7 +64,7 @@ async function handleLogin() {
         <button
           type="submit"
           :disabled="loading"
-          class="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-4 py-2.5 transition-colors"
+          class="w-full bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-4 py-2.5 transition-colors"
         >
           {{ loading ? 'Signing in…' : 'Sign in' }}
         </button>
@@ -97,7 +97,7 @@ async function handleLogin() {
 
       <p class="mt-6 text-center text-sm text-[--fg-4]">
         Don't have an account?
-        <router-link to="/register" class="text-indigo-400 hover:text-indigo-300 ml-1">Register</router-link>
+        <router-link to="/register" class="text-[--accent] hover:opacity-80 ml-1">Register</router-link>
       </p>
     </div>
   </div>

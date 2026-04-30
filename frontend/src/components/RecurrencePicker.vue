@@ -142,7 +142,7 @@ function onCustomInput(e: Event) {
           type="button"
           :data-testid="`rrule-dow-${d}`"
           class="px-1.5 py-0.5 rounded text-[11px] border transition-colors"
-          :class="state.byday.includes(d) ? 'bg-indigo-500 text-white border-indigo-500' : 'text-[--fg-4] border-[--border-soft] hover:border-[--border-1]'"
+          :class="state.byday.includes(d) ? 'bg-[--accent] text-[--accent-fg] border-[--accent]' : 'text-[--fg-4] border-[--border-soft] hover:border-[--border-1]'"
           @click="toggleDow(d)"
         >{{ DOW_LABELS[i] }}</button>
       </div>

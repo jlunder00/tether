@@ -273,7 +273,7 @@ async function linkTelegram() {
           <!-- Upgrade nudge -->
           <div
             v-if="showUpgradeNudge"
-            class="flex items-center justify-between gap-3 rounded-lg bg-indigo-900/40 border border-indigo-700/50 px-3 py-2.5 text-sm"
+            class="flex items-center justify-between gap-3 rounded-lg bg-[--accent-veil] border border-[--accent-soft] px-3 py-2.5 text-sm"
           >
             <span class="text-[--fg-2]">
               <strong class="text-[--fg-1]">{{ upgradeNudgeTheme }}</strong> is a paid theme — upgrade to keep it.
@@ -338,7 +338,7 @@ async function linkTelegram() {
               <button
                 @click="linkTelegram"
                 :disabled="telegramStatus === 'loading' || !telegramCode.trim()"
-                class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                class="bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
               >
                 {{ telegramStatus === 'loading' ? '…' : 'Link' }}
               </button>
@@ -424,7 +424,7 @@ async function linkTelegram() {
             <button
               @click="saveArchiveSettings"
               :disabled="archiveStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ archiveStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>
@@ -459,7 +459,7 @@ async function linkTelegram() {
             </div>
             <button
               @click="llmConfig.llm.thinking_enabled = !llmConfig.llm.thinking_enabled"
-              :class="llmConfig.llm.thinking_enabled ? 'bg-indigo-600' : 'bg-[--bg-elev-3]'"
+              :class="llmConfig.llm.thinking_enabled ? 'bg-[--accent]' : 'bg-[--bg-elev-3]'"
               class="relative w-11 h-6 rounded-full transition-colors"
             >
               <span
@@ -516,7 +516,7 @@ async function linkTelegram() {
           <div class="border-t border-[--border-1] pt-3 mt-3">
             <button
               @click="showAdvanced = !showAdvanced"
-              class="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+              class="text-sm text-[--accent] hover:opacity-80 flex items-center gap-1"
             >
               <span :class="showAdvanced ? 'rotate-90' : ''" class="transition-transform inline-block">&#9656;</span>
               Advanced: Model Assignments
@@ -538,7 +538,7 @@ async function linkTelegram() {
             <button
               @click="saveLLMConfig"
               :disabled="llmStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ llmStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>
