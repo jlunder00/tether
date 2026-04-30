@@ -12,6 +12,7 @@ import { useAnchorStore } from '../stores/anchors'
 import { useBacklogStore } from '../stores/backlog'
 import { useEventStore } from '../stores/events'
 import { useTasksStore } from '../stores/tasks'
+import { useKanbanStore } from '../stores/kanban'
 import { useSubtasks } from '../composables/useSubtasks'
 import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
@@ -29,6 +30,7 @@ const anchorStore = useAnchorStore()
 const backlogStore = useBacklogStore()
 const eventStore = useEventStore()
 const tasksStore = useTasksStore()
+const kanbanStore = useKanbanStore()
 
 // Calendar event linked to this task, OR the event itself when props.taskId is an event ID
 // (standalone events opened via kind:'event' in SlideOverStack pass event.id as taskId).
@@ -122,6 +124,9 @@ async function patchTask(fields: Record<string, unknown>) {
   } else {
     await planStore.fetchPlan()
   }
+  // Mirror the patch into the kanban store so the kanban view re-renders
+  // when fields like motif/color/text are edited from the detail panel.
+  if (resp.ok) kanbanStore.applyTaskPatch(props.taskId, fields)
 }
 
 // Text editing

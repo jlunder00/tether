@@ -1,41 +1,20 @@
 <script setup lang="ts">
-import { onMounted, computed, ref } from 'vue'
+import { onMounted, computed } from 'vue'
 import KanbanColumn from '../components/KanbanColumn.vue'
-import { useKanbanStore } from '../stores/kanban'
+import { useKanbanStore, type KanbanTask } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
-import type { Task, TaskStatus } from '../stores/plan'
+import type { TaskStatus } from '../stores/plan'
 import { api } from '../lib/api'
 import { useSlideOver } from '../composables/useSlideOver'
-
-interface KanbanTask extends Task {
-  plan_date: string | null
-  anchor_id: string | null
-}
 
 const { push: pushPanel } = useSlideOver()
 const kanbanStore = useKanbanStore()
 const milestoneStore = useMilestoneStore()
 
-const allTasks = ref<KanbanTask[]>([])
-const tasksLoading = ref(false)
-
-async function fetchAllTasks() {
-  tasksLoading.value = true
-  try {
-    const resp = await api('/api/tasks/all')
-    if (!resp.ok) throw new Error(`${resp.status}`)
-    allTasks.value = await resp.json()
-  } catch (e) {
-    console.error('fetchAllTasks error:', e)
-  } finally {
-    tasksLoading.value = false
-  }
-}
-
 onMounted(() => {
   kanbanStore.fetchColumns()
   milestoneStore.fetchAll()
-  fetchAllTasks()
+  kanbanStore.fetchAllTasks()
 })
 
 async function onAddTask(columnId: string, opts: { context_subject?: string; milestone_id?: string }) {
@@ -55,7 +34,7 @@ async function onAddTask(columnId: string, opts: { context_subject?: string; mil
     })
     if (!resp.ok) throw new Error(`${resp.status}`)
     const task = await resp.json()
-    await fetchAllTasks()
+    await kanbanStore.fetchAllTasks()
     pushPanel({ kind: 'task', entityId: task.id })
   } catch (e) {
     console.error('Failed to create task:', e)
@@ -71,7 +50,7 @@ async function onTaskDrop(taskId: string, columnId: string) {
   const column = kanbanStore.columns.find(c => c.id === columnId)
   if (!column) return
 
-  const task = allTasks.value.find(t => t.id === taskId)
+  const task = kanbanStore.allTasks.find(t => t.id === taskId)
   if (!task) return
 
   const rules = column.entry_rules
@@ -110,7 +89,7 @@ async function onTaskDrop(taskId: string, columnId: string) {
     console.error('Failed to update task:', e)
     task.status = oldStatus
     task.plan_date = oldPlanDate
-    await fetchAllTasks()
+    await kanbanStore.fetchAllTasks()
   } finally {
     pendingDrops.delete(taskId)
   }
@@ -124,7 +103,7 @@ const columnTasks = computed(() => {
     result[col.id] = []
   }
 
-  for (const task of allTasks.value) {
+  for (const task of kanbanStore.allTasks) {
     for (const col of cols) {
       if (matchesRules(task, col.match_rules)) {
         result[col.id].push(task)
@@ -161,7 +140,7 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
   <div class="h-screen bg-gray-900 text-white p-6 flex flex-col overflow-hidden">
     <h1 class="text-2xl font-bold mb-4 flex-shrink-0">Kanban</h1>
 
-    <div v-if="kanbanStore.loading || tasksLoading" class="text-white/40 text-sm">Loading...</div>
+    <div v-if="kanbanStore.loading || kanbanStore.tasksLoading" class="text-white/40 text-sm">Loading...</div>
     <div v-else-if="kanbanStore.error" class="text-red-400 text-sm">{{ kanbanStore.error }}</div>
 
     <div v-else class="flex gap-4 overflow-x-auto flex-1 min-h-0">
