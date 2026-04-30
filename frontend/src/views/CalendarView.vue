@@ -945,8 +945,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
               </div>
             </div>
 
-            <!-- All-day band — one row above the timed grid, one chip per is_all_day event -->
-            <div data-testid="all-day-band" class="sticky flex border-b border-[--border-1] bg-[--bg-canvas-veil] pl-12">
+            <!-- All-day band — one row above the timed grid, one chip per is_all_day event.
+                 Use opaque --bg-canvas (not the 80% veil) so timed-grid events scrolling
+                 underneath don't bleed through this sticky band. -->
+            <div data-testid="all-day-band" class="sticky flex border-b border-[--border-1] bg-[--bg-canvas] pl-12">
             <div
               v-for="(_, i) in days"
               :key="dayKeys[i]"
