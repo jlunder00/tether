@@ -175,9 +175,9 @@
 }
 
 [data-theme="horizon"][data-mode="light"] {
-  --motif-anchor:        #A87330;
-  --motif-anchor-band:   rgba(168, 115, 48, 0.07);
-  --motif-anchor-veil:   rgba(168, 115, 48, 0.16);
+  --motif-anchor:        #7E5210;
+  --motif-anchor-band:   rgba(126, 82, 16, 0.07);
+  --motif-anchor-veil:   rgba(126, 82, 16, 0.16);
   --motif-anchor-fg:     #FBF6E8;
 
   --motif-focus:         #9C4520;
@@ -441,6 +441,48 @@
   --motif-quiet-fg:      #0B1418;
 }
 
+[data-theme="solstice"][data-mode="light"] {
+  --motif-anchor:        #15607A;
+  --motif-anchor-band:   rgba(21, 96, 122, 0.06);
+  --motif-anchor-veil:   rgba(21, 96, 122, 0.14);
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #C04A28;
+  --motif-focus-band:    rgba(192, 74, 40, 0.06);
+  --motif-focus-veil:    rgba(192, 74, 40, 0.14);
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #3F7A88;
+  --motif-calm-band:     rgba(63, 122, 136, 0.06);
+  --motif-calm-veil:     rgba(63, 122, 136, 0.14);
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #6E8C1A;
+  --motif-energy-band:   rgba(110, 140, 26, 0.06);
+  --motif-energy-veil:   rgba(110, 140, 26, 0.14);
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #B5527A;
+  --motif-care-band:     rgba(181, 82, 122, 0.06);
+  --motif-care-veil:     rgba(181, 82, 122, 0.14);
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #2E9A8A;
+  --motif-flow-band:     rgba(46, 154, 138, 0.06);
+  --motif-flow-veil:     rgba(46, 154, 138, 0.14);
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #6B4FAE;
+  --motif-dusk-band:     rgba(107, 79, 174, 0.06);
+  --motif-dusk-veil:     rgba(107, 79, 174, 0.14);
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #5E7A82;
+  --motif-quiet-band:    rgba(94, 122, 130, 0.05);
+  --motif-quiet-veil:    rgba(94, 122, 130, 0.12);
+  --motif-quiet-fg:      #FFFFFF;
+}
+
 
 /* =========================================================================
    6. DRACULA·TETHER  (vivid dev classic — distinctive 6-color palette)
@@ -486,6 +528,48 @@
   --motif-quiet-band:    rgba(80, 250, 123, 0.05);
   --motif-quiet-veil:    rgba(80, 250, 123, 0.12);
   --motif-quiet-fg:      #282A36;
+}
+
+[data-theme="dracula"][data-mode="light"] {
+  --motif-anchor:        #6B3DCC;  /* purple, darkened from BD93F9 */
+  --motif-anchor-band:   rgba(107, 61, 204, 0.06);
+  --motif-anchor-veil:   rgba(107, 61, 204, 0.14);
+  --motif-anchor-fg:     #FFFFFF;
+
+  --motif-focus:         #C92020;  /* red, darkened from FF5555 */
+  --motif-focus-band:    rgba(201, 32, 32, 0.06);
+  --motif-focus-veil:    rgba(201, 32, 32, 0.14);
+  --motif-focus-fg:      #FFFFFF;
+
+  --motif-calm:          #4A5683;  /* comment blue, darkened from 6272A4 */
+  --motif-calm-band:     rgba(74, 86, 131, 0.07);
+  --motif-calm-veil:     rgba(74, 86, 131, 0.15);
+  --motif-calm-fg:       #FFFFFF;
+
+  --motif-energy:        #8C7000;  /* yellow, darkened from F1FA8C */
+  --motif-energy-band:   rgba(140, 112, 0, 0.06);
+  --motif-energy-veil:   rgba(140, 112, 0, 0.14);
+  --motif-energy-fg:     #FFFFFF;
+
+  --motif-care:          #C0468C;  /* pink, darkened from FF79C6 */
+  --motif-care-band:     rgba(192, 70, 140, 0.06);
+  --motif-care-veil:     rgba(192, 70, 140, 0.14);
+  --motif-care-fg:       #FFFFFF;
+
+  --motif-flow:          #00829E;  /* cyan, darkened from 8BE9FD */
+  --motif-flow-band:     rgba(0, 130, 158, 0.06);
+  --motif-flow-veil:     rgba(0, 130, 158, 0.14);
+  --motif-flow-fg:       #FFFFFF;
+
+  --motif-dusk:          #B0682E;  /* orange, darkened from FFB86C */
+  --motif-dusk-band:     rgba(176, 104, 46, 0.06);
+  --motif-dusk-veil:     rgba(176, 104, 46, 0.14);
+  --motif-dusk-fg:       #FFFFFF;
+
+  --motif-quiet:         #1F8A4A;  /* green, darkened from 50FA7B */
+  --motif-quiet-band:    rgba(31, 138, 74, 0.05);
+  --motif-quiet-veil:    rgba(31, 138, 74, 0.12);
+  --motif-quiet-fg:      #FFFFFF;
 }
 
 
@@ -710,8 +794,9 @@
   --motif-sync-fg:       #F2F1E8;
 }
 
-/* Solstice, Dracula, Paper — inherit from Tether/Terminal/Paper as reasonable defaults */
-[data-theme="solstice"] {
+/* Solstice dark */
+[data-theme="solstice"][data-mode="dark"],
+[data-theme="solstice"]:not([data-mode]) {
   --motif-urgent:        #FF7A6B;
   --motif-urgent-band:   rgba(255, 122, 107, 0.07);
   --motif-urgent-veil:   rgba(255, 122, 107, 0.16);
@@ -727,7 +812,26 @@
   --motif-sync-veil:     rgba(191, 166, 229, 0.16);
   --motif-sync-fg:       #0B1418;
 }
-[data-theme="dracula"] {
+[data-theme="solstice"][data-mode="light"] {
+  --motif-urgent:        #B23A28;
+  --motif-urgent-band:   rgba(178, 58, 40, 0.07);
+  --motif-urgent-veil:   rgba(178, 58, 40, 0.15);
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #6E8C1A;
+  --motif-launch-band:   rgba(110, 140, 26, 0.07);
+  --motif-launch-veil:   rgba(110, 140, 26, 0.15);
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #6B4FAE;
+  --motif-sync-band:     rgba(107, 79, 174, 0.07);
+  --motif-sync-veil:     rgba(107, 79, 174, 0.15);
+  --motif-sync-fg:       #FFFFFF;
+}
+
+/* Dracula dark */
+[data-theme="dracula"][data-mode="dark"],
+[data-theme="dracula"]:not([data-mode]) {
   --motif-urgent:        #FF5555;
   --motif-urgent-band:   rgba(255, 85, 85, 0.08);
   --motif-urgent-veil:   rgba(255, 85, 85, 0.18);
@@ -742,6 +846,22 @@
   --motif-sync-band:     rgba(189, 147, 249, 0.08);
   --motif-sync-veil:     rgba(189, 147, 249, 0.18);
   --motif-sync-fg:       #282A36;
+}
+[data-theme="dracula"][data-mode="light"] {
+  --motif-urgent:        #C92020;
+  --motif-urgent-band:   rgba(201, 32, 32, 0.07);
+  --motif-urgent-veil:   rgba(201, 32, 32, 0.15);
+  --motif-urgent-fg:     #FFFFFF;
+
+  --motif-launch:        #8C7000;
+  --motif-launch-band:   rgba(140, 112, 0, 0.07);
+  --motif-launch-veil:   rgba(140, 112, 0, 0.15);
+  --motif-launch-fg:     #FFFFFF;
+
+  --motif-sync:          #6B3DCC;
+  --motif-sync-band:     rgba(107, 61, 204, 0.07);
+  --motif-sync-veil:     rgba(107, 61, 204, 0.15);
+  --motif-sync-fg:       #FFFFFF;
 }
 [data-theme="paper"] {
   --motif-urgent:        #8A1818;
@@ -760,14 +880,48 @@
   --motif-sync-fg:       #FAFAF7;
 }
 
-[data-motif="anchor"] { --m: var(--motif-anchor); --m-accent: var(--motif-anchor); --m-band: var(--motif-anchor-band); --m-line: var(--motif-anchor-veil); --m-veil: var(--motif-anchor-veil); --m-fg: var(--motif-anchor-fg); }
-[data-motif="focus"]  { --m: var(--motif-focus);  --m-accent: var(--motif-focus);  --m-band: var(--motif-focus-band);  --m-line: var(--motif-focus-veil);  --m-veil: var(--motif-focus-veil);  --m-fg: var(--motif-focus-fg); }
-[data-motif="calm"]   { --m: var(--motif-calm);   --m-accent: var(--motif-calm);   --m-band: var(--motif-calm-band);   --m-line: var(--motif-calm-veil);   --m-veil: var(--motif-calm-veil);   --m-fg: var(--motif-calm-fg); }
-[data-motif="energy"] { --m: var(--motif-energy); --m-accent: var(--motif-energy); --m-band: var(--motif-energy-band); --m-line: var(--motif-energy-veil); --m-veil: var(--motif-energy-veil); --m-fg: var(--motif-energy-fg); }
-[data-motif="care"]   { --m: var(--motif-care);   --m-accent: var(--motif-care);   --m-band: var(--motif-care-band);   --m-line: var(--motif-care-veil);   --m-veil: var(--motif-care-veil);   --m-fg: var(--motif-care-fg); }
-[data-motif="flow"]   { --m: var(--motif-flow);   --m-accent: var(--motif-flow);   --m-band: var(--motif-flow-band);   --m-line: var(--motif-flow-veil);   --m-veil: var(--motif-flow-veil);   --m-fg: var(--motif-flow-fg); }
-[data-motif="dusk"]   { --m: var(--motif-dusk);   --m-accent: var(--motif-dusk);   --m-band: var(--motif-dusk-band);   --m-line: var(--motif-dusk-veil);   --m-veil: var(--motif-dusk-veil);   --m-fg: var(--motif-dusk-fg); }
-[data-motif="quiet"]  { --m: var(--motif-quiet);  --m-accent: var(--motif-quiet);  --m-band: var(--motif-quiet-band);  --m-line: var(--motif-quiet-veil);  --m-veil: var(--motif-quiet-veil);  --m-fg: var(--motif-quiet-fg); }
-[data-motif="urgent"] { --m: var(--motif-urgent); --m-accent: var(--motif-urgent); --m-band: var(--motif-urgent-band); --m-line: var(--motif-urgent-veil); --m-veil: var(--motif-urgent-veil); --m-fg: var(--motif-urgent-fg); }
-[data-motif="launch"] { --m: var(--motif-launch); --m-accent: var(--motif-launch); --m-band: var(--motif-launch-band); --m-line: var(--motif-launch-veil); --m-veil: var(--motif-launch-veil); --m-fg: var(--motif-launch-fg); }
-[data-motif="sync"]   { --m: var(--motif-sync);   --m-accent: var(--motif-sync);   --m-band: var(--motif-sync-band);   --m-line: var(--motif-sync-veil);   --m-veil: var(--motif-sync-veil);   --m-fg: var(--motif-sync-fg); }
+/* =========================================================================
+   8. NEUTRAL MOTIFS · "light" and "dark"
+   --------------------------------------------------------------------------
+   Theme-portable: each mode aliases the theme's existing fg/canvas/elev
+   tokens so any current/future theme gets working neutrals automatically.
+   In dark mode: `light` motif = the theme's lightest fg, `dark` motif = the
+   theme's canvas. In light mode: inverted. The chip's fg flips to maintain
+   contrast.
+   ========================================================================= */
+[data-mode="dark"], :root:not([data-mode="light"]) {
+  --motif-light:        var(--fg-1);
+  --motif-light-band:   var(--bg-elev-1);
+  --motif-light-veil:   var(--bg-elev-2);
+  --motif-light-fg:     var(--bg-canvas);
+
+  --motif-dark:         var(--bg-canvas);
+  --motif-dark-band:    var(--bg-elev-1);
+  --motif-dark-veil:    var(--bg-elev-2);
+  --motif-dark-fg:      var(--fg-1);
+}
+[data-mode="light"] {
+  --motif-light:        var(--bg-canvas);
+  --motif-light-band:   var(--bg-elev-1);
+  --motif-light-veil:   var(--bg-elev-2);
+  --motif-light-fg:     var(--fg-1);
+
+  --motif-dark:         var(--fg-1);
+  --motif-dark-band:    var(--bg-elev-2);
+  --motif-dark-veil:    var(--bg-elev-3);
+  --motif-dark-fg:      var(--bg-canvas);
+}
+
+[data-motif="anchor"] { --m: var(--motif-anchor); --m-accent: var(--motif-anchor); --m-band: var(--motif-anchor-band); --m-line: var(--motif-anchor-veil); --m-veil: var(--motif-anchor-veil); --m-fg: var(--motif-anchor-fg); --accent-local: var(--motif-anchor); --accent-soft-local: var(--motif-anchor-veil); }
+[data-motif="focus"]  { --m: var(--motif-focus);  --m-accent: var(--motif-focus);  --m-band: var(--motif-focus-band);  --m-line: var(--motif-focus-veil);  --m-veil: var(--motif-focus-veil);  --m-fg: var(--motif-focus-fg);  --accent-local: var(--motif-focus);  --accent-soft-local: var(--motif-focus-veil); }
+[data-motif="calm"]   { --m: var(--motif-calm);   --m-accent: var(--motif-calm);   --m-band: var(--motif-calm-band);   --m-line: var(--motif-calm-veil);   --m-veil: var(--motif-calm-veil);   --m-fg: var(--motif-calm-fg);   --accent-local: var(--motif-calm);   --accent-soft-local: var(--motif-calm-veil); }
+[data-motif="energy"] { --m: var(--motif-energy); --m-accent: var(--motif-energy); --m-band: var(--motif-energy-band); --m-line: var(--motif-energy-veil); --m-veil: var(--motif-energy-veil); --m-fg: var(--motif-energy-fg); --accent-local: var(--motif-energy); --accent-soft-local: var(--motif-energy-veil); }
+[data-motif="care"]   { --m: var(--motif-care);   --m-accent: var(--motif-care);   --m-band: var(--motif-care-band);   --m-line: var(--motif-care-veil);   --m-veil: var(--motif-care-veil);   --m-fg: var(--motif-care-fg);   --accent-local: var(--motif-care);   --accent-soft-local: var(--motif-care-veil); }
+[data-motif="flow"]   { --m: var(--motif-flow);   --m-accent: var(--motif-flow);   --m-band: var(--motif-flow-band);   --m-line: var(--motif-flow-veil);   --m-veil: var(--motif-flow-veil);   --m-fg: var(--motif-flow-fg);   --accent-local: var(--motif-flow);   --accent-soft-local: var(--motif-flow-veil); }
+[data-motif="dusk"]   { --m: var(--motif-dusk);   --m-accent: var(--motif-dusk);   --m-band: var(--motif-dusk-band);   --m-line: var(--motif-dusk-veil);   --m-veil: var(--motif-dusk-veil);   --m-fg: var(--motif-dusk-fg);   --accent-local: var(--motif-dusk);   --accent-soft-local: var(--motif-dusk-veil); }
+[data-motif="quiet"]  { --m: var(--motif-quiet);  --m-accent: var(--motif-quiet);  --m-band: var(--motif-quiet-band);  --m-line: var(--motif-quiet-veil);  --m-veil: var(--motif-quiet-veil);  --m-fg: var(--motif-quiet-fg);  --accent-local: var(--motif-quiet);  --accent-soft-local: var(--motif-quiet-veil); }
+[data-motif="urgent"] { --m: var(--motif-urgent); --m-accent: var(--motif-urgent); --m-band: var(--motif-urgent-band); --m-line: var(--motif-urgent-veil); --m-veil: var(--motif-urgent-veil); --m-fg: var(--motif-urgent-fg); --accent-local: var(--motif-urgent); --accent-soft-local: var(--motif-urgent-veil); }
+[data-motif="launch"] { --m: var(--motif-launch); --m-accent: var(--motif-launch); --m-band: var(--motif-launch-band); --m-line: var(--motif-launch-veil); --m-veil: var(--motif-launch-veil); --m-fg: var(--motif-launch-fg); --accent-local: var(--motif-launch); --accent-soft-local: var(--motif-launch-veil); }
+[data-motif="sync"]   { --m: var(--motif-sync);   --m-accent: var(--motif-sync);   --m-band: var(--motif-sync-band);   --m-line: var(--motif-sync-veil);   --m-veil: var(--motif-sync-veil);   --m-fg: var(--motif-sync-fg);   --accent-local: var(--motif-sync);   --accent-soft-local: var(--motif-sync-veil); }
+[data-motif="light"]  { --m: var(--motif-light);  --m-accent: var(--motif-light);  --m-band: var(--motif-light-band);  --m-line: var(--motif-light-veil);  --m-veil: var(--motif-light-veil);  --m-fg: var(--motif-light-fg);  --accent-local: var(--motif-light);  --accent-soft-local: var(--motif-light-veil); }
+[data-motif="dark"]   { --m: var(--motif-dark);   --m-accent: var(--motif-dark);   --m-band: var(--motif-dark-band);   --m-line: var(--motif-dark-veil);   --m-veil: var(--motif-dark-veil);   --m-fg: var(--motif-dark-fg);   --accent-local: var(--motif-dark);   --accent-soft-local: var(--motif-dark-veil); }
