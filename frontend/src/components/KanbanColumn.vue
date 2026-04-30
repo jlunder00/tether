@@ -20,6 +20,22 @@ const emit = defineEmits<{
   (e: 'task-drop', taskId: string, columnId: string): void
 }>()
 
+const STATUS_MOTIF: Record<string, string> = {
+  pending: 'quiet',     todo:  'quiet',
+  in_progress: 'focus', doing: 'focus',
+  done: 'calm',
+  skipped: 'dusk',      skip:  'dusk',
+  blocked: 'energy',    block: 'energy',
+}
+
+const columnMotif = computed(() => {
+  const matchStatus = (props.column.match_rules as { status?: unknown } | null)?.status
+  const entryStatus = (props.column.entry_rules as { set_status?: unknown } | null)?.set_status
+  const status = (typeof matchStatus === 'string' && matchStatus)
+    || (typeof entryStatus === 'string' && entryStatus)
+  return (status && STATUS_MOTIF[status]) || 'anchor'
+})
+
 async function onTaskUpdate(task: Task) {
   // Patch via API — status change, text change, etc.
   await api(`/api/tasks/${task.id}`, {
@@ -129,7 +145,8 @@ function onColumnDrop(evt: DragEvent) {
 </script>
 
 <template>
-  <div class="flex flex-col min-w-[320px] max-w-[380px] bg-[--bg-elev-1] border border-[--border-1] rounded-xl flex-shrink-0 min-h-0">
+  <div :data-motif="columnMotif" class="relative flex flex-col min-w-[320px] max-w-[380px] bg-[--bg-elev-1] border border-[--border-1] rounded-xl flex-shrink-0 min-h-0">
+    <div class="absolute left-0 top-2 bottom-2 w-0.5 rounded-full pointer-events-none" :style="{ background: 'var(--m)' }" />
     <!-- Column header (fixed, does not scroll) -->
     <div class="flex items-center gap-2 px-3 py-2.5 border-b border-[--border-1] bg-[--bg-elev-2] flex-shrink-0">
       <span v-if="column.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: column.color }" />

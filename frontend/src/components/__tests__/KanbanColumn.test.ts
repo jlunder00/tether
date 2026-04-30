@@ -74,3 +74,40 @@ describe('KanbanColumn drop target', () => {
     expect(body.classes()).not.toContain('ring-2')
   })
 })
+
+describe('KanbanColumn motif', () => {
+  function mountWith(rules: Partial<Pick<KanbanColumnType, 'match_rules' | 'entry_rules'>>) {
+    setActivePinia(createPinia())
+    return mount(KanbanColumn, {
+      props: {
+        column: { ...testColumn, match_rules: {}, entry_rules: {}, ...rules },
+        tasks: [],
+      },
+    })
+  }
+
+  const cases: Array<[string, string]> = [
+    ['pending', 'quiet'],
+    ['in_progress', 'focus'],
+    ['done', 'calm'],
+    ['skipped', 'dusk'],
+    ['blocked', 'energy'],
+  ]
+
+  for (const [status, expected] of cases) {
+    it(`maps match_rules.status="${status}" to motif="${expected}"`, () => {
+      const w = mountWith({ match_rules: { status } })
+      expect(w.find('[data-motif]').attributes('data-motif')).toBe(expected)
+    })
+  }
+
+  it('falls back to entry_rules.set_status when match_rules has none', () => {
+    const w = mountWith({ match_rules: {}, entry_rules: { set_status: 'done' } })
+    expect(w.find('[data-motif]').attributes('data-motif')).toBe('calm')
+  })
+
+  it('falls back to "anchor" when no status rule is present', () => {
+    const w = mountWith({ match_rules: { plan_date: 'not_null' }, entry_rules: {} })
+    expect(w.find('[data-motif]').attributes('data-motif')).toBe('anchor')
+  })
+})
