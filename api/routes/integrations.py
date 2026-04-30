@@ -17,10 +17,8 @@ Anthropic OAuth vault endpoints:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import pathlib
 import re
 import shutil
 import tempfile
@@ -72,6 +70,11 @@ _ANTHROPIC_URL_RE = re.compile(r"https://\S+")
 # Note: does not strip OSC8 hyperlinks (\x1b]8;;URL\x07...\x1b]8;;\x07) — if
 # claude setup-token ever uses them, extend this regex or post-process the URL.
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# `claude setup-token` prints a long-lived OAuth token to stdout (sk-ant-oat-…)
+# rather than writing a credentials file. The trailing run is URL-safe base64
+# plus dashes/underscores; we capture the longest such run after the prefix.
+_OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 _ANTHROPIC_URL_SCHEME = "https"
 # claude setup-token may emit URLs on either domain depending on version.
 _VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}
@@ -207,7 +210,8 @@ def _complete_pexpect_sync(child, code: str) -> str:
     try:
         child.expect(pexpect.EOF, timeout=30)
         post_output = _ANSI_ESCAPE_RE.sub("", child.before.decode(errors="replace") if child.before else "")
-        logger.debug("anthropic/complete: child output after code submission: %r", post_output[-500:])
+        safe_output = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", post_output)
+        logger.debug("anthropic/complete: child output after code submission: %r", safe_output[-500:])
     except pexpect.TIMEOUT:
         logger.warning("anthropic/complete: pexpect timed out waiting for EOF after code submission")
         return "timeout"
@@ -675,27 +679,32 @@ async def anthropic_complete(
         logger.warning("anthropic/complete: setup process reported failure for user_id=%s", user_id)
         return {"ok": False, "error": "setup failed"}
 
-    # result == "ok"
-    creds_file = pathlib.Path(temp_dir) / ".credentials.json"
-    logger.debug("anthropic/complete: checking for credentials file at %s", creds_file)
-    if not creds_file.exists():
+    # result == "ok": extract the OAuth token printed to stdout by
+    # `claude setup-token`. The CLI does not write a credentials file — it
+    # prints a long-lived sk-ant-oat-… token, which we persist as the only
+    # field in the credentials blob.
+    raw_after_code = child.before.decode(errors="replace") if getattr(child, "before", None) else ""
+    cleaned = _ANSI_ESCAPE_RE.sub("", raw_after_code)
+    match = _OAUTH_TOKEN_RE.search(cleaned)
+    if not match:
+        safe_tail = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", cleaned)
         logger.error(
-            "anthropic/complete: process exited 0 but credentials file missing at %s; "
-            "temp_dir contents: %s",
-            creds_file,
-            list(pathlib.Path(temp_dir).iterdir()),
+            "anthropic/complete: process exited 0 but no OAuth token found in output for user_id=%s; "
+            "tail=%r",
+            user_id,
+            safe_tail[-500:],
         )
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return {"ok": False, "error": "credentials file not found"}
+        return {"ok": False, "error": "OAuth token not found in setup output"}
 
-    blob_dict = json.loads(creds_file.read_text())
-    logger.debug("anthropic/complete: credentials file found, keys=%s", list(blob_dict.keys()))
+    token = match.group(0)
+    logger.debug("anthropic/complete: OAuth token extracted (len=%d)", len(token))
 
     vault = request.app.state.vault
     if vault is None:
         logger.error("anthropic/complete: vault is None — credentials cannot be persisted for user_id=%s", user_id)
     else:
-        await vault.store_initial(user_id, blob_dict)
+        await vault.store_initial(user_id, {"oauth_token": token})
         logger.info("anthropic/complete: credentials stored in vault for user_id=%s", user_id)
 
     shutil.rmtree(temp_dir, ignore_errors=True)

@@ -106,8 +106,8 @@ class TestPipelineBackendSDKMigration:
         assert not subprocess_called
 
     @pytest.mark.asyncio
-    async def test_complete_passes_creds_dir_in_env(self, tmp_path):
-        from bot.llm import PipelineBackend, _llm_creds_dir
+    async def test_complete_passes_env_extras_in_env(self):
+        from bot.llm import PipelineBackend, _llm_env_extras
         from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
         from unittest.mock import patch
 
@@ -121,8 +121,8 @@ class TestPipelineBackendSDKMigration:
             )
             yield msg
 
-        creds_path = str(tmp_path / "mycreds")
-        token = _llm_creds_dir.set(creds_path)
+        extras = {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-pipeline"}
+        token = _llm_env_extras.set(extras)
         try:
             b = PipelineBackend()
             with patch("claude_agent_sdk.query", side_effect=_fake_query):
@@ -132,10 +132,10 @@ class TestPipelineBackendSDKMigration:
                     model="claude-haiku-4-5-20251001",
                 )
         finally:
-            _llm_creds_dir.reset(token)
+            _llm_env_extras.reset(token)
 
         assert len(captured) == 1
-        assert captured[0].env.get("CLAUDE_CONFIG_DIR") == creds_path
+        assert captured[0].env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-pipeline"
 
 
 # ---------------------------------------------------------------------------

@@ -111,18 +111,21 @@ async def test_start_no_url_returns_502(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_success(auth_app_client, tmp_path):
-    """Stash a fake pending entry; complete succeeds and calls vault.store_initial."""
+    """Stash a fake pending entry; complete extracts token from child.before and persists it."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
-    # Create a fake credentials.json in a temp dir
-    creds_data = {"api_key": "sk-ant-test", "type": "oauth"}
-    creds_file = tmp_path / ".credentials.json"
-    creds_file.write_text(json.dumps(creds_data))
-
+    fake_token = "sk-ant-oat01-FAKETOKEN_abc123"
     mock_child = MagicMock()
+    # `claude setup-token` prints the OAuth token to stdout after the code is
+    # accepted. pexpect captures all post-sendline output in child.before.
+    mock_child.before = (
+        b"\x1b[2K\x1b[1Gpasted code\n"
+        b"OAuth token created!\n"
+        + fake_token.encode()
+        + b"\n"
+    )
 
-    # Stash fake pending entry for TEST_USER_ID
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
         "temp_dir": str(tmp_path),
@@ -139,11 +142,80 @@ async def test_complete_success(auth_app_client, tmp_path):
         )
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["ok"] is True
+    assert resp.json()["ok"] is True
     mock_vault.store_initial.assert_called_once()
-    call_args = mock_vault.store_initial.call_args
-    assert call_args[0][0] == TEST_USER_ID  # first positional arg is user_id
+    args = mock_vault.store_initial.call_args.args
+    assert args[0] == TEST_USER_ID
+    assert args[1] == {"oauth_token": fake_token}
+
+
+@pytest.mark.asyncio
+async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_path):
+    """If the setup process exits 0 but no sk-ant-… token is in stdout, surface an error."""
+    import api.routes.integrations as ant_routes
+    client, mock_vault, app = auth_app_client
+
+    mock_child = MagicMock()
+    mock_child.before = b"some unexpected output without any token\n"
+
+    ant_routes._pending_setups[TEST_USER_ID] = {
+        "child": mock_child,
+        "temp_dir": str(tmp_path),
+        "started_at": time.time(),
+    }
+
+    with patch(
+        "api.routes.integrations._complete_pexpect_sync",
+        return_value="ok",
+    ):
+        resp = await client.post(
+            "/api/integrations/anthropic/complete",
+            json={"code": "auth_code_123"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is False
+    assert "token" in body["error"].lower()
+    mock_vault.store_initial.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_complete_success_does_not_log_token(auth_app_client, tmp_path, caplog):
+    """The OAuth token must never appear in any log output, even at DEBUG level."""
+    import logging
+    import api.routes.integrations as ant_routes
+    client, mock_vault, app = auth_app_client
+
+    fake_token = "sk-ant-oat01-SECRET_TOKEN_value_xyz789"
+    mock_child = MagicMock()
+    mock_child.before = (
+        b"\x1b[2K\x1b[1Gpasted code\n"
+        b"OAuth token created!\n"
+        + fake_token.encode()
+        + b"\n"
+    )
+
+    ant_routes._pending_setups[TEST_USER_ID] = {
+        "child": mock_child,
+        "temp_dir": str(tmp_path),
+        "started_at": time.time(),
+    }
+
+    caplog.set_level(logging.DEBUG, logger="api.routes.integrations")
+    with patch(
+        "api.routes.integrations._complete_pexpect_sync",
+        return_value="ok",
+    ):
+        resp = await client.post(
+            "/api/integrations/anthropic/complete",
+            json={"code": "auth_code_123"},
+        )
+    assert resp.status_code == 200
+
+    for record in caplog.records:
+        msg = record.getMessage()
+        assert fake_token not in msg, f"token leaked in log record: {record.name} {msg!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -306,19 +378,14 @@ async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_cfg_vault_key_roundtrip(tmp_path, monkeypatch):
+async def test_cfg_vault_key_roundtrip(monkeypatch):
     """A key from Fernet.generate_key().decode() round-trips through cfg → CredentialsVault."""
     from cryptography.fernet import Fernet
     from contextlib import asynccontextmanager
-    from unittest.mock import patch
 
-    raw_key = Fernet.generate_key()           # bytes: URL-safe base64, 44 chars
-    key_str = raw_key.decode()                # str: what operator puts in TETHER_VAULT_KEY
+    raw_key = Fernet.generate_key()
+    monkeypatch.setenv("TETHER_VAULT_KEY", raw_key.decode())
 
-    monkeypatch.setenv("TETHER_VAULT_KEY", key_str)
-
-    # Reset the config singleton's cache so it re-resolves placeholders from env,
-    # then reload api.config so VAULT_KEY is recomputed with the new value.
     from config import loader as config_loader
     config_loader.config._cfg = None
 
@@ -326,13 +393,12 @@ async def test_cfg_vault_key_roundtrip(tmp_path, monkeypatch):
     import api.config as cfg
     importlib.reload(cfg)
 
-    assert cfg.VAULT_KEY is not None, "VAULT_KEY should be set"
+    assert cfg.VAULT_KEY is not None
 
     from api.credentials_vault import CredentialsVault
 
-    vault = CredentialsVault(pool=None, encryption_key=cfg.VAULT_KEY, creds_dir=tmp_path)
+    vault = CredentialsVault(pool=None, encryption_key=cfg.VAULT_KEY)
 
-    original = {"token": "test-roundtrip"}
     stored: list[bytes] = []
 
     async def fake_store(conn, user_id, blob):
@@ -350,9 +416,6 @@ async def test_cfg_vault_key_roundtrip(tmp_path, monkeypatch):
          patch("api.credentials_vault.get_credentials_blob", side_effect=fake_get), \
          patch("api.credentials_vault.db_pg.get_conn", fake_get_conn):
 
-        await vault.store_initial("user1", original)
-        async with vault.materialize("user1") as creds_dir:
-            import json
-            loaded = json.loads((creds_dir / ".credentials.json").read_text())
-
-    assert loaded == original
+        await vault.store_initial("user1", {"oauth_token": "sk-ant-oat01-roundtrip"})
+        async with vault.materialize("user1") as env:
+            assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-roundtrip"}
