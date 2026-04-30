@@ -114,7 +114,7 @@ async function copyUrl() {
                 data-testid="anthropic-disconnect-confirm"
                 :disabled="store.anthropicLoading"
                 @click="handleDisconnectConfirm"
-                class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-3 py-1.5 transition-colors"
+                class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-3 py-1.5 transition-colors"
               >
                 {{ store.anthropicLoading ? '…' : 'Confirm Disconnect' }}
               </button>
@@ -131,7 +131,7 @@ async function copyUrl() {
             data-testid="anthropic-disconnect"
             :disabled="store.anthropicLoading"
             @click="handleDisconnectClick"
-            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-3 py-1.5 transition-colors"
+            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-3 py-1.5 transition-colors"
           >
             {{ store.anthropicLoading ? '…' : 'Disconnect' }}
           </button>
@@ -163,7 +163,7 @@ async function copyUrl() {
       <!-- Connect Modal (inline overlay inside tile) -->
       <div
         v-if="modalPhase !== 'idle'"
-        class="mt-4 border border-[--border-soft] rounded-xl p-4 bg-[--bg-canvas]/60 space-y-3"
+        class="mt-4 border border-[--border-soft] rounded-xl p-4 bg-[--bg-elev-1] space-y-3"
       >
         <h3 class="text-sm font-semibold text-[--fg-1]">Connect your Anthropic account</h3>
 

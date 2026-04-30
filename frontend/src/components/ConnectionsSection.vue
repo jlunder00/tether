@@ -37,11 +37,11 @@ function truncateUuid(uuid: string): string {
     <!-- Error alert -->
     <div
       v-if="store.error"
-      class="bg-[--status-block-bg] border border-[--status-block-fg]/30 rounded-xl p-3 mb-3 flex items-start justify-between gap-2"
+      class="bg-[--status-block-bg] border border-[--border-1] rounded-xl p-3 mb-3 flex items-start justify-between gap-2"
       data-testid="connections-error"
     >
       <p class="text-sm text-[--status-block-fg]">{{ store.error }}</p>
-      <button @click="dismissError" class="text-[--status-block-fg]/60 hover:text-[--status-block-fg] text-lg leading-none flex-shrink-0">×</button>
+      <button @click="dismissError" class="text-[--fg-4] hover:text-[--status-block-fg] text-lg leading-none flex-shrink-0">×</button>
     </div>
 
     <!-- Pending incoming requests -->
@@ -80,7 +80,7 @@ function truncateUuid(uuid: string): string {
             <button
               :disabled="store.loading"
               @click="store.declineConnection(conn.id, true)"
-              class="text-xs text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-2.5 py-1 transition-colors"
+              class="text-xs text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-2.5 py-1 transition-colors"
               :data-testid="`block-${conn.id}`"
             >
               Block
@@ -141,7 +141,7 @@ function truncateUuid(uuid: string): string {
           v-model="requestUsername"
           type="text"
           placeholder="Username"
-          class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+          class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
           @keydown.enter="handleSendRequest"
           data-testid="request-username-input"
         />

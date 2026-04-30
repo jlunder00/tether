@@ -77,7 +77,7 @@ const lastSyncedLabel = computed(() => {
             data-testid="gcal-disconnect"
             :disabled="store.loading"
             @click="store.disconnectGCal()"
-            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--status-block-fg]/30 hover:border-[--status-block-fg]/50 rounded-lg px-3 py-1.5 transition-colors"
+            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-3 py-1.5 transition-colors"
           >
             {{ store.loading ? '…' : 'Disconnect' }}
           </button>

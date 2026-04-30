@@ -518,7 +518,7 @@ async function addChild() {
                   @click="setArchived(true)"
                   class="text-xs text-[--fg-4] hover:text-[--fg-2]">Archive</button>
           <button @click="deleteWithConfirm"
-                  class="text-xs text-[--status-block-fg]/60 hover:text-[--status-block-fg]">Delete</button>
+                  class="text-xs text-[--fg-4] hover:text-[--status-block-fg]">Delete</button>
         </div>
       </div>
 

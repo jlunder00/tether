@@ -91,7 +91,7 @@ async function handleRegister() {
           />
         </div>
 
-        <div v-if="error" class="text-[--status-block-fg] text-sm bg-[--status-block-bg] border border-[--status-block-fg]/30 rounded-lg px-3 py-2">
+        <div v-if="error" class="text-[--status-block-fg] text-sm bg-[--status-block-bg] border border-[--border-1] rounded-lg px-3 py-2">
           {{ error }}
         </div>
 

@@ -251,7 +251,7 @@ async function linkTelegram() {
               class="relative flex flex-col items-start gap-1.5 rounded-lg p-2.5 border transition-all text-left"
               :class="[
                 activeTheme === theme.id
-                  ? 'border-indigo-500 ring-1 ring-indigo-500'
+                  ? 'border-[--accent] ring-1 ring-[--accent]'
                   : 'border-[--border-1] hover:border-[--border-2]',
               ]"
             >
@@ -332,7 +332,7 @@ async function linkTelegram() {
                 inputmode="numeric"
                 maxlength="6"
                 placeholder="123456"
-                class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
                 @keydown.enter="linkTelegram"
               />
               <button
@@ -404,7 +404,7 @@ async function linkTelegram() {
                 v-model.number="archiveDaysCompleted"
                 min="1"
                 placeholder="e.g. 7"
-                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
               />
               <p class="text-xs text-[--fg-5] mt-1">Archive nodes whose tasks are all done for X days</p>
             </div>
@@ -415,7 +415,7 @@ async function linkTelegram() {
                 v-model.number="archiveDaysInactive"
                 min="1"
                 placeholder="e.g. 30"
-                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
               />
               <p class="text-xs text-[--fg-5] mt-1">Archive nodes with no updates for X days</p>
             </div>
@@ -445,7 +445,7 @@ async function linkTelegram() {
             <label class="text-xs text-[--fg-4] mb-1 block">Preferred Backend</label>
             <select
               v-model="llmConfig.llm.preferred_backend"
-              class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+              class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
             >
               <option v-for="b in backendOptions" :key="b" :value="b">{{ b }}</option>
             </select>
@@ -497,7 +497,7 @@ async function linkTelegram() {
                   type="number"
                   v-model.number="llmConfig.llm.beacon_score_threshold"
                   min="1" max="50"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
                 />
               </div>
               <div>
@@ -506,7 +506,7 @@ async function linkTelegram() {
                   type="number"
                   v-model.number="llmConfig.llm.beacon_cooldown_minutes"
                   min="5" max="120"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
                 />
               </div>
             </div>
@@ -527,7 +527,7 @@ async function linkTelegram() {
                 <input
                   type="text"
                   v-model="llmConfig.models[role]"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] font-mono text-xs"
                 />
               </div>
             </div>
