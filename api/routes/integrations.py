@@ -190,15 +190,18 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
     return None, None
 
 
-def _complete_pexpect_sync(child, code: str) -> tuple[str, bytes]:
-    """Send the OAuth code to the waiting pexpect child and wait for it to exit.
+def _complete_pexpect_sync(child, code: str) -> tuple[str, str]:
+    """Send the OAuth code to the waiting pexpect child and capture the OAuth token.
 
-    Returns a (result, output_bytes) tuple where result is one of:
-      ``"ok"``      — process exited with code 0
-      ``"failed"``  — process exited with non-zero code
-      ``"timeout"`` — process did not exit within 120 seconds
-      ``"error"``   — unexpected error (e.g. send raised, process died early)
-    and output_bytes is everything the child printed after the code was sent.
+    Streams child output live (one INFO log per chunk) so we can see exactly
+    what the CLI emits after the code is sent. Scans each chunk for the token
+    pattern so we catch it as soon as it appears rather than waiting for EOF.
+
+    Returns a (result, token) tuple where result is one of:
+      ``"ok"``      — token found; token string is non-empty
+      ``"failed"``  — child exited without printing a token
+      ``"timeout"`` — 120 seconds elapsed without token or EOF
+      ``"error"``   — unexpected error
     """
     import pexpect  # lazy — keeps module importable when pexpect is not installed
 
@@ -206,13 +209,13 @@ def _complete_pexpect_sync(child, code: str) -> tuple[str, bytes]:
     try:
         child.send(code + '\r')  # \r alone = one Enter in PTY canonical mode
     except Exception:
-        logger.exception("pexpect sendline failed — child likely already exited")
-        return "error", b""
+        logger.exception("pexpect send failed — child likely already exited")
+        return "error", ""
 
-    # Stream output after code submission so we can see exactly what happens,
-    # rather than waiting silently for 120s and only logging on timeout.
     buf = b""
+    token: str | None = None
     deadline = time.time() + 120
+
     while time.time() < deadline:
         try:
             chunk = child.read_nonblocking(4096, timeout=1)
@@ -220,37 +223,45 @@ def _complete_pexpect_sync(child, code: str) -> tuple[str, bytes]:
             clean = _ANSI_ESCAPE_RE.sub("", chunk.decode(errors="replace"))
             safe = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", clean)
             logger.info("anthropic/complete: child output chunk: %r", safe)
+            match = _OAUTH_TOKEN_RE.search(clean)
+            if match:
+                token = match.group(0)
+                logger.info("anthropic/complete: token found in output stream")
+                break
         except pexpect.TIMEOUT:
             continue
         except pexpect.EOF:
-            logger.info("anthropic/complete: child EOF reached")
+            logger.info("anthropic/complete: child EOF")
+            # Token may have arrived in the same read as EOF — scan full buffer.
+            full_clean = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
+            match = _OAUTH_TOKEN_RE.search(full_clean)
+            if match:
+                token = match.group(0)
+                logger.info("anthropic/complete: token found at EOF")
             break
         except Exception:
             logger.exception("pexpect read_nonblocking failed")
-            return "error", buf
+            return "error", ""
     else:
-        post_output = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
+        full_clean = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
         logger.warning(
-            "anthropic/complete: pexpect timed out waiting for EOF; "
-            "child output so far: %r",
-            post_output[-500:],
+            "anthropic/complete: timed out waiting for token; output so far: %r",
+            full_clean[-500:],
         )
-        return "timeout", buf
+        return "timeout", ""
 
-    # Reap the process so that exitstatus is populated.
     try:
         child.close()
     except Exception:
         pass
 
-    # exitstatus is None when the process was killed by a signal — treat that as
-    # failure, not success.  Only exitstatus == 0 means the setup succeeded.
-    logger.info(
-        "anthropic/complete: child exited with exitstatus=%s signalstatus=%s",
-        child.exitstatus,
-        child.signalstatus,
+    if token:
+        return "ok", token
+    logger.warning(
+        "anthropic/complete: child exited without printing token; full output: %r",
+        _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))[-500:],
     )
-    return ("ok" if child.exitstatus == 0 else "failed"), buf
+    return "failed", ""
 
 
 async def _sweep_expired_setups() -> None:
@@ -678,7 +689,7 @@ async def anthropic_complete(
     logger.debug("anthropic/complete: pending setup age=%.1fs temp_dir=%s", age, temp_dir)
 
     loop = asyncio.get_running_loop()
-    result, post_buf = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
+    result, token = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
     logger.info("anthropic/complete: pexpect result=%r for user_id=%s", result, user_id)
 
     if result == "error":
@@ -691,30 +702,13 @@ async def anthropic_complete(
         shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
-    # "ok" or "failed" — child already reaped by _complete_pexpect_sync.
+    # child already reaped by _complete_pexpect_sync.
     if result == "failed":
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.warning("anthropic/complete: setup process reported failure for user_id=%s", user_id)
         return {"ok": False, "error": "setup failed"}
 
-    # result == "ok": extract the OAuth token printed to stdout by
-    # `claude setup-token`. The CLI does not write a credentials file — it
-    # prints a long-lived sk-ant-oat-… token, which we persist as the only
-    # field in the credentials blob.
-    cleaned = _ANSI_ESCAPE_RE.sub("", post_buf.decode(errors="replace"))
-    match = _OAUTH_TOKEN_RE.search(cleaned)
-    if not match:
-        safe_tail = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", cleaned)
-        logger.error(
-            "anthropic/complete: process exited 0 but no OAuth token found in output for user_id=%s; "
-            "tail=%r",
-            user_id,
-            safe_tail[-500:],
-        )
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        return {"ok": False, "error": "OAuth token not found in setup output"}
-
-    token = match.group(0)
+    # result == "ok": token was extracted from the output stream by _complete_pexpect_sync.
     logger.debug("anthropic/complete: OAuth token extracted (len=%d)", len(token))
 
     vault = request.app.state.vault
