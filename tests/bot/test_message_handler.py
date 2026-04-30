@@ -67,10 +67,10 @@ async def test_call_claude_returns_text_from_sdk():
 
 
 @pytest.mark.asyncio
-async def test_call_claude_passes_creds_dir_to_sdk_env(tmp_path):
-    """When _llm_creds_dir ContextVar is set, call_claude passes CLAUDE_CONFIG_DIR in env."""
+async def test_call_claude_passes_env_extras_to_sdk_env():
+    """When _llm_env_extras is set, call_claude merges it into the SDK env."""
     from bot.message_handler import call_claude
-    from bot.llm import _llm_creds_dir
+    from bot.llm import _llm_env_extras
     from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
 
     captured_opts: list[ClaudeAgentOptions] = []
@@ -83,23 +83,23 @@ async def test_call_claude_passes_creds_dir_to_sdk_env(tmp_path):
         )
         yield msg
 
-    creds_dir = str(tmp_path / "creds")
-    token = _llm_creds_dir.set(creds_dir)
+    extras = {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-XYZ"}
+    token = _llm_env_extras.set(extras)
     try:
         with patch("claude_agent_sdk.query", side_effect=_fake_query):
             await call_claude("prompt")
     finally:
-        _llm_creds_dir.reset(token)
+        _llm_env_extras.reset(token)
 
     assert len(captured_opts) == 1
-    assert captured_opts[0].env.get("CLAUDE_CONFIG_DIR") == creds_dir
+    assert captured_opts[0].env.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-XYZ"
 
 
 @pytest.mark.asyncio
-async def test_call_claude_no_creds_dir_no_env_key():
-    """When _llm_creds_dir is not set, CLAUDE_CONFIG_DIR is not added to env."""
+async def test_call_claude_no_env_extras_no_token():
+    """When _llm_env_extras is None, no per-user env vars leak through."""
     from bot.message_handler import call_claude
-    from bot.llm import _llm_creds_dir
+    from bot.llm import _llm_env_extras
     from claude_agent_sdk import AssistantMessage, TextBlock, ClaudeAgentOptions
 
     captured_opts: list[ClaudeAgentOptions] = []
@@ -112,15 +112,15 @@ async def test_call_claude_no_creds_dir_no_env_key():
         )
         yield msg
 
-    token = _llm_creds_dir.set(None)
+    token = _llm_env_extras.set(None)
     try:
         with patch("claude_agent_sdk.query", side_effect=_fake_query):
             await call_claude("prompt")
     finally:
-        _llm_creds_dir.reset(token)
+        _llm_env_extras.reset(token)
 
-    assert len(captured_opts) == 1, "query() should have been called exactly once"
-    assert "CLAUDE_CONFIG_DIR" not in captured_opts[0].env
+    assert len(captured_opts) == 1
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in captured_opts[0].env
 
 
 @pytest.mark.asyncio
@@ -179,18 +179,16 @@ async def test_handle_message_acquires_vault_lock(tmp_path, monkeypatch):
         @asynccontextmanager
         async def materialize(self, user_id: str):
             self.materialized_for.append(user_id)
-            yield str(tmp_path / "creds")
+            yield {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-stub"}
 
     vault = StubVault()
 
-    # Capture ContextVar value observed inside _handle_message_body
-    from bot.llm import _llm_creds_dir
-    observed_creds_dir: list[str | None] = []
+    from bot.llm import _llm_env_extras
+    observed: list[dict | None] = []
 
     async def _body_spy(*args, **kwargs):
-        observed_creds_dir.append(_llm_creds_dir.get())
+        observed.append(_llm_env_extras.get())
 
-    # Patch away all DB and LLM calls
     with patch("bot.message_handler._handle_message_body", side_effect=_body_spy) as mock_body:
         from bot.message_handler import handle_message
         await handle_message("hi", lambda m: None, object(), "user-123", vault=vault)
@@ -198,9 +196,7 @@ async def test_handle_message_acquires_vault_lock(tmp_path, monkeypatch):
     assert "user-123" in vault.lock_acquired_for
     assert "user-123" in vault.materialized_for
     mock_body.assert_called_once()
-    # Verify _llm_creds_dir ContextVar was set to the materialized creds path inside the body
-    assert len(observed_creds_dir) == 1
-    assert observed_creds_dir[0] == str(tmp_path / "creds")
+    assert observed == [{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-stub"}]
 
 
 # ---------------------------------------------------------------------------

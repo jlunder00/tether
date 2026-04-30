@@ -214,12 +214,12 @@ def get_model(role: str) -> str:
 async def call_claude(prompt: str, timeout: int = 180, model_role: str | None = None,
                       stage: str = "") -> str:
     from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
-    from bot.llm import _llm_creds_dir
+    from bot.llm import _llm_env_extras
 
     env: dict[str, str] = {}
-    creds_dir_val = _llm_creds_dir.get()
-    if creds_dir_val:
-        env["CLAUDE_CONFIG_DIR"] = creds_dir_val
+    extras = _llm_env_extras.get()
+    if extras:
+        env.update(extras)
 
     model = get_model(model_role) if model_role is not None else None
     opts = ClaudeAgentOptions(
@@ -1159,22 +1159,24 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
 async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str,
                          vault=None) -> None:
     """Public entry point. When a vault is provided, acquires the per-user lock
-    and materializes credentials into a temp directory before calling the pipeline.
+    and materialises credentials into an env dict that downstream LLM calls
+    merge into the spawned claude-code subprocess.
 
     Vault is a duck-typed object with:
       - with_lock(user_id) -> async context manager
-      - materialize(user_id) -> async context manager yielding a creds_dir path
+      - materialize(user_id) -> async context manager yielding a dict[str, str]
+        of env vars (e.g. {"CLAUDE_CODE_OAUTH_TOKEN": "..."})
     """
-    from bot.llm import _llm_creds_dir
+    from bot.llm import _llm_env_extras
 
     if vault is not None:
         async with vault.with_lock(user_id):
-            async with vault.materialize(user_id) as creds_dir:
-                token = _llm_creds_dir.set(str(creds_dir))
+            async with vault.materialize(user_id) as env_extras:
+                token = _llm_env_extras.set(dict(env_extras))
                 try:
                     await _handle_message_body(text, send_fn, pool, user_id)
                 finally:
-                    _llm_creds_dir.reset(token)
+                    _llm_env_extras.reset(token)
     else:
         await _handle_message_body(text, send_fn, pool, user_id)
 

@@ -1,20 +1,18 @@
-"""Credentials vault — encrypt/decrypt per-user credentials blobs.
+"""Credentials vault — encrypt/decrypt per-user OAuth tokens.
 
-Stores Anthropic OAuth credentials as Fernet-encrypted bytes in the
-user_integrations.credentials_blob column. On use, decrypts to a temp
-directory, yields the path, then reads back and re-persists if the content
-changed (i.e. token was refreshed by the caller).
+Stores Anthropic OAuth credentials as a Fernet-encrypted JSON blob in the
+``user_integrations.credentials_blob`` column. On use, decrypts the blob and
+yields an env dict suitable for spawning ``claude-code`` (or the agent SDK,
+which spawns claude-code internally) — the CLI reads ``CLAUDE_CODE_OAUTH_TOKEN``
+before falling back to a credentials file on disk, so we never need to write
+one.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
-import secrets
-import shutil
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import AsyncIterator
 
 from cryptography.fernet import Fernet
@@ -28,11 +26,6 @@ from db.pg_queries.integrations import (
 
 logger = logging.getLogger(__name__)
 
-# Default runtime directory for materialized credentials.
-# systemd RuntimeDirectory=tether/creds creates /run/tether/creds owned by the
-# service user. Dockerfile / CI must create this directory or set creds_dir.
-_DEFAULT_CREDS_DIR = Path("/run/tether/creds")
-
 
 class CredentialsVault:
     """Fernet-encrypted credentials store backed by Postgres."""
@@ -41,62 +34,42 @@ class CredentialsVault:
     # reconstructed vault still serialises correctly within the same process.
     _locks: dict[str, asyncio.Lock] = {}
 
-    def __init__(
-        self,
-        pool,
-        encryption_key: bytes,
-        *,
-        creds_dir: Path = _DEFAULT_CREDS_DIR,
-    ) -> None:
+    def __init__(self, pool, encryption_key: bytes) -> None:
         self._pool = pool
         self._fernet = Fernet(encryption_key)
-        self._creds_dir = creds_dir
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     @asynccontextmanager
-    async def materialize(self, user_id: str) -> AsyncIterator[Path]:
-        """Decrypt credentials_blob → temp dir → yield → persist if changed → rmtree.
+    async def materialize(self, user_id: str) -> AsyncIterator[dict[str, str]]:
+        """Decrypt credentials_blob → yield env dict for claude-code subprocess.
 
-        The temp directory is always removed in the finally block, even if an
-        exception is raised inside the `async with` block.
+        The yielded dict is intended to be merged into the env passed to
+        ``ClaudeAgentOptions(env=...)`` or ``subprocess.Popen``. The CLI reads
+        ``CLAUDE_CODE_OAUTH_TOKEN`` before consulting the on-disk credentials
+        file, so the token never needs to touch the filesystem.
         """
-        self._creds_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        async with db_pg.get_conn(self._pool, user_id=user_id) as conn:
+            blob = await get_credentials_blob(conn, user_id)
 
-        subdir_name = secrets.token_hex(16)
-        subdir = self._creds_dir / subdir_name
-        subdir.mkdir(mode=0o700)
+        if blob is None:
+            raise ValueError(f"No credentials found for user {user_id}")
 
-        creds_file = subdir / ".credentials.json"
-
+        plaintext = self._fernet.decrypt(blob)
         try:
-            # Decrypt and write credentials
-            async with db_pg.get_conn(self._pool, user_id=user_id) as conn:
-                blob = await get_credentials_blob(conn, user_id)
+            data = json.loads(plaintext.decode())
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise ValueError(f"Malformed credentials blob for user {user_id}") from e
 
-            if blob is None:
-                raise ValueError(f"No credentials_blob found for user {user_id}")
+        token = data.get("oauth_token") if isinstance(data, dict) else None
+        if not token:
+            raise ValueError(
+                f"Credentials blob for user {user_id} missing 'oauth_token' field"
+            )
 
-            plaintext = self._fernet.decrypt(blob)
-            # Write with mode 0o600 — credentials must not be world-readable
-            fd = os.open(str(creds_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(plaintext)
-            original_bytes = plaintext
-
-            yield subdir
-
-            # Read back — persist if content changed
-            if creds_file.exists():
-                current_bytes = creds_file.read_bytes()
-                if current_bytes != original_bytes:
-                    new_blob = self._fernet.encrypt(current_bytes)
-                    async with db_pg.get_conn(self._pool, user_id=user_id) as conn:
-                        await store_credentials_blob(conn, user_id, new_blob)
-        finally:
-            shutil.rmtree(subdir, ignore_errors=True)
+        yield {"CLAUDE_CODE_OAUTH_TOKEN": token}
 
     async def is_connected(self, user_id: str) -> bool:
         """True if user has a non-null credentials_blob for the anthropic provider."""

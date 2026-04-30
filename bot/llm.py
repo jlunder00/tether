@@ -16,11 +16,12 @@ import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-# Per-request credentials directory — set by handle_message() when a vault is
-# provided so that all LLM calls in the same request use the correct per-user
-# Claude config. Never set this at module level; always use .set()/.reset().
-_llm_creds_dir: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "_llm_creds_dir", default=None
+# Per-request env extras — set by handle_message() when a vault is provided so
+# that all LLM calls in the same request inherit per-user credentials (typically
+# {"CLAUDE_CODE_OAUTH_TOKEN": "<oauth-token>"}). Never set this at module
+# level; always use .set()/.reset().
+_llm_env_extras: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "_llm_env_extras", default=None
 )
 
 logger = logging.getLogger(__name__)
@@ -95,9 +96,9 @@ class PipelineBackend(LLMBackend):
         prompt = "\n".join(prompt_parts)
 
         env: dict[str, str] = {}
-        creds_dir_val = _llm_creds_dir.get()
-        if creds_dir_val:
-            env["CLAUDE_CONFIG_DIR"] = creds_dir_val
+        extras = _llm_env_extras.get()
+        if extras:
+            env.update(extras)
 
         opts = ClaudeAgentOptions(
             model=model,
