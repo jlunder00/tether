@@ -48,54 +48,54 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6">
     <div class="flex items-center justify-between mb-6">
       <div>
         <h1 class="text-2xl font-bold">Tether</h1>
         <div class="flex items-center gap-2 mt-1">
           <template v-if="zoom === 'd'">
             <button @click="planStore.goToPrevDay()"
-                    class="text-white/40 hover:text-white text-lg leading-none px-1">‹</button>
+                    class="text-[--fg-4] hover:text-[--fg-1] text-lg leading-none px-1">‹</button>
             <span class="text-sm font-medium min-w-[90px] text-center">{{ displayDate }}</span>
             <button @click="planStore.goToNextDay()"
-                    class="text-white/40 hover:text-white text-lg leading-none px-1">›</button>
+                    class="text-[--fg-4] hover:text-[--fg-1] text-lg leading-none px-1">›</button>
             <button v-if="!isToday" @click="planStore.goToToday()"
-                    class="text-xs text-white/40 hover:text-white ml-1 border border-white/20 rounded px-2 py-0.5">
+                    class="text-xs text-[--fg-4] hover:text-[--fg-1] ml-1 border border-[--border-1] rounded px-2 py-0.5">
               Today
             </button>
           </template>
           <template v-else>
-            <span class="text-sm text-white/50">{{ zoom === 'w' ? 'Week' : 'Month' }} view</span>
+            <span class="text-sm text-[--fg-3]">{{ zoom === 'w' ? 'Week' : 'Month' }} view</span>
           </template>
         </div>
       </div>
       <div class="flex items-center gap-3">
         <!-- Zoom controls -->
-        <div class="flex gap-1 bg-white/5 rounded-lg p-0.5">
+        <div class="flex gap-1 bg-[--bg-elev-1] rounded-lg p-0.5">
           <button v-for="z in (['d','w','m'] as const)" :key="z"
                   @click="zoom = z"
-                  :class="zoom === z ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/70'"
+                  :class="zoom === z ? 'bg-[--bg-elev-2] text-[--fg-1]' : 'text-[--fg-4] hover:text-[--fg-2]'"
                   class="px-2.5 py-1 rounded text-xs uppercase font-medium transition-colors">
             {{ z }}
           </button>
         </div>
         <!-- Tab controls -->
         <div class="flex gap-2">
-          <button @click="tab = 'plan'" :class="tab === 'plan' ? 'bg-white/20' : 'bg-white/5'"
+          <button @click="tab = 'plan'" :class="tab === 'plan' ? 'bg-[--bg-elev-2]' : 'bg-[--bg-elev-1]'"
                   class="px-4 py-1.5 rounded-lg text-sm">Plan</button>
-          <button @click="tab = 'context'" :class="tab === 'context' ? 'bg-white/20' : 'bg-white/5'"
+          <button @click="tab = 'context'" :class="tab === 'context' ? 'bg-[--bg-elev-2]' : 'bg-[--bg-elev-1]'"
                   class="px-4 py-1.5 rounded-lg text-sm">Context</button>
-          <button @click="tab = 'anchors'" :class="tab === 'anchors' ? 'bg-white/20' : 'bg-white/5'"
+          <button @click="tab = 'anchors'" :class="tab === 'anchors' ? 'bg-[--bg-elev-2]' : 'bg-[--bg-elev-1]'"
                   class="px-4 py-1.5 rounded-lg text-sm">Anchors</button>
         </div>
         <!-- User nav -->
         <div class="flex items-center gap-2 ml-1">
           <router-link v-if="authStore.user?.is_admin" to="/admin"
-                       class="text-xs text-white/40 hover:text-white/80 border border-white/10 rounded px-2 py-1 transition-colors">
+                       class="text-xs text-[--fg-4] hover:text-[--fg-2] border border-[--border-soft] rounded px-2 py-1 transition-colors">
             Admin
           </router-link>
           <router-link to="/settings"
-                       class="text-white/40 hover:text-white/80 transition-colors"
+                       class="text-[--fg-4] hover:text-[--fg-2] transition-colors"
                        title="Settings">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -115,7 +115,7 @@ onUnmounted(() => {
     <!-- Day view -->
     <template v-else>
       <div v-if="tab === 'plan'">
-        <div v-if="planStore.loading" class="text-white/40">Loading...</div>
+        <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
         <div v-else class="flex flex-col">
           <AnchorBlock
             v-for="(anchor, i) in anchorStore.anchors"

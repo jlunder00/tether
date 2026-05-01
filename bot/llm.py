@@ -26,9 +26,6 @@ _llm_env_extras: contextvars.ContextVar[dict[str, str] | None] = contextvars.Con
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
-
-
 @dataclass
 class ToolCall:
     id: str
@@ -137,9 +134,6 @@ class AnthropicBackend(LLMBackend):
     """Uses the Anthropic Python SDK. Prefers OAuth subscription billing,
     falls back to ANTHROPIC_API_KEY env var."""
 
-    def __init__(self, credentials_path: str = _DEFAULT_CREDENTIALS_PATH):
-        self._credentials_path = credentials_path
-
     async def _call_with_retry(self, client, kwargs: dict):
         """Call client.messages.create with exponential backoff on 429s."""
         import anthropic
@@ -161,8 +155,10 @@ class AnthropicBackend(LLMBackend):
                 await asyncio.sleep(delay)
 
     def _get_oauth_token(self) -> str | None:
-        from bot.oauth import get_valid_token
-        return get_valid_token(self._credentials_path)
+        extras = _llm_env_extras.get()
+        if extras:
+            return extras.get("CLAUDE_CODE_OAUTH_TOKEN")
+        return None
 
     def is_available(self) -> bool:
         if self._get_oauth_token():
@@ -230,8 +226,7 @@ class AnthropicBackend(LLMBackend):
             source = "OAuth" if oauth_token else "API key"
             logger.error("Anthropic auth failed (%s): %s", source, e)
             raise RuntimeError(
-                f"Authentication failed ({source}). "
-                "Please re-run /login or check your API key."
+                "Anthropic credentials not configured — reconnect via Settings → Integrations → Anthropic."
             ) from e
 
         content_text = ""

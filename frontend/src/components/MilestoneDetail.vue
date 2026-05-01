@@ -14,8 +14,8 @@ const editDesc = ref(props.milestone.description ?? '')
 const editDate = ref(props.milestone.target_date ?? '')
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-white/20', in_progress: 'bg-blue-400',
-  done: 'bg-green-400', blocked: 'bg-red-400',
+  pending: 'bg-[--bg-elev-2]', in_progress: 'bg-[--status-doing-fg]',
+  done: 'bg-[--status-done-fg]', blocked: 'bg-[--status-block-fg]',
 }
 
 async function save() {
@@ -47,37 +47,37 @@ async function remove() {
 </script>
 
 <template>
-  <div class="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3 mt-2">
-    <p v-if="error" class="text-red-400 text-sm">{{ error }}</p>
+  <div class="bg-[--bg-elev-1] border border-[--border-soft] rounded-xl p-4 space-y-3 mt-2">
+    <p v-if="error" class="text-[--status-block-fg] text-sm">{{ error }}</p>
     <div class="flex items-center gap-2">
       <span :class="STATUS_COLORS[milestone.status]" class="w-2.5 h-2.5 rounded-full flex-shrink-0" />
       <span v-if="!editing" class="font-semibold text-sm flex-1">{{ milestone.name }}</span>
       <input v-else v-model="editName"
-             class="flex-1 bg-transparent border-b border-white/30 outline-none text-sm font-semibold" />
-      <button @click="editing = !editing" class="text-xs text-white/40 hover:text-white/70">
+             class="flex-1 bg-transparent border-b border-[--border-1] outline-none text-sm font-semibold" />
+      <button @click="editing = !editing" class="text-xs text-[--fg-4] hover:text-[--fg-2]">
         {{ editing ? 'cancel' : 'edit' }}
       </button>
-      <button @click="emit('close')" class="text-xs text-white/40 hover:text-white/70">✕</button>
+      <button @click="emit('close')" class="text-xs text-[--fg-4] hover:text-[--fg-2]">✕</button>
     </div>
 
     <template v-if="editing">
       <textarea v-model="editDesc" placeholder="Description…"
-        class="w-full bg-transparent border border-white/20 rounded p-2 text-xs outline-none resize-none h-16" />
+        class="w-full bg-transparent border border-[--border-1] rounded p-2 text-xs outline-none resize-none h-16" />
       <input v-model="editDate" type="date"
-        class="bg-transparent border-b border-white/20 outline-none text-xs" />
+        class="bg-transparent border-b border-[--border-1] outline-none text-xs" />
       <div class="flex gap-2">
-        <button @click="save" class="text-xs bg-white/10 hover:bg-white/20 px-2 py-1 rounded">Save</button>
-        <button @click="remove" class="text-xs text-red-400 hover:text-red-300">Delete</button>
+        <button @click="save" class="text-xs bg-[--bg-elev-2] hover:bg-[--bg-elev-3] px-2 py-1 rounded">Save</button>
+        <button @click="remove" class="text-xs text-[--status-block-fg] hover:opacity-80">Delete</button>
       </div>
     </template>
 
     <div class="space-y-1">
-      <div class="flex justify-between text-xs text-white/50">
+      <div class="flex justify-between text-xs text-[--fg-3]">
         <span>{{ milestone.done_count }} / {{ milestone.task_count }} tasks done</span>
         <span v-if="milestone.target_date">Due {{ milestone.target_date }}</span>
       </div>
-      <div class="h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div class="h-full bg-green-400 rounded-full transition-all"
+      <div class="h-1.5 bg-[--bg-elev-2] rounded-full overflow-hidden">
+        <div class="h-full bg-[--status-done-fg] rounded-full transition-all"
              :style="{ width: milestone.task_count
                ? `${(milestone.done_count / milestone.task_count) * 100}%` : '0%' }" />
       </div>
@@ -85,14 +85,14 @@ async function remove() {
 
     <ul class="space-y-1" v-if="milestone.tasks.length">
       <li v-for="task in milestone.tasks" :key="task.id"
-          class="flex items-center gap-2 text-xs text-white/60">
-        <span :class="task.status === 'done' ? 'bg-green-400'
-                    : task.status === 'in_progress' ? 'bg-blue-400' : 'bg-white/20'"
+          class="flex items-center gap-2 text-xs text-[--fg-3]">
+        <span :class="task.status === 'done' ? 'bg-[--status-done-fg]'
+                    : task.status === 'in_progress' ? 'bg-[--status-doing-fg]' : 'bg-[--bg-elev-2]'"
               class="w-2 h-2 rounded-full flex-shrink-0" />
         <span :class="task.status === 'done' ? 'line-through opacity-50' : ''">{{ task.text }}</span>
-        <span class="text-white/30 ml-auto">{{ task.plan_date }}</span>
+        <span class="text-[--fg-5] ml-auto">{{ task.plan_date }}</span>
       </li>
     </ul>
-    <p v-else class="text-xs text-white/30 italic">No tasks linked yet.</p>
+    <p v-else class="text-xs text-[--fg-5] italic">No tasks linked yet.</p>
   </div>
 </template>

@@ -56,7 +56,7 @@ async function onMoveDown(anchorId: string) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-semibold">Anchors</h2>
       <button v-if="!pendingAnchor" @click="addAnchor"
@@ -82,7 +82,7 @@ async function onMoveDown(anchorId: string) {
         @moveUp="onMoveUp"
         @moveDown="onMoveDown" />
     </div>
-    <p v-if="!anchorStore.anchors.length && !pendingAnchor" class="text-white/30 text-sm mt-4">
+    <p v-if="!anchorStore.anchors.length && !pendingAnchor" class="text-[--fg-5] text-sm mt-4">
       No anchors yet. Add one to start building your schedule.
     </p>
   </div>
