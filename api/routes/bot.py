@@ -43,19 +43,37 @@ async def bot_chat(websocket: WebSocket,
             def send_fn(msg: str):
                 response_parts.append(msg)
 
-            #pass content into the bot pipeline
-            logger.info("bot_chat: calling handle_message")
-            await handle_message(data['content'],
-                                 send_fn=send_fn,
-                                 pool=pool,
-                                 user_id=user_id,
-                                 vault=getattr(websocket.app.state, "vault", None),
-                            )
-            logger.info("bot_chat: handle_message returned, response_len=%d", sum(len(p) for p in response_parts))
-
-            full_response = "".join(response_parts)
-            await websocket.send_json({"type": "chunk", "content": full_response})
-            await websocket.send_json({"type": "done"})
+            try:
+                #pass content into the bot pipeline
+                logger.info("bot_chat: calling handle_message")
+                await handle_message(data['content'],
+                                     send_fn=send_fn,
+                                     pool=pool,
+                                     user_id=user_id,
+                                     vault=getattr(websocket.app.state, "vault", None),
+                                )
+                logger.info("bot_chat: handle_message returned, response_len=%d", sum(len(p) for p in response_parts))
+                full_response = "".join(response_parts)
+                await websocket.send_json({"type": "chunk", "content": full_response})
+                await websocket.send_json({"type": "done"})
+            except TimeoutError as e:
+                # Session exceeded its per-intent timeout. The session manager has
+                # already closed the session on its end, so the user can send another
+                # message to start a fresh session. Don't close the WebSocket — let
+                # the user retry without reconnecting.
+                logger.warning(
+                    "bot_chat: session timed out user_id=%s: %s", user_id, e
+                )
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": (
+                            "Session timed out — your state is saved, "
+                            "send another message to continue."
+                        ),
+                    })
+                except Exception:
+                    pass
     except WebSocketDisconnect:
         return
     except Exception as e:
