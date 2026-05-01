@@ -20,8 +20,6 @@ import asyncio
 import logging
 import os
 import re
-import shutil
-import tempfile
 import time
 import urllib.parse
 
@@ -131,7 +129,7 @@ async def _reap_child(child) -> None:
         pass
 
 
-def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
+def _start_pexpect_sync(env: dict) -> tuple:
     """Spawn ``claude setup-token`` in a PTY, wait for the auth URL, return ``(child, url)``.
 
     The child process stays alive after this returns, waiting for the user to
@@ -142,7 +140,7 @@ def _start_pexpect_sync(temp_dir: str, env: dict) -> tuple:
     """
     import pexpect  # lazy — keeps module importable when pexpect is not installed
 
-    logger.info("anthropic/start: spawning claude setup-token in temp_dir=%s", temp_dir)
+    logger.info("anthropic/start: spawning claude setup-token")
     try:
         child = pexpect.spawn(
             "claude",
@@ -288,9 +286,6 @@ async def _sweep_expired_setups() -> None:
         child = entry.get("child")
         if child is not None:
             asyncio.create_task(_reap_child(child))
-        temp_dir = entry.get("temp_dir")
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -639,30 +634,24 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
         logger.info("anthropic/start: killing existing pending setup for user_id=%s", user_id)
         old = _pending_setups.pop(user_id)
         asyncio.create_task(_reap_child(old["child"]))
-        shutil.rmtree(old.get("temp_dir", ""), ignore_errors=True)
 
-    temp_dir = tempfile.mkdtemp()
-    logger.debug("anthropic/start: created temp_dir=%s for user_id=%s", temp_dir, user_id)
-    env_override = {**os.environ, "CLAUDE_CONFIG_DIR": temp_dir}
+    env_override = dict(os.environ)
 
     loop = asyncio.get_running_loop()
     try:
         child, url = await loop.run_in_executor(
-            None, _start_pexpect_sync, temp_dir, env_override
+            None, _start_pexpect_sync, env_override
         )
     except Exception as exc:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.exception("Unexpected error from _start_pexpect_sync: %s", exc)
         raise HTTPException(status_code=502, detail="Failed to spawn setup process")
 
     if url is None:
-        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.error("anthropic/start: failed to extract auth URL for user_id=%s", user_id)
         raise HTTPException(status_code=502, detail="Auth URL not found in claude output")
 
     _pending_setups[user_id] = {
         "child": child,
-        "temp_dir": temp_dir,
         "started_at": time.time(),
     }
     logger.info("anthropic/start: success, auth URL ready for user_id=%s", user_id)
@@ -692,9 +681,8 @@ async def anthropic_complete(
         raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
 
     child = entry["child"]
-    temp_dir = entry["temp_dir"]
     age = time.time() - entry["started_at"]
-    logger.debug("anthropic/complete: pending setup age=%.1fs temp_dir=%s", age, temp_dir)
+    logger.debug("anthropic/complete: pending setup age=%.1fs", age)
 
     loop = asyncio.get_running_loop()
     result, token = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
@@ -702,17 +690,14 @@ async def anthropic_complete(
 
     if result == "error":
         asyncio.create_task(_reap_child(child))
-        shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
 
     if result == "timeout":
         asyncio.create_task(_reap_child(child))
-        shutil.rmtree(temp_dir, ignore_errors=True)
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
     # child already reaped by _complete_pexpect_sync.
     if result == "failed":
-        shutil.rmtree(temp_dir, ignore_errors=True)
         logger.warning("anthropic/complete: setup process reported failure for user_id=%s", user_id)
         return {"ok": False, "error": "setup failed"}
 
@@ -725,8 +710,6 @@ async def anthropic_complete(
     else:
         await vault.store_initial(user_id, {"oauth_token": token})
         logger.info("anthropic/complete: credentials stored in vault for user_id=%s", user_id)
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
 
     return {"ok": True}
 
