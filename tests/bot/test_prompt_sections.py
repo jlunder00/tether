@@ -156,3 +156,17 @@ class TestSectionRegistries:
             for key in keys:
                 assert key in _STATIC_SECTIONS or key in _DYNAMIC_SECTIONS, \
                     f"Mode '{mode}' references unregistered section '{key}'"
+
+
+class TestPlatformNeutralLanguage:
+    """Prompts must not contain platform-specific language."""
+
+    def test_identity_does_not_reference_telegram(self):
+        assert "telegram" not in IDENTITY.lower(), \
+            "IDENTITY contains 'Telegram' — use platform-neutral language"
+
+    def test_no_telegram_in_any_mode(self, ctx):
+        for mode in ["scheduler", "coach", "planner", "quick", "followup"]:
+            prompt = build_prompt(mode, ctx)
+            assert "telegram" not in prompt.lower(), \
+                f"Mode '{mode}' prompt contains 'Telegram' — use platform-neutral language"
