@@ -37,8 +37,8 @@ const optionLabels = computed(() => {
 const confirmLabel = computed(() => props.action === 'delete' ? 'Delete' : 'Confirm')
 const confirmClass = computed(() =>
   props.action === 'delete'
-    ? 'px-3 py-1 text-xs rounded bg-red-500 text-white hover:bg-red-400'
-    : 'px-3 py-1 text-xs rounded bg-indigo-500 text-white hover:bg-indigo-400'
+    ? 'px-3 py-1 text-xs rounded bg-[--status-block-bg] text-[--status-block-fg] hover:opacity-90'
+    : 'px-3 py-1 text-xs rounded bg-[--accent] text-[--accent-fg] hover:opacity-90'
 )
 
 function onConfirm() { emit('confirm', scope.value) }
@@ -58,18 +58,18 @@ function onKeydown(e: KeyboardEvent) {
       @keydown="onKeydown"
       tabindex="0"
     >
-      <div class="w-80 bg-gray-800 border border-white/20 rounded-xl shadow-xl p-4 space-y-3">
-        <h3 class="text-sm font-medium text-white">{{ heading }}</h3>
+      <div class="w-80 bg-[--bg-elev-1] border border-[--border-1] rounded-xl shadow-xl p-4 space-y-3">
+        <h3 class="text-sm font-medium text-[--fg-1]">{{ heading }}</h3>
         <div class="flex flex-col gap-1.5">
-          <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
+          <label class="flex items-center gap-2 cursor-pointer text-sm text-[--fg-2]">
             <input type="radio" v-model="scope" value="this" data-testid="scope-this" />
             <span>{{ optionLabels.this }}</span>
           </label>
-          <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
+          <label class="flex items-center gap-2 cursor-pointer text-sm text-[--fg-2]">
             <input type="radio" v-model="scope" value="this_and_future" data-testid="scope-future" />
             <span>{{ optionLabels.this_and_future }}</span>
           </label>
-          <label class="flex items-center gap-2 cursor-pointer text-sm text-white/80">
+          <label class="flex items-center gap-2 cursor-pointer text-sm text-[--fg-2]">
             <input type="radio" v-model="scope" value="all" data-testid="scope-all" />
             <span>{{ optionLabels.all }}</span>
           </label>
@@ -77,7 +77,7 @@ function onKeydown(e: KeyboardEvent) {
         <div class="flex justify-end gap-2 pt-2">
           <button
             data-testid="recurrence-edit-cancel"
-            class="px-3 py-1 text-xs rounded text-white/60 hover:text-white hover:bg-white/5"
+            class="px-3 py-1 text-xs rounded text-[--fg-3] hover:text-[--fg-1] hover:bg-[--bg-elev-2]"
             @click="onCancel"
           >Cancel</button>
           <button
