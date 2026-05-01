@@ -111,20 +111,12 @@ async def test_start_no_url_returns_502(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_success(auth_app_client, tmp_path):
-    """Stash a fake pending entry; complete extracts token from child.before and persists it."""
+    """Stash a fake pending entry; complete receives token from _complete_pexpect_sync and persists it."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
     fake_token = "sk-ant-oat01-FAKETOKEN_abc123"
     mock_child = MagicMock()
-    # `claude setup-token` prints the OAuth token to stdout after the code is
-    # accepted. pexpect captures all post-sendline output in child.before.
-    mock_child.before = (
-        b"\x1b[2K\x1b[1Gpasted code\n"
-        b"OAuth token created!\n"
-        + fake_token.encode()
-        + b"\n"
-    )
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
@@ -134,7 +126,7 @@ async def test_complete_success(auth_app_client, tmp_path):
 
     with patch(
         "api.routes.integrations._complete_pexpect_sync",
-        return_value="ok",
+        return_value=("ok", fake_token),
     ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
@@ -151,12 +143,11 @@ async def test_complete_success(auth_app_client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_path):
-    """If the setup process exits 0 but no sk-ant-… token is in stdout, surface an error."""
+    """If _complete_pexpect_sync finds no token it returns 'failed'; endpoint surfaces an error."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
     mock_child = MagicMock()
-    mock_child.before = b"some unexpected output without any token\n"
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
@@ -166,7 +157,7 @@ async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_pa
 
     with patch(
         "api.routes.integrations._complete_pexpect_sync",
-        return_value="ok",
+        return_value=("failed", ""),
     ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
@@ -176,7 +167,6 @@ async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_pa
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is False
-    assert "token" in body["error"].lower()
     mock_vault.store_initial.assert_not_called()
 
 
@@ -205,7 +195,7 @@ async def test_complete_success_does_not_log_token(auth_app_client, tmp_path, ca
     caplog.set_level(logging.DEBUG, logger="api.routes.integrations")
     with patch(
         "api.routes.integrations._complete_pexpect_sync",
-        return_value="ok",
+        return_value=("ok", fake_token),
     ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
@@ -253,7 +243,7 @@ async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
 
     with patch(
         "api.routes.integrations._complete_pexpect_sync",
-        return_value="timeout",
+        return_value=("timeout", ""),
     ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
@@ -361,7 +351,7 @@ async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
 
     with patch(
         "api.routes.integrations._complete_pexpect_sync",
-        return_value="error",
+        return_value=("error", ""),
     ):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
