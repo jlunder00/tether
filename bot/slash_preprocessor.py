@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 
 _DB_COMMANDS: frozenset[str] = frozenset({"check-in", "tether-update-context", "update-plan"})
-_SKIP_COMMANDS: frozenset[str] = frozenset({"start", "link"})
+_SKIP_COMMANDS: frozenset[str] = frozenset({"start", "link", "stop"})
 
 _DB_PATTERN = re.compile(
     r"^/(check-in|tether-update-context|update-plan)",
