@@ -272,14 +272,6 @@ function openDep(type: string, id: string) {
   }
 }
 
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-white/20',
-  in_progress: 'bg-blue-400',
-  done: 'bg-green-400',
-  skipped: 'bg-orange-400',
-  blocked: 'bg-red-400',
-}
-
 // Resolve dependency entity_id to a display name
 function depLabel(type: string, entityId: string): string {
   if (type === 'milestone') {
@@ -709,11 +701,13 @@ onMounted(async () => {
           <div class="dp-section__body">
             <ul class="t-rows">
               <li v-for="s in subtasks" :key="s.id" class="t-row" :data-motif="task.motif ?? 'anchor'">
-                <span class="t-glyph" :data-status="s.done ? 'done' : 'todo'" aria-hidden="true" />
-                <input type="checkbox" :checked="s.done" @change="updateSubtask(s.id, { done: !s.done })"
-                       style="position:absolute;opacity:0;width:0;height:0;" />
-                <span :style="s.done ? 'text-decoration:line-through;color:var(--fg-6);' : 'color:var(--fg-2);'"
-                      style="flex:1;font-size:12.5px;">{{ s.text }}</span>
+                <label style="display:contents;cursor:pointer;">
+                  <input type="checkbox" :checked="s.done" @change="updateSubtask(s.id, { done: !s.done })"
+                         style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;" />
+                  <span class="t-glyph" :data-status="s.done ? 'done' : 'todo'" />
+                  <span :style="s.done ? 'text-decoration:line-through;color:var(--fg-6);' : 'color:var(--fg-2);'"
+                        style="flex:1;font-size:12.5px;">{{ s.text }}</span>
+                </label>
                 <button @click="removeSubtask(s.id)"
                         style="color:var(--fg-6);font-size:11px;background:none;border:none;cursor:pointer;padding:0 4px;">✕</button>
               </li>

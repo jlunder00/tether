@@ -106,6 +106,7 @@
 .dp-section__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .dp-section__heading { font-family: var(--font-mono); font-size: 10px; font-weight: 600; color: var(--fg-5); text-transform: uppercase; letter-spacing: 0.08em; }
 .dp-section__action { font-size: 11px; color: var(--fg-4); }
+.dp-section__meta  { font-family: var(--font-mono); font-size: 11px; color: var(--fg-5); }
 .dp-section__body { display: flex; flex-direction: column; gap: 6px; }
 
 /* ── Field row ── */
