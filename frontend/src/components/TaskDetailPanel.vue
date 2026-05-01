@@ -63,9 +63,13 @@ const isBacklog = computed(() => taskAndAnchor.value?.isBacklog ?? false)
 // Standalone task fetch for when task isn't in plan or backlog store yet
 const standaloneTask = ref<any>(null)
 
-// Schedule controls
+// Schedule controls (backlog → plan)
 const scheduleDate = ref(planStore.today)
 const scheduleAnchor = ref('')
+
+// Reschedule controls (plan → different date/anchor)
+// Tracks the date of the plan the task currently lives in.
+const taskPlanDate = computed(() => planStore.plan?.date ?? planStore.today)
 
 // Composables
 const { subtasks, create: createSubtask, update: updateSubtask, remove: removeSubtask } = useSubtasks(() => props.taskId)
@@ -190,13 +194,15 @@ async function moveToBacklog() {
 }
 
 async function moveToAnchor(newAnchorId: string) {
-  const date = planStore.plan?.date ?? planStore.today
-  await api(`/api/tasks/${props.taskId}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date, anchor_id: newAnchorId }),
-  })
+  await planStore.moveTask(props.taskId, taskPlanDate.value, anchorId.value, taskPlanDate.value, newAnchorId)
   await planStore.fetchPlan()
+}
+
+async function onRescheduleDate(e: Event) {
+  const newDate = (e.target as HTMLInputElement).value
+  if (!newDate || newDate === taskPlanDate.value) return
+  await planStore.moveTask(props.taskId, taskPlanDate.value, anchorId.value, newDate, anchorId.value)
+  await planStore.fetchPlan(newDate)
 }
 
 // Delete
@@ -669,14 +675,23 @@ onMounted(async () => {
               </div>
             </template>
             <template v-else>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <span style="font-size:12.5px;color:var(--fg-3);">{{ planStore.activeDate }}</span>
-                <span style="color:var(--fg-6);">·</span>
+              <div class="dp-field">
+                <span class="dp-field__label">Date</span>
+                <input
+                  type="date"
+                  data-testid="reschedule-date"
+                  :value="taskPlanDate"
+                  @change="onRescheduleDate"
+                  class="dp-input"
+                  style="width:auto;" />
+              </div>
+              <div class="dp-field">
+                <span class="dp-field__label">Anchor</span>
                 <select :value="anchorId" @change="moveToAnchor(($event.target as HTMLSelectElement).value)" class="dp-select">
                   <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
                 </select>
               </div>
-              <button @click="moveToBacklog" class="dp-link">Move to backlog</button>
+              <button @click="moveToBacklog" class="dp-link" style="margin-top:4px;">Move to backlog</button>
             </template>
           </div>
         </section>

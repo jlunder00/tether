@@ -106,14 +106,9 @@ describe('TaskDetailPanel chrome', () => {
   it('renders .dp-shell as the root wrapper', async () => {
     vi.doMock('../../stores/plan', () => ({
       usePlanStore: () => ({
-        plan: {
-          date: today,
-          anchors: { morning: { tasks: [TASK], notes: '' } },
-        },
-        today,
-        activeDate: today,
-        fetchPlan: vi.fn(),
-        patchTaskFields: vi.fn(async () => true),
+        plan: { date: today, anchors: { morning: { tasks: [TASK], notes: '' } } },
+        today, activeDate: today,
+        fetchPlan: vi.fn(), patchTaskFields: vi.fn(async () => true), moveTask: vi.fn(async () => {}),
       }),
     }))
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
@@ -127,14 +122,9 @@ describe('TaskDetailPanel chrome', () => {
   it('renders .dp-header inside .dp-shell', async () => {
     vi.doMock('../../stores/plan', () => ({
       usePlanStore: () => ({
-        plan: {
-          date: today,
-          anchors: { morning: { tasks: [TASK], notes: '' } },
-        },
-        today,
-        activeDate: today,
-        fetchPlan: vi.fn(),
-        patchTaskFields: vi.fn(async () => true),
+        plan: { date: today, anchors: { morning: { tasks: [TASK], notes: '' } } },
+        today, activeDate: today,
+        fetchPlan: vi.fn(), patchTaskFields: vi.fn(async () => true), moveTask: vi.fn(async () => {}),
       }),
     }))
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
@@ -148,14 +138,9 @@ describe('TaskDetailPanel chrome', () => {
   it('renders .dp-footer with delete button', async () => {
     vi.doMock('../../stores/plan', () => ({
       usePlanStore: () => ({
-        plan: {
-          date: today,
-          anchors: { morning: { tasks: [TASK], notes: '' } },
-        },
-        today,
-        activeDate: today,
-        fetchPlan: vi.fn(),
-        patchTaskFields: vi.fn(async () => true),
+        plan: { date: today, anchors: { morning: { tasks: [TASK], notes: '' } } },
+        today, activeDate: today,
+        fetchPlan: vi.fn(), patchTaskFields: vi.fn(async () => true), moveTask: vi.fn(async () => {}),
       }),
     }))
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
@@ -165,6 +150,63 @@ describe('TaskDetailPanel chrome', () => {
     })
     expect(wrapper.find('.dp-footer').exists()).toBe(true)
     expect(wrapper.find('.dp-btn--ghost-danger').exists()).toBe(true)
+  })
+
+  it('shows a date input for scheduled tasks in the Location section', async () => {
+    vi.doMock('../../stores/plan', () => ({
+      usePlanStore: () => ({
+        plan: {
+          date: today,
+          anchors: { morning: { tasks: [TASK], notes: '' } },
+        },
+        today,
+        activeDate: today,
+        fetchPlan: vi.fn(),
+        patchTaskFields: vi.fn(async () => true),
+        moveTask: vi.fn(async () => {}),
+      }),
+    }))
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    expect(wrapper.find('input[data-testid="reschedule-date"]').exists()).toBe(true)
+  })
+
+  it('calls moveTask when the reschedule date input changes', async () => {
+    const mockMoveTask = vi.fn(async () => {})
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+    vi.resetModules()
+    vi.doMock('../../stores/plan', () => ({
+      usePlanStore: () => ({
+        plan: { date: today, anchors: { morning: { tasks: [TASK], notes: '' } } },
+        today, activeDate: today,
+        fetchPlan: vi.fn(), patchTaskFields: vi.fn(async () => true), moveTask: mockMoveTask,
+      }),
+    }))
+    // Re-mock all other deps after resetModules
+    vi.doMock('../../lib/api', () => ({ api: vi.fn(async () => ({ ok: true, json: async () => ({}) })) }))
+    vi.doMock('../../composables/useSubtasks', () => ({ useSubtasks: () => ({ subtasks: ref([]), create: vi.fn(), update: vi.fn(), remove: vi.fn() }) }))
+    vi.doMock('../../composables/useLinks', () => ({ useLinks: () => ({ links: ref([]), create: vi.fn(), remove: vi.fn() }) }))
+    vi.doMock('../../composables/useDependencies', () => ({ useDependencies: () => ({ deps: ref({ blocked_by: [], blocks: [] }), add: vi.fn(), remove: vi.fn() }) }))
+    vi.doMock('../../composables/useTaskContexts', () => ({ useTaskContexts: () => ({ contexts: ref([]), link: vi.fn(), unlink: vi.fn() }) }))
+    vi.doMock('../../composables/useSlideOver', () => ({ useSlideOver: () => ({ push: vi.fn(), pop: vi.fn() }) }))
+    vi.doMock('../../stores/anchors', () => ({ useAnchorStore: () => ({ anchors: [], fetchAnchors: vi.fn() }) }))
+    vi.doMock('../../stores/backlog', () => ({ useBacklogStore: () => ({ tasks: [], fetchTasks: vi.fn() }) }))
+    vi.doMock('../../stores/events', () => ({ useEventStore: () => ({ events: [], removeEventsForTask: vi.fn(), moveEvent: vi.fn(), setRecurrence: vi.fn(), updateEventColor: vi.fn() }) }))
+    vi.doMock('../../stores/kanban', () => ({ useKanbanStore: () => ({ applyTaskPatch: vi.fn() }) }))
+    vi.doMock('../../stores/tasks', () => ({ useTasksStore: () => ({ setTaskRrule: vi.fn(), deleteTask: vi.fn() }) }))
+    vi.doMock('../../stores/milestones', () => ({ useMilestoneStore: () => ({ all: [], taskMilestones: {}, fetchAll: vi.fn(), patchMilestone: vi.fn(), deleteMilestone: vi.fn() }) }))
+    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
+    const wrapper = mount(TaskDetailPanel, {
+      props: { taskId: 'task-1' },
+      global: { stubs: GLOBAL_STUBS },
+    })
+    const dateInput = wrapper.find('input[data-testid="reschedule-date"]')
+    await dateInput.setValue(tomorrow)
+    await dateInput.trigger('change')
+    expect(mockMoveTask).toHaveBeenCalledWith('task-1', today, 'morning', tomorrow, 'morning')
   })
 })
 
