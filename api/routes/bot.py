@@ -48,7 +48,8 @@ async def bot_chat(websocket: WebSocket,
             await handle_message(data['content'],
                                  send_fn=send_fn,
                                  pool=pool,
-                                 user_id=user_id
+                                 user_id=user_id,
+                                 vault=websocket.app.state.vault,
                             )
             logger.info("bot_chat: handle_message returned, response_len=%d", sum(len(p) for p in response_parts))
 
