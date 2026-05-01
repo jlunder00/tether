@@ -55,16 +55,16 @@ function onBlur() {
       :placeholder="placeholder ?? 'Search...'"
       @focus="open = results.length > 0"
       @blur="onBlur"
-      class="w-full bg-gray-800 text-sm text-white rounded px-2 py-1 border border-white/10 outline-none focus:border-white/30" />
+      class="w-full bg-[--bg-elev-1] text-sm text-[--fg-1] rounded px-2 py-1 border border-[--border-soft] outline-none focus:border-[--border-1]" />
     <ul
       v-if="open && results.length"
-      class="absolute z-50 top-full left-0 right-0 mt-1 bg-gray-800 border border-white/20 rounded shadow-xl max-h-48 overflow-y-auto">
+      class="absolute z-50 top-full left-0 right-0 mt-1 bg-[--bg-elev-1] border border-[--border-1] rounded shadow-xl max-h-48 overflow-y-auto">
       <li
         v-for="item in results" :key="item.id"
         @mousedown.prevent="select(item)"
-        class="flex flex-col px-3 py-2 cursor-pointer hover:bg-white/10 transition-colors">
-        <span class="text-sm text-white/90">{{ item.label }}</span>
-        <span v-if="item.sublabel" class="text-xs text-white/40">{{ item.sublabel }}</span>
+        class="flex flex-col px-3 py-2 cursor-pointer hover:bg-[--bg-elev-2] transition-colors">
+        <span class="text-sm text-[--fg-1]">{{ item.label }}</span>
+        <span v-if="item.sublabel" class="text-xs text-[--fg-4]">{{ item.sublabel }}</span>
       </li>
     </ul>
   </div>

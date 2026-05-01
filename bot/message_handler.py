@@ -1157,7 +1157,7 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
 
 
 async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str,
-                         vault=None) -> None:
+                         vault=None, status_fn=None) -> None:
     """Public entry point. When a vault is provided, acquires the per-user lock
     and materialises credentials into an env dict that downstream LLM calls
     merge into the spawned claude-code subprocess.
@@ -1166,6 +1166,11 @@ async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_i
       - with_lock(user_id) -> async context manager
       - materialize(user_id) -> async context manager yielding a dict[str, str]
         of env vars (e.g. {"CLAUDE_CODE_OAUTH_TOKEN": "..."})
+
+    status_fn: optional async callable ``(msg: str) -> Awaitable[None]``.
+    WebSocket path passes an async callback that pushes {"type": "status"}
+    frames immediately. Telegram path passes None.
+    Threading status_fn through to Session is implemented by bot-backend.
     """
     from bot.llm import _llm_env_extras
 

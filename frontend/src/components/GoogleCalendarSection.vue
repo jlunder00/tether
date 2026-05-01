@@ -41,8 +41,8 @@ const lastSyncedLabel = computed(() => {
 
 <template>
   <section class="mb-8">
-    <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Google Calendar</h2>
-    <div class="bg-gray-800 rounded-xl p-4">
+    <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Google Calendar</h2>
+    <div class="bg-[--bg-elev-1] rounded-xl p-4">
       <!-- Status row -->
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-2">
@@ -54,12 +54,12 @@ const lastSyncedLabel = computed(() => {
             <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
           </svg>
           <div>
-            <div class="text-sm font-medium text-white">Google Calendar</div>
-            <div v-if="store.gcalConnected" class="text-xs text-green-400 flex items-center gap-1">
+            <div class="text-sm font-medium text-[--fg-1]">Google Calendar</div>
+            <div v-if="store.gcalConnected" class="text-xs text-[--status-done-fg] flex items-center gap-1">
               <span>✓</span>
               <span>Connected</span>
             </div>
-            <div v-else class="text-xs text-white/40">Not connected</div>
+            <div v-else class="text-xs text-[--fg-4]">Not connected</div>
           </div>
         </div>
 
@@ -69,7 +69,7 @@ const lastSyncedLabel = computed(() => {
             data-testid="gcal-sync-now"
             :disabled="store.loading"
             @click="store.syncNow()"
-            class="text-xs text-white/70 hover:text-white disabled:opacity-50 border border-white/20 hover:border-white/40 rounded-lg px-2.5 py-1.5 transition-colors"
+            class="text-xs text-[--fg-2] hover:text-[--fg-1] disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-2.5 py-1.5 transition-colors"
           >
             {{ store.loading ? '…' : 'Sync now' }}
           </button>
@@ -77,7 +77,7 @@ const lastSyncedLabel = computed(() => {
             data-testid="gcal-disconnect"
             :disabled="store.loading"
             @click="store.disconnectGCal()"
-            class="text-sm text-red-400 hover:text-red-300 disabled:opacity-50 border border-red-400/30 hover:border-red-300/50 rounded-lg px-3 py-1.5 transition-colors"
+            class="text-sm text-[--status-block-fg] hover:opacity-80 disabled:opacity-50 border border-[--border-1] hover:border-[--border-2] rounded-lg px-3 py-1.5 transition-colors"
           >
             {{ store.loading ? '…' : 'Disconnect' }}
           </button>
@@ -87,7 +87,7 @@ const lastSyncedLabel = computed(() => {
           data-testid="gcal-connect"
           :disabled="store.loading"
           @click="store.connectGCal()"
-          class="text-sm bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg px-3 py-1.5 transition-colors"
+          class="text-sm bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] font-medium rounded-lg px-3 py-1.5 transition-colors"
         >
           {{ store.loading ? '…' : 'Connect' }}
         </button>
@@ -97,18 +97,18 @@ const lastSyncedLabel = computed(() => {
       <p
         v-if="store.gcalConnected && lastSyncedLabel"
         data-testid="gcal-last-synced"
-        class="text-xs text-white/40 -mt-2 mb-2"
+        class="text-xs text-[--fg-4] -mt-2 mb-2"
       >
         Last synced {{ lastSyncedLabel }}
       </p>
 
       <!-- Info text when not connected -->
-      <p v-if="!store.gcalConnected" class="text-xs text-white/40">
+      <p v-if="!store.gcalConnected" class="text-xs text-[--fg-4]">
         Connect your Google Calendar to see events alongside your Tether tasks.
       </p>
 
       <!-- Error message -->
-      <p v-if="store.error" class="text-xs text-red-400 mt-2">{{ store.error }}</p>
+      <p v-if="store.error" class="text-xs text-[--status-block-fg] mt-2">{{ store.error }}</p>
     </div>
   </section>
 </template>

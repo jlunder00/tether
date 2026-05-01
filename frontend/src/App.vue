@@ -88,7 +88,7 @@ async function logout() {
         <button
           @click="chatOpen = !chatOpen"
           class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-          :class="chatOpen ? 'bg-indigo-600/40 text-[--fg-1]' : 'text-[--fg-3]'"
+          :class="chatOpen ? 'bg-[--accent-veil] text-[--fg-1]' : 'text-[--fg-3]'"
           title="Toggle chat (Ctrl+/)"
         >
           Chat

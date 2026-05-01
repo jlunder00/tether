@@ -51,7 +51,7 @@ function defaultColor(event: CalendarEvent): string {
         class="text-[9px] flex-shrink-0 opacity-80"
         title="Recurring event"
       >↻</span>
-      <span class="truncate font-medium text-white">{{ event.title }}</span>
+      <span class="truncate font-medium text-[--accent-fg]">{{ event.title }}</span>
     </div>
   </div>
 </template>

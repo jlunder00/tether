@@ -55,13 +55,13 @@ describe('RecurrenceEditDialog', () => {
   it('confirm button is red for delete action', () => {
     make({ action: 'delete' })
     const btn = document.querySelector('[data-testid="recurrence-edit-confirm"]') as HTMLElement
-    expect(btn.className).toContain('bg-red-500')
+    expect(btn.className).toContain('bg-[--status-block-bg]')
   })
 
   it('confirm button is indigo for edit action', () => {
     make({ action: 'edit' })
     const btn = document.querySelector('[data-testid="recurrence-edit-confirm"]') as HTMLElement
-    expect(btn.className).toContain('bg-indigo-500')
+    expect(btn.className).toContain('bg-[--accent]')
   })
 
   it('confirm button label is "Delete" for delete action', () => {
