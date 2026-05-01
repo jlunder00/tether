@@ -63,9 +63,13 @@ const isBacklog = computed(() => taskAndAnchor.value?.isBacklog ?? false)
 // Standalone task fetch for when task isn't in plan or backlog store yet
 const standaloneTask = ref<any>(null)
 
-// Schedule controls
+// Schedule controls (backlog → plan)
 const scheduleDate = ref(planStore.today)
 const scheduleAnchor = ref('')
+
+// Reschedule controls (plan → different date/anchor)
+// Tracks the date of the plan the task currently lives in.
+const taskPlanDate = computed(() => planStore.plan?.date ?? planStore.today)
 
 // Composables
 const { subtasks, create: createSubtask, update: updateSubtask, remove: removeSubtask } = useSubtasks(() => props.taskId)
@@ -108,33 +112,20 @@ async function addLink() {
   showAddLink.value = false
 }
 
-// Task PATCH helper
+// Task PATCH helper — routes through the plan store (standing rule: no api() in components)
 async function patchTask(fields: Record<string, unknown>) {
-  const resp = await api(`/api/tasks/${props.taskId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(fields),
-  })
-  // Optimistic in-place merge: mutate the object task.value points to so
-  // the controlled MotifPicker/text/status inputs in this panel reflect
-  // the change immediately, regardless of which store owns the object.
-  // Without this, a calendar event whose task lives on a non-focused
-  // day's plan would never update — fetchPlan() refetches the focused
-  // day, leaving the panel's task ref stale.
-  if (resp.ok && task.value) {
-    Object.assign(task.value, fields)
-  }
+  const ok = await planStore.patchTaskFields(props.taskId, fields)
+  // Optimistic in-place merge for objects not tracked in the plan store
+  // (standalone events on non-current dates, backlog tasks).
+  if (ok && task.value) Object.assign(task.value, fields)
   if (isBacklog.value) {
-    if (resp.ok && standaloneTask.value) {
-      standaloneTask.value = await resp.json()
-    }
     await backlogStore.fetchTasks()
   } else {
     await planStore.fetchPlan()
   }
   // Mirror the patch into the kanban store so the kanban view re-renders
-  // when fields like motif/color/text are edited from the detail panel.
-  if (resp.ok) kanbanStore.applyTaskPatch(props.taskId, fields)
+  // when fields like motif/text/status are edited from the detail panel.
+  if (ok) kanbanStore.applyTaskPatch(props.taskId, fields)
 }
 
 // Text editing
@@ -203,13 +194,15 @@ async function moveToBacklog() {
 }
 
 async function moveToAnchor(newAnchorId: string) {
-  const date = planStore.plan?.date ?? planStore.today
-  await api(`/api/tasks/${props.taskId}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date, anchor_id: newAnchorId }),
-  })
+  await planStore.moveTask(props.taskId, taskPlanDate.value, anchorId.value, taskPlanDate.value, newAnchorId)
   await planStore.fetchPlan()
+}
+
+async function onRescheduleDate(e: Event) {
+  const newDate = (e.target as HTMLInputElement).value
+  if (!newDate || newDate === taskPlanDate.value) return
+  await planStore.moveTask(props.taskId, taskPlanDate.value, anchorId.value, newDate, anchorId.value)
+  await planStore.fetchPlan(newDate)
 }
 
 // Delete
@@ -283,14 +276,6 @@ function openDep(type: string, id: string) {
   } else {
     pushPanel({ kind: 'milestone', entityId: id })
   }
-}
-
-const STATUS_COLORS: Record<string, string> = {
-  pending: 'bg-[--bg-elev-2]',
-  in_progress: 'bg-[--status-doing-fg]',
-  done: 'bg-[--status-done-fg]',
-  skipped: 'bg-orange-400',
-  blocked: 'bg-[--status-block-fg]',
 }
 
 // Resolve dependency entity_id to a display name
@@ -519,452 +504,412 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="p-5 flex flex-col gap-5 text-[--fg-1] min-h-full">
+  <!-- dp-shell: motif data-attr drives the left-rail colour via --m token -->
+  <div class="dp-shell" :data-motif="task?.motif ?? (taskEvent ? 'anchor' : 'anchor')">
 
-      <!-- Header context info (close button is in SlideOverStack) -->
-      <div class="flex items-start justify-between gap-2">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span v-if="anchorId" class="text-xs px-2 py-0.5 rounded-full bg-[--bg-elev-2] text-[--fg-3]">
-            {{ anchorId }}
-          </span>
-          <span class="text-xs text-[--fg-4]">{{ planStore.activeDate }}</span>
-        </div>
+    <!-- ── Header ─────────────────────────────────────────────────────────── -->
+    <header class="dp-header">
+      <div class="dp-crumbs">
+        <span class="dp-crumbs__seg">Plan</span>
+        <span class="dp-crumbs__sep">›</span>
+        <span class="dp-crumbs__seg">{{ planStore.activeDate }}</span>
+        <template v-if="anchorId">
+          <span class="dp-crumbs__sep">›</span>
+          <span class="dp-crumbs__seg">{{ anchorId }}</span>
+        </template>
+      </div>
+      <div class="dp-title-row">
+        <template v-if="task">
+          <input
+            :value="task.text"
+            @change="onTextChange"
+            class="dp-title"
+            placeholder="Task title" />
+          <span :class="`t-pill t-pill--${task.status}`">{{ task.status }}</span>
+        </template>
+        <template v-else-if="taskEvent">
+          <span class="dp-title">{{ taskEvent.title }}</span>
+        </template>
+        <template v-else>
+          <span class="dp-title" style="color: var(--fg-5)">Not found</span>
+        </template>
+      </div>
+    </header>
+
+    <!-- ── Scrollable body ────────────────────────────────────────────────── -->
+    <div class="dp-body">
+
+      <!-- Not found -->
+      <div v-if="!task && !taskEvent" class="dp-section" style="color: var(--fg-5); font-size: 13px;">
+        Task not found.
       </div>
 
-      <!-- Not found: only when neither a task nor a standalone event was resolved -->
-      <div v-if="!task && !taskEvent" class="text-[--fg-4] text-sm">Not found.</div>
-
-      <!-- Standalone calendar event (opened via kind:'event'): show title + calendar controls only -->
+      <!-- ── Standalone calendar event (opened via kind:'event') ── -->
       <template v-else-if="!task && taskEvent">
-        <div class="text-xl font-semibold border-b border-[--border-1] pb-1">{{ taskEvent.title }}</div>
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Calendar</span>
-          <div class="flex flex-col gap-2">
-            <label class="flex flex-col gap-0.5">
-              <span class="text-xs text-[--fg-4]">Start</span>
-              <input
-                type="datetime-local"
-                :value="isoToDatetimeLocal(taskEvent.start_time)"
-                @change="onCalendarStartChange"
-                class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
-            </label>
-            <label class="flex flex-col gap-0.5">
-              <span class="text-xs text-[--fg-4]">End</span>
-              <input
-                type="datetime-local"
-                :value="isoToDatetimeLocal(taskEvent.end_time)"
-                @change="onCalendarEndChange"
-                class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
-            </label>
-            <!-- Color picker -->
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-[--fg-4] w-20">Color</span>
-              <input
-                type="color"
-                data-testid="event-color-input"
-                :value="displayColor"
-                class="w-8 h-7 rounded cursor-pointer bg-transparent border border-[--border-soft]"
-                @input="onColorInput"
-                @change="onColorChange"
-              />
-              <button
-                v-if="taskEvent.color || pendingColorValue != null"
-                data-testid="event-color-reset"
-                class="text-[10px] text-[--fg-5] hover:text-[--fg-3]"
-                @click="onColorReset"
-              >Reset</button>
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Calendar</span>
+          </header>
+          <div class="dp-section__body">
+            <div class="dp-field">
+              <span class="dp-field__label">Start</span>
+              <input type="datetime-local" :value="isoToDatetimeLocal(taskEvent.start_time)"
+                     @change="onCalendarStartChange" class="dp-input" />
             </div>
-            <RecurrencePicker
-              :model-value="taskEvent.rrule"
-              :start-time="taskEvent.start_time"
-              @update:model-value="onRecurrenceChange"
-            />
-            <!-- Scope dialog for recurring-event color edits (teleported to body) -->
-            <RecurrenceEditDialog
-              :visible="showColorScopeDialog"
-              mode="event"
-              action="edit"
-              @confirm="onColorScopeConfirm"
-              @cancel="onColorScopeCancel"
-            />
+            <div class="dp-field">
+              <span class="dp-field__label">End</span>
+              <input type="datetime-local" :value="isoToDatetimeLocal(taskEvent.end_time)"
+                     @change="onCalendarEndChange" class="dp-input" />
+            </div>
+            <div class="dp-field">
+              <span class="dp-field__label">Color</span>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <input type="color" data-testid="event-color-input" :value="displayColor"
+                       style="width:32px;height:28px;cursor:pointer;border:1px solid var(--border-1);border-radius:3px;background:transparent;"
+                       @input="onColorInput" @change="onColorChange" />
+                <button v-if="taskEvent.color || pendingColorValue != null"
+                        data-testid="event-color-reset"
+                        style="font-size:11px;color:var(--fg-5);cursor:pointer;background:none;border:none;"
+                        @click="onColorReset">Reset</button>
+              </div>
+            </div>
+            <RecurrencePicker :model-value="taskEvent.rrule" :start-time="taskEvent.start_time"
+                              @update:model-value="onRecurrenceChange" />
+            <RecurrenceEditDialog :visible="showColorScopeDialog" mode="event" action="edit"
+                                  @confirm="onColorScopeConfirm" @cancel="onColorScopeCancel" />
           </div>
-        </div>
+        </section>
       </template>
 
+      <!-- ── Full task ─────────────────────────────────────────────────────── -->
       <template v-else>
 
-        <!-- Title -->
-        <input
-          :value="task.text"
-          @change="onTextChange"
-          class="bg-transparent text-xl font-semibold outline-none border-b border-[--border-1] focus:border-[--fg-3] pb-1 w-full"
-          placeholder="Task title" />
+        <!-- Motif -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Motif</span>
+          </header>
+          <div class="dp-section__body" data-testid="task-motif-picker">
+            <MotifPicker
+              :model-value="(task.motif as MotifSlot | null | undefined) ?? null"
+              @update:model-value="onMotifChange" />
+          </div>
+        </section>
 
         <!-- Status -->
-        <div class="flex items-center gap-3">
-          <label class="text-xs text-[--fg-3] uppercase tracking-wide">Status</label>
-          <select
-            :value="task.status"
-            @change="onStatusChange"
-            class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
-            <option value="pending">Pending</option>
-            <option value="in_progress">In Progress</option>
-            <option value="done">Done</option>
-            <option value="skipped">Skipped</option>
-            <option value="blocked">Blocked</option>
-          </select>
-        </div>
-
-        <!-- Motif -->
-        <div data-testid="task-motif-picker" class="flex items-center gap-3">
-          <MotifPicker
-            :model-value="(task.motif as MotifSlot | null | undefined) ?? null"
-            @update:model-value="onMotifChange"
-          />
-        </div>
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Status</span>
+          </header>
+          <div class="dp-section__body">
+            <select :value="task.status" @change="onStatusChange" class="dp-select">
+              <option value="pending">Pending</option>
+              <option value="in_progress">In Progress</option>
+              <option value="done">Done</option>
+              <option value="skipped">Skipped</option>
+              <option value="blocked">Blocked</option>
+            </select>
+          </div>
+        </section>
 
         <!-- Calendar -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Calendar</span>
-          <template v-if="taskEvent">
-            <div class="flex flex-col gap-2">
-              <label class="flex flex-col gap-0.5">
-                <span class="text-xs text-[--fg-4]">Start</span>
-                <input
-                  type="datetime-local"
-                  :value="isoToDatetimeLocal(taskEvent.start_time)"
-                  @change="onCalendarStartChange"
-                  class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span class="text-xs text-[--fg-4]">End</span>
-                <input
-                  type="datetime-local"
-                  :value="isoToDatetimeLocal(taskEvent.end_time)"
-                  @change="onCalendarEndChange"
-                  class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none focus:border-[--border-2]" />
-              </label>
-              <!-- Color picker — overrides milestone/context-node color.
-                   @input fires continuously during drag for live preview;
-                   @change fires once on picker dismiss to gate the scope dialog
-                   for recurring events. -->
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-[--fg-4] w-20">Color</span>
-                <input
-                  type="color"
-                  data-testid="event-color-input"
-                  :value="displayColor"
-                  class="w-8 h-7 rounded cursor-pointer bg-transparent border border-[--border-soft]"
-                  @input="onColorInput"
-                  @change="onColorChange"
-                />
-                <button
-                  v-if="taskEvent.color || pendingColorValue != null"
-                  data-testid="event-color-reset"
-                  class="text-[10px] text-[--fg-5] hover:text-[--fg-3]"
-                  @click="onColorReset"
-                >Reset</button>
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Calendar</span>
+          </header>
+          <div class="dp-section__body">
+            <template v-if="taskEvent">
+              <div class="dp-field">
+                <span class="dp-field__label">Start</span>
+                <input type="datetime-local" :value="isoToDatetimeLocal(taskEvent.start_time)"
+                       @change="onCalendarStartChange" class="dp-input" />
               </div>
-              <!-- Recurrence picker — shown only when event exists -->
-              <RecurrencePicker
-                :model-value="taskEvent.rrule"
-                :start-time="taskEvent.start_time"
-                @update:model-value="onRecurrenceChange"
-              />
-              <!-- Scope dialog for recurring-event color edits (teleported to body) -->
-              <RecurrenceEditDialog
-                :visible="showColorScopeDialog"
-                mode="event"
-                action="edit"
-                @confirm="onColorScopeConfirm"
-                @cancel="onColorScopeCancel"
-              />
-            </div>
-          </template>
-          <template v-else-if="task?.anchor_id && !task?.start_time">
-            <!-- Anchor task (not on calendar): show recurrence picker -->
-            <div class="text-xs text-[--fg-5] italic mb-1">Anchor task — drag to calendar to schedule</div>
-            <RecurrencePicker
-              :model-value="task.rrule ?? null"
-              :start-time="''"
-              @update:model-value="onAnchorRecurrenceChange"
-            />
-          </template>
-          <template v-else>
-            <div class="text-xs text-[--fg-5] italic">Not on calendar — drag it onto the time grid to schedule</div>
-          </template>
-        </div>
-
-        <!-- Schedule / Location -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Location</span>
-          <template v-if="isBacklog">
-            <div class="text-xs text-[--fg-5] italic mb-1">Unscheduled (backlog)</div>
-            <div class="flex items-center gap-2">
-              <input v-model="scheduleDate" type="date"
-                     class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none" />
-              <select v-model="scheduleAnchor"
-                      class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
-                <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
-              </select>
-              <button @click="scheduleTask"
-                      class="text-xs px-3 py-1 rounded bg-[--status-doing-bg] text-[--status-doing-fg] hover:opacity-80">
-                Schedule
-              </button>
-            </div>
-          </template>
-          <template v-else>
-            <div class="flex items-center gap-2 text-sm">
-              <span class="text-[--fg-3]">{{ planStore.activeDate }}</span>
-              <span class="text-[--fg-4]">·</span>
-              <select :value="anchorId" @change="moveToAnchor(($event.target as HTMLSelectElement).value)"
-                      class="bg-[--bg-elev-1] text-[--fg-1] text-sm rounded px-2 py-1 border border-[--border-1] outline-none">
-                <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
-              </select>
-            </div>
-            <button @click="moveToBacklog"
-                    class="text-xs text-[--fg-4] hover:text-[--fg-2] self-start">
-              Move to backlog
-            </button>
-          </template>
-        </div>
-
-        <!-- Description -->
-        <div class="flex flex-col gap-1">
-          <label class="text-xs text-[--fg-3] uppercase tracking-wide">Description</label>
-          <textarea
-            :value="task.description ?? ''"
-            @blur="onDescBlur"
-            rows="3"
-            placeholder="Add a description..."
-            class="bg-[--bg-elev-1] text-sm text-[--fg-2] rounded px-3 py-2 border border-[--border-soft] outline-none focus:border-[--border-1] resize-none" />
-        </div>
-
-        <!-- Subtasks -->
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Subtasks</span>
-            <span class="text-xs text-[--fg-5]">{{ subtasksDone }}/{{ subtasks.length }}</span>
-          </div>
-          <ul class="flex flex-col gap-1">
-            <li v-for="s in subtasks" :key="s.id" class="flex items-center gap-2 group">
-              <input
-                type="checkbox"
-                :checked="s.done"
-                @change="updateSubtask(s.id, { done: !s.done })"
-                class="accent-green-400 flex-shrink-0" />
-              <span :class="s.done ? 'line-through text-[--fg-5]' : 'text-[--fg-2]'" class="flex-1 text-sm">{{ s.text }}</span>
-              <button
-                @click="removeSubtask(s.id)"
-                class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
-            </li>
-          </ul>
-          <div class="flex gap-2">
-            <input
-              v-model="newSubtaskText"
-              @keydown.enter="addSubtask"
-              placeholder="Add subtask..."
-              class="flex-1 bg-[--bg-elev-1] text-sm text-[--fg-2] rounded px-2 py-1 border border-[--border-soft] outline-none focus:border-[--border-1]" />
-            <button
-              @click="addSubtask"
-              class="text-xs text-[--fg-4] hover:text-[--fg-2] px-2">Add</button>
-          </div>
-        </div>
-
-        <!-- Links -->
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Links</span>
-            <button @click="showAddLink = !showAddLink" class="text-xs text-[--fg-4] hover:text-[--fg-2]">+ Add link</button>
-          </div>
-          <ul class="flex flex-col gap-1">
-            <li v-for="l in links" :key="l.id" class="flex items-center gap-2 group">
-              <span class="flex-shrink-0">{{ LINK_ICONS[l.category] ?? '📎' }}</span>
-              <a :href="l.url" target="_blank" class="flex-1 text-sm text-blue-300 hover:text-blue-200 truncate">
-                {{ l.label || l.url }}
-              </a>
-              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4] flex-shrink-0">{{ l.category }}</span>
-              <button
-                @click="removeLink(l.id)"
-                class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">✕</button>
-            </li>
-          </ul>
-          <div v-if="showAddLink" class="flex flex-col gap-2 bg-[--bg-elev-1] rounded p-3 border border-[--border-soft]">
-            <input v-model="newLinkUrl" placeholder="URL" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft] focus:border-[--border-1]" />
-            <input v-model="newLinkLabel" placeholder="Label (optional)" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft] focus:border-[--border-1]" />
-            <select v-model="newLinkCategory" class="bg-[--bg-elev-2] text-sm text-[--fg-1] rounded px-2 py-1 outline-none border border-[--border-soft]">
-              <option value="document">Document</option>
-              <option value="meeting">Meeting</option>
-              <option value="pr">PR</option>
-              <option value="issue">Issue</option>
-              <option value="other">Other</option>
-            </select>
-            <div class="flex gap-2 justify-end">
-              <button @click="showAddLink = false" class="text-xs text-[--fg-4] hover:text-[--fg-2]">Cancel</button>
-              <button @click="addLink" class="text-xs text-[--fg-3] hover:text-[--fg-1] px-2 py-1 rounded bg-[--bg-elev-2]">Add</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Dependencies -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Dependencies</span>
-
-          <!-- Blocked by -->
-          <div class="flex flex-col gap-1">
-            <span class="text-xs text-[--fg-4]">Blocked by</span>
-            <div v-if="!deps.blocked_by.length" class="text-xs text-[--fg-6] italic">None</div>
-            <button
-              v-for="d in deps.blocked_by" :key="d.id"
-              @click="openDep(d.type, d.entity_id)"
-              class="flex items-center gap-2 text-left group">
-              <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-[--fg-2] hover:text-[--fg-1] flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
-              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4]">{{ d.type }}</span>
-              <button @click.stop="removeDep(d.id)" class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100">✕</button>
-            </button>
-          </div>
-
-          <!-- Blocks -->
-          <div class="flex flex-col gap-1">
-            <span class="text-xs text-[--fg-4]">Blocks</span>
-            <div v-if="!deps.blocks.length" class="text-xs text-[--fg-6] italic">None</div>
-            <button
-              v-for="d in deps.blocks" :key="d.id"
-              @click="openDep(d.type, d.entity_id)"
-              class="flex items-center gap-2 text-left group">
-              <span :class="STATUS_COLORS['pending']" class="w-2 h-2 rounded-full flex-shrink-0" />
-              <span class="text-sm text-[--fg-2] hover:text-[--fg-1] flex-1 truncate">{{ d.name || depLabel(d.type, d.entity_id) }}</span>
-              <span class="text-xs px-1 py-0.5 rounded bg-[--bg-elev-2] text-[--fg-4]">{{ d.type }}</span>
-              <button @click.stop="removeDep(d.id)" class="text-[--fg-6] hover:text-[--status-block-fg] text-xs opacity-0 group-hover:opacity-100">✕</button>
-            </button>
-          </div>
-
-          <SearchAutocomplete :search-fn="searchForDependency" placeholder="Search tasks/milestones..." @select="addDependencyFromSearch" />
-        </div>
-
-        <!-- Milestones -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Milestones</span>
-          <div v-if="!(milestoneStore.taskMilestones[taskId] ?? []).length" class="text-xs text-[--fg-6] italic">None</div>
-          <button
-            v-for="m in (milestoneStore.taskMilestones[taskId] ?? [])" :key="m.id"
-            @click="openMilestone(m.id)"
-            class="flex items-center gap-2 text-left">
-            <span v-if="m.color" class="w-2.5 h-2.5 rounded-full flex-shrink-0" :style="{ background: m.color }" />
-            <span class="text-sm text-[--fg-2] hover:text-[--fg-1]"
-                  :style="m.color ? { color: m.color } : {}">{{ m.name }}</span>
-            <span class="text-xs px-1 py-0.5 rounded text-[--fg-4]"
-                  :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
-                  :class="m.color ? 'border' : 'bg-[--bg-elev-2]'">{{ m.status }}</span>
-          </button>
-          <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones..." @select="linkMilestoneFromSearch" />
-        </div>
-
-        <!-- Context entries -->
-        <div class="flex flex-col gap-2">
-          <span class="text-xs text-[--fg-3] uppercase tracking-wide">Context</span>
-          <div v-if="!contexts.length" class="text-xs text-[--fg-6] italic">None</div>
-          <div v-for="subject in contexts" :key="subject"
-               class="flex items-center justify-between text-sm">
-            <router-link :to="'/context'" class="text-[--fg-2] hover:text-[--fg-1]">{{ subject }}</router-link>
-            <button @click="unlinkContext(subject)" class="text-[--fg-6] hover:text-[--fg-4] text-xs ml-2">✕</button>
-          </div>
-          <SearchAutocomplete :search-fn="searchForContext" placeholder="Link context entry..." @select="linkContextFromSearch" />
-        </div>
-
-        <!-- Follow-up config -->
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center justify-between">
-            <span class="text-xs text-[--fg-3] uppercase tracking-wide">Follow-up</span>
-            <button @click="showFollowup = !showFollowup" class="text-xs text-[--fg-4] hover:text-[--fg-2]">
-              {{ showFollowup ? 'Hide' : 'Edit' }}
-            </button>
-          </div>
-          <div v-if="task.followup_config && !showFollowup" class="text-xs text-[--fg-4]">
-            {{ task.followup_config.enabled ? `Enabled — pre every ${task.followup_config.pre_ack_interval_min}m` : 'Disabled (override)' }}
-          </div>
-          <div v-else-if="!task.followup_config && !showFollowup" class="text-xs text-[--fg-6] italic">Using anchor default</div>
-          <div v-if="showFollowup" class="flex flex-col gap-2 bg-[--bg-elev-1] rounded p-3 border border-[--border-soft]">
-            <label class="flex items-center gap-2 text-xs text-[--fg-2]">
-              <input
-                type="checkbox"
-                :checked="task.followup_config?.enabled ?? false"
-                @change="(e) => toggleFollowup((e.target as HTMLInputElement).checked)"
-                class="accent-blue-400" />
-              Override anchor follow-up
-            </label>
-            <template v-if="task.followup_config?.enabled">
-              <div class="grid grid-cols-2 gap-2 text-xs text-[--fg-3]">
-                <label class="flex flex-col gap-0.5">
-                  Pre interval (min)
-                  <input
-                    :value="task.followup_config.pre_ack_interval_min"
-                    type="number" min="1"
-                    @change="patchFollowup({ pre_ack_interval_min: +($event.target as HTMLInputElement).value })"
-                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  Max pings
-                  <input
-                    :value="task.followup_config.pre_ack_max_pings"
-                    type="number" min="1"
-                    @change="patchFollowup({ pre_ack_max_pings: +($event.target as HTMLInputElement).value })"
-                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  Post interval (min)
-                  <input
-                    :value="task.followup_config.post_ack_interval_min"
-                    type="number" min="1"
-                    @change="patchFollowup({ post_ack_interval_min: +($event.target as HTMLInputElement).value })"
-                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
-                </label>
-                <label class="flex flex-col gap-0.5">
-                  Post pings
-                  <input
-                    :value="task.followup_config.post_ack_pings"
-                    type="number" min="1"
-                    @change="patchFollowup({ post_ack_pings: +($event.target as HTMLInputElement).value })"
-                    class="bg-[--bg-elev-2] text-[--fg-1] rounded px-1.5 py-0.5 outline-none w-16" />
-                </label>
+              <div class="dp-field">
+                <span class="dp-field__label">End</span>
+                <input type="datetime-local" :value="isoToDatetimeLocal(taskEvent.end_time)"
+                       @change="onCalendarEndChange" class="dp-input" />
               </div>
+              <!-- Color picker — @input for live preview, @change gates scope dialog on recurring -->
+              <div class="dp-field">
+                <span class="dp-field__label">Color</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <input type="color" data-testid="event-color-input" :value="displayColor"
+                         style="width:32px;height:28px;cursor:pointer;border:1px solid var(--border-1);border-radius:3px;background:transparent;"
+                         @input="onColorInput" @change="onColorChange" />
+                  <button v-if="taskEvent.color || pendingColorValue != null"
+                          data-testid="event-color-reset"
+                          style="font-size:11px;color:var(--fg-5);cursor:pointer;background:none;border:none;"
+                          @click="onColorReset">Reset</button>
+                </div>
+              </div>
+              <RecurrencePicker :model-value="taskEvent.rrule" :start-time="taskEvent.start_time"
+                                @update:model-value="onRecurrenceChange" />
+              <RecurrenceEditDialog :visible="showColorScopeDialog" mode="event" action="edit"
+                                    @confirm="onColorScopeConfirm" @cancel="onColorScopeCancel" />
+            </template>
+            <template v-else-if="task?.anchor_id && !task?.start_time">
+              <p class="dp-notes">Anchor task — drag to the calendar grid to schedule</p>
+              <RecurrencePicker :model-value="task.rrule ?? null" :start-time="''"
+                                @update:model-value="onAnchorRecurrenceChange" />
+            </template>
+            <template v-else>
+              <p style="font-size:12px; color:var(--fg-5); margin:0;">Not on calendar — drag onto the time grid to schedule</p>
             </template>
           </div>
-        </div>
+        </section>
 
-        <!-- Delete -->
-        <div class="mt-auto pt-4 border-t border-[--border-soft]">
-          <button
-            v-if="task?.anchor_id && !task?.start_time"
-            data-testid="delete-task-btn"
-            @click="onDeleteAnchorTask"
-            class="text-red-400 hover:text-red-300 text-sm">Delete task</button>
-          <button
-            v-else
-            data-testid="delete-task-btn"
-            @click="deleteTask"
-            class="text-red-400 hover:text-red-300 text-sm">Delete task</button>
-        </div>
+        <!-- Location / Schedule -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Location</span>
+          </header>
+          <div class="dp-section__body">
+            <template v-if="isBacklog">
+              <p style="font-size:12px;color:var(--fg-5);margin:0 0 6px;">Unscheduled (backlog)</p>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <input v-model="scheduleDate" type="date" class="dp-input" style="width:auto;" />
+                <select v-model="scheduleAnchor" class="dp-select">
+                  <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
+                </select>
+                <button @click="scheduleTask" class="dp-btn" style="background:var(--accent-veil);color:var(--accent);border-color:var(--accent-soft);">Schedule</button>
+              </div>
+            </template>
+            <template v-else>
+              <div class="dp-field">
+                <span class="dp-field__label">Date</span>
+                <input
+                  type="date"
+                  data-testid="reschedule-date"
+                  :value="taskPlanDate"
+                  @change="onRescheduleDate"
+                  class="dp-input"
+                  style="width:auto;" />
+              </div>
+              <div class="dp-field">
+                <span class="dp-field__label">Anchor</span>
+                <select :value="anchorId" @change="moveToAnchor(($event.target as HTMLSelectElement).value)" class="dp-select">
+                  <option v-for="a in anchorStore.anchors" :key="a.id" :value="a.id">{{ a.name }}</option>
+                </select>
+              </div>
+              <button @click="moveToBacklog" class="dp-link" style="margin-top:4px;">Move to backlog</button>
+            </template>
+          </div>
+        </section>
 
-        <!-- Scope dialog for anchor-task rrule edits (teleported to body) -->
-        <RecurrenceEditDialog
-          :visible="showAnchorScopeDialog"
-          mode="task"
-          action="edit"
-          @confirm="onAnchorScopeConfirm"
-          @cancel="onAnchorScopeCancel"
-        />
+        <!-- Description -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Description</span>
+          </header>
+          <div class="dp-section__body">
+            <textarea :value="task.description ?? ''" @blur="onDescBlur" rows="3"
+                      placeholder="Add a description…" class="dp-textarea" />
+          </div>
+        </section>
 
-        <!-- Scope dialog for anchor-task deletes (teleported to body) -->
-        <RecurrenceEditDialog
-          :visible="showAnchorDeleteDialog"
-          mode="task"
-          action="delete"
-          @confirm="onAnchorDeleteConfirm"
-          @cancel="onAnchorDeleteCancel"
-        />
+        <!-- Subtasks -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Subtasks</span>
+            <span class="dp-mono-faint">{{ subtasksDone }}/{{ subtasks.length }}</span>
+          </header>
+          <div class="dp-section__body">
+            <ul class="t-rows">
+              <li v-for="s in subtasks" :key="s.id" class="t-row" :data-motif="task.motif ?? 'anchor'">
+                <label style="display:contents;cursor:pointer;">
+                  <input type="checkbox" :checked="s.done" @change="updateSubtask(s.id, { done: !s.done })"
+                         style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;" />
+                  <span class="t-glyph" :data-status="s.done ? 'done' : 'todo'" />
+                  <span :style="s.done ? 'text-decoration:line-through;color:var(--fg-6);' : 'color:var(--fg-2);'"
+                        style="flex:1;font-size:12.5px;">{{ s.text }}</span>
+                </label>
+                <button @click="removeSubtask(s.id)"
+                        style="color:var(--fg-6);font-size:11px;background:none;border:none;cursor:pointer;padding:0 4px;">✕</button>
+              </li>
+            </ul>
+            <div style="display:flex;gap:8px;margin-top:4px;">
+              <input v-model="newSubtaskText" @keydown.enter="addSubtask" placeholder="Add subtask…"
+                     class="dp-input" style="flex:1;" />
+              <button @click="addSubtask" class="dp-link">Add</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Links -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Links</span>
+            <button @click="showAddLink = !showAddLink" class="dp-link">+ Add</button>
+          </header>
+          <div class="dp-section__body">
+            <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;">
+              <li v-for="l in links" :key="l.id" style="display:flex;align-items:center;gap:8px;">
+                <span style="flex-shrink:0;">{{ LINK_ICONS[l.category] ?? '📎' }}</span>
+                <a :href="l.url" target="_blank" class="dp-link" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ l.label || l.url }}</a>
+                <span style="font-size:10px;color:var(--fg-5);font-family:var(--font-mono);">{{ l.category }}</span>
+                <button @click="removeLink(l.id)" style="color:var(--fg-6);font-size:11px;background:none;border:none;cursor:pointer;">✕</button>
+              </li>
+            </ul>
+            <div v-if="showAddLink" style="display:flex;flex-direction:column;gap:6px;padding:10px;background:var(--bg-elev-2);border-radius:3px;border:1px solid var(--border-soft);">
+              <input v-model="newLinkUrl" placeholder="URL" class="dp-input" />
+              <input v-model="newLinkLabel" placeholder="Label (optional)" class="dp-input" />
+              <select v-model="newLinkCategory" class="dp-select">
+                <option value="document">Document</option>
+                <option value="meeting">Meeting</option>
+                <option value="pr">PR</option>
+                <option value="issue">Issue</option>
+                <option value="other">Other</option>
+              </select>
+              <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button @click="showAddLink = false" class="dp-link">Cancel</button>
+                <button @click="addLink" class="dp-btn" style="background:var(--bg-elev-3);color:var(--fg-2);border-color:var(--border-1);">Add</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Dependencies -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Dependencies</span>
+          </header>
+          <div class="dp-section__body">
+            <div class="dp-deps">
+              <div class="dp-deps__group">
+                <span class="dp-deps__lbl">Blocked by</span>
+                <span v-if="!deps.blocked_by.length" class="dp-deps__none">—</span>
+                <button v-for="d in deps.blocked_by" :key="d.id"
+                        @click="openDep(d.type, d.entity_id)"
+                        style="background:none;border:none;cursor:pointer;padding:0;">
+                  <span class="t-chip" :data-motif="d.type === 'milestone' ? 'launch' : 'quiet'">
+                    {{ d.name || depLabel(d.type, d.entity_id) }}
+                    <button @click.stop="removeDep(d.id)" style="color:var(--fg-6);background:none;border:none;cursor:pointer;font-size:10px;margin-left:2px;">✕</button>
+                  </span>
+                </button>
+              </div>
+              <div class="dp-deps__group">
+                <span class="dp-deps__lbl">Blocks</span>
+                <span v-if="!deps.blocks.length" class="dp-deps__none">—</span>
+                <button v-for="d in deps.blocks" :key="d.id"
+                        @click="openDep(d.type, d.entity_id)"
+                        style="background:none;border:none;cursor:pointer;padding:0;">
+                  <span class="t-chip" :data-motif="d.type === 'milestone' ? 'launch' : 'quiet'">
+                    {{ d.name || depLabel(d.type, d.entity_id) }}
+                    <button @click.stop="removeDep(d.id)" style="color:var(--fg-6);background:none;border:none;cursor:pointer;font-size:10px;margin-left:2px;">✕</button>
+                  </span>
+                </button>
+              </div>
+            </div>
+            <SearchAutocomplete :search-fn="searchForDependency" placeholder="Search tasks/milestones…" @select="addDependencyFromSearch" />
+          </div>
+        </section>
+
+        <!-- Milestones -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Milestones</span>
+          </header>
+          <div class="dp-section__body">
+            <span v-if="!(milestoneStore.taskMilestones[taskId] ?? []).length" style="font-size:12px;color:var(--fg-5);">None</span>
+            <button v-for="m in (milestoneStore.taskMilestones[taskId] ?? [])" :key="m.id"
+                    @click="openMilestone(m.id)"
+                    style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer;padding:3px 0;text-align:left;">
+              <span v-if="m.color" style="width:8px;height:8px;border-radius:50%;flex-shrink:0;" :style="{ background: m.color }" />
+              <span style="font-size:12.5px;" :style="m.color ? { color: m.color } : { color: 'var(--fg-2)' }">{{ m.name }}</span>
+              <span style="font-size:10px;font-family:var(--font-mono);color:var(--fg-5);">{{ m.status }}</span>
+            </button>
+            <SearchAutocomplete :search-fn="searchForMilestone" placeholder="Search milestones…" @select="linkMilestoneFromSearch" />
+          </div>
+        </section>
+
+        <!-- Context entries -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Context</span>
+          </header>
+          <div class="dp-section__body">
+            <span v-if="!contexts.length" style="font-size:12px;color:var(--fg-5);">None</span>
+            <div v-for="subject in contexts" :key="subject"
+                 style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;">
+              <router-link :to="'/context'" class="dp-link" style="font-size:inherit;">{{ subject }}</router-link>
+              <button @click="unlinkContext(subject)" style="color:var(--fg-6);background:none;border:none;cursor:pointer;font-size:11px;">✕</button>
+            </div>
+            <SearchAutocomplete :search-fn="searchForContext" placeholder="Link context entry…" @select="linkContextFromSearch" />
+          </div>
+        </section>
+
+        <!-- Follow-up config -->
+        <section class="dp-section">
+          <header class="dp-section__head">
+            <span class="dp-section__heading">Follow-up</span>
+            <button @click="showFollowup = !showFollowup" class="dp-link">{{ showFollowup ? 'Hide' : 'Edit' }}</button>
+          </header>
+          <div class="dp-section__body">
+            <p v-if="task.followup_config && !showFollowup" style="font-size:12px;color:var(--fg-4);margin:0;">
+              {{ task.followup_config.enabled ? `Enabled — pre every ${task.followup_config.pre_ack_interval_min}m` : 'Disabled (override)' }}
+            </p>
+            <p v-else-if="!task.followup_config && !showFollowup" style="font-size:12px;color:var(--fg-6);margin:0;font-style:italic;">Using anchor default</p>
+            <div v-if="showFollowup" style="display:flex;flex-direction:column;gap:8px;padding:10px;background:var(--bg-elev-2);border-radius:3px;border:1px solid var(--border-soft);">
+              <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--fg-3);">
+                <input type="checkbox" :checked="task.followup_config?.enabled ?? false"
+                       @change="(e) => toggleFollowup((e.target as HTMLInputElement).checked)" />
+                Override anchor follow-up
+              </label>
+              <template v-if="task.followup_config?.enabled">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <label style="font-size:11px;color:var(--fg-5);display:flex;flex-direction:column;gap:3px;">
+                    Pre interval (min)
+                    <input :value="task.followup_config.pre_ack_interval_min" type="number" min="1" class="dp-input"
+                           @change="patchFollowup({ pre_ack_interval_min: +($event.target as HTMLInputElement).value })" style="width:64px;" />
+                  </label>
+                  <label style="font-size:11px;color:var(--fg-5);display:flex;flex-direction:column;gap:3px;">
+                    Max pings
+                    <input :value="task.followup_config.pre_ack_max_pings" type="number" min="1" class="dp-input"
+                           @change="patchFollowup({ pre_ack_max_pings: +($event.target as HTMLInputElement).value })" style="width:64px;" />
+                  </label>
+                  <label style="font-size:11px;color:var(--fg-5);display:flex;flex-direction:column;gap:3px;">
+                    Post interval (min)
+                    <input :value="task.followup_config.post_ack_interval_min" type="number" min="1" class="dp-input"
+                           @change="patchFollowup({ post_ack_interval_min: +($event.target as HTMLInputElement).value })" style="width:64px;" />
+                  </label>
+                  <label style="font-size:11px;color:var(--fg-5);display:flex;flex-direction:column;gap:3px;">
+                    Post pings
+                    <input :value="task.followup_config.post_ack_pings" type="number" min="1" class="dp-input"
+                           @change="patchFollowup({ post_ack_pings: +($event.target as HTMLInputElement).value })" style="width:64px;" />
+                  </label>
+                </div>
+              </template>
+            </div>
+          </div>
+        </section>
+
+        <!-- Scope dialogs (teleported to body by RecurrenceEditDialog internally) -->
+        <RecurrenceEditDialog :visible="showAnchorScopeDialog" mode="task" action="edit"
+                              @confirm="onAnchorScopeConfirm" @cancel="onAnchorScopeCancel" />
+        <RecurrenceEditDialog :visible="showAnchorDeleteDialog" mode="task" action="delete"
+                              @confirm="onAnchorDeleteConfirm" @cancel="onAnchorDeleteCancel" />
 
       </template>
+    </div>
+
+    <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+    <footer class="dp-footer">
+      <template v-if="task">
+        <button
+          v-if="task?.anchor_id && !task?.start_time"
+          data-testid="delete-task-btn"
+          class="dp-btn dp-btn--ghost-danger"
+          @click="onDeleteAnchorTask">Delete</button>
+        <button
+          v-else
+          data-testid="delete-task-btn"
+          class="dp-btn dp-btn--ghost-danger"
+          @click="deleteTask">Delete</button>
+      </template>
+      <button v-else-if="taskEvent" class="dp-btn dp-btn--ghost-danger" @click="deleteTask">Delete</button>
+      <span v-else />
+      <span class="dp-footer__hint"><kbd>⌘</kbd><kbd>⌫</kbd></span>
+    </footer>
+
   </div>
 </template>

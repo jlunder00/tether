@@ -164,6 +164,28 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
+  /**
+   * PATCH arbitrary fields on a task. Applies optimistic update to the in-memory
+   * plan so the UI reflects the change immediately. Returns true on success.
+   *
+   * Components must route all task PATCHes through this action — never call
+   * api() directly from component script (standing rule).
+   */
+  async function patchTaskFields(taskId: string, fields: Record<string, unknown>): Promise<boolean> {
+    const resp = await api(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(fields),
+    })
+    if (resp.ok && plan.value) {
+      for (const anchor of Object.values(plan.value.anchors)) {
+        const task = anchor.tasks.find(t => t.id === taskId)
+        if (task) { Object.assign(task, fields); break }
+      }
+    }
+    return resp.ok
+  }
+
   function connectWebSocket() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(`${proto}://${location.host}/ws`)
@@ -180,6 +202,6 @@ export const usePlanStore = defineStore('plan', () => {
     fetchPlan, fetchSavedDates,
     goToPrevDay, goToNextDay, goToToday,
     fetchPlanRange, moveTask, reorderTask,
-    updateAnchorTasks, updateTaskStatus, connectWebSocket,
+    updateAnchorTasks, updateTaskStatus, patchTaskFields, connectWebSocket,
   }
 })
