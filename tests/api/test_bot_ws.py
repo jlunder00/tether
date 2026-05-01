@@ -110,8 +110,10 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
                 ws.send_json({"type": "user", "content": "plan my week"})
                 error_msg = ws.receive_json()
                 assert error_msg["type"] == "error"
-                # Must mention timeout / session state saved — not just "Internal error"
-                assert "timed out" in error_msg["message"].lower() or "timeout" in error_msg["message"].lower()
+                # Must mention timeout and saved state — not just "Internal error"
+                msg_lower = error_msg["message"].lower()
+                assert "timed out" in msg_lower or "timeout" in msg_lower
+                assert "state is saved" in msg_lower or "continue" in msg_lower
                 assert "Internal error" not in error_msg["message"]
 
                 # Second message — proves loop continued (connection still alive)

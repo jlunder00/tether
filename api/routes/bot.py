@@ -68,7 +68,7 @@ async def bot_chat(websocket: WebSocket,
                     await websocket.send_json({
                         "type": "error",
                         "message": (
-                            "Planning session timed out — your state is saved, "
+                            "Session timed out — your state is saved, "
                             "send another message to continue."
                         ),
                     })
