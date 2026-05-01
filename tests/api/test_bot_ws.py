@@ -62,7 +62,7 @@ def test_bot_ws_valid_cookie_accepted():
     app = _make_app()
     token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
 
-    async def fake_handle_message(content, send_fn, pool, user_id):
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None):
         send_fn("pong")
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
