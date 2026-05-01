@@ -62,6 +62,7 @@ async def bot_chat(websocket: WebSocket,
       {"type": "status"} frames immediately — no accumulation.
     - Session errors send {"type": "error"} + {"type": "done"} without
       closing the connection; the client can send another message.
+      TimeoutError gets a user-friendly message explaining state is preserved.
     - WebSocketDisconnect (client gone) cancels the running session_task
       and awaits it before returning (prevents orphaned LLM calls).
 
@@ -122,7 +123,7 @@ async def bot_chat(websocket: WebSocket,
                     ),
                     pool=pool,
                     user_id=user_id,
-                    vault=websocket.app.state.vault,
+                    vault=getattr(websocket.app.state, "vault", None),
                     status_fn=status_fn,
                 )
             )
@@ -193,6 +194,21 @@ async def bot_chat(websocket: WebSocket,
             # connection alive so the user can try another message.
             try:
                 response = session_task.result()
+            except TimeoutError:
+                # Session exceeded its per-intent timeout. The session manager has
+                # already closed the session on its end; state is preserved and the
+                # user can send another message to start a fresh session.
+                logger.warning("bot_chat: session timed out user_id=%s", user_id)
+                await websocket.send_json({
+                    "type": "error",
+                    "message": (
+                        "Session timed out — your state is saved, "
+                        "send another message to continue."
+                    ),
+                })
+                await websocket.send_json({"type": "done"})
+                session_task = None
+                continue
             except Exception as e:
                 logger.error(
                     "bot_chat: session raised for user_id=%s: %s",

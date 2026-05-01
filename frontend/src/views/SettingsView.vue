@@ -6,6 +6,7 @@ import { api } from '../lib/api'
 import GoogleCalendarSection from '../components/GoogleCalendarSection.vue'
 import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
+import ApiKeysSection from '../components/ApiKeysSection.vue'
 
 const auth = useAuthStore()
 
@@ -251,7 +252,7 @@ async function linkTelegram() {
               class="relative flex flex-col items-start gap-1.5 rounded-lg p-2.5 border transition-all text-left"
               :class="[
                 activeTheme === theme.id
-                  ? 'border-indigo-500 ring-1 ring-indigo-500'
+                  ? 'border-[--accent] ring-1 ring-[--accent]'
                   : 'border-[--border-1] hover:border-[--border-2]',
               ]"
             >
@@ -273,7 +274,7 @@ async function linkTelegram() {
           <!-- Upgrade nudge -->
           <div
             v-if="showUpgradeNudge"
-            class="flex items-center justify-between gap-3 rounded-lg bg-indigo-900/40 border border-indigo-700/50 px-3 py-2.5 text-sm"
+            class="flex items-center justify-between gap-3 rounded-lg bg-[--accent-veil] border border-[--accent-soft] px-3 py-2.5 text-sm"
           >
             <span class="text-[--fg-2]">
               <strong class="text-[--fg-1]">{{ upgradeNudgeTheme }}</strong> is a paid theme — upgrade to keep it.
@@ -332,13 +333,13 @@ async function linkTelegram() {
                 inputmode="numeric"
                 maxlength="6"
                 placeholder="123456"
-                class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="flex-1 bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
                 @keydown.enter="linkTelegram"
               />
               <button
                 @click="linkTelegram"
                 :disabled="telegramStatus === 'loading' || !telegramCode.trim()"
-                class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+                class="bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
               >
                 {{ telegramStatus === 'loading' ? '…' : 'Link' }}
               </button>
@@ -358,6 +359,9 @@ async function linkTelegram() {
 
       <!-- Anthropic Account Integration -->
       <AnthropicAccountSection />
+
+      <!-- API Keys -->
+      <ApiKeysSection />
 
       <!-- OAuth Connections -->
       <section class="mb-8">
@@ -404,7 +408,7 @@ async function linkTelegram() {
                 v-model.number="archiveDaysCompleted"
                 min="1"
                 placeholder="e.g. 7"
-                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
               />
               <p class="text-xs text-[--fg-5] mt-1">Archive nodes whose tasks are all done for X days</p>
             </div>
@@ -415,7 +419,7 @@ async function linkTelegram() {
                 v-model.number="archiveDaysInactive"
                 min="1"
                 placeholder="e.g. 30"
-                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 placeholder:text-[--fg-5]"
+                class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] placeholder:text-[--fg-5]"
               />
               <p class="text-xs text-[--fg-5] mt-1">Archive nodes with no updates for X days</p>
             </div>
@@ -424,7 +428,7 @@ async function linkTelegram() {
             <button
               @click="saveArchiveSettings"
               :disabled="archiveStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ archiveStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>
@@ -445,7 +449,7 @@ async function linkTelegram() {
             <label class="text-xs text-[--fg-4] mb-1 block">Preferred Backend</label>
             <select
               v-model="llmConfig.llm.preferred_backend"
-              class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+              class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
             >
               <option v-for="b in backendOptions" :key="b" :value="b">{{ b }}</option>
             </select>
@@ -459,7 +463,7 @@ async function linkTelegram() {
             </div>
             <button
               @click="llmConfig.llm.thinking_enabled = !llmConfig.llm.thinking_enabled"
-              :class="llmConfig.llm.thinking_enabled ? 'bg-indigo-600' : 'bg-[--bg-elev-3]'"
+              :class="llmConfig.llm.thinking_enabled ? 'bg-[--accent]' : 'bg-[--bg-elev-3]'"
               class="relative w-11 h-6 rounded-full transition-colors"
             >
               <span
@@ -497,7 +501,7 @@ async function linkTelegram() {
                   type="number"
                   v-model.number="llmConfig.llm.beacon_score_threshold"
                   min="1" max="50"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
                 />
               </div>
               <div>
@@ -506,7 +510,7 @@ async function linkTelegram() {
                   type="number"
                   v-model.number="llmConfig.llm.beacon_cooldown_minutes"
                   min="5" max="120"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent]"
                 />
               </div>
             </div>
@@ -516,7 +520,7 @@ async function linkTelegram() {
           <div class="border-t border-[--border-1] pt-3 mt-3">
             <button
               @click="showAdvanced = !showAdvanced"
-              class="text-sm text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+              class="text-sm text-[--accent] hover:opacity-80 flex items-center gap-1"
             >
               <span :class="showAdvanced ? 'rotate-90' : ''" class="transition-transform inline-block">&#9656;</span>
               Advanced: Model Assignments
@@ -527,7 +531,7 @@ async function linkTelegram() {
                 <input
                   type="text"
                   v-model="llmConfig.models[role]"
-                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-indigo-500 font-mono text-xs"
+                  class="w-full bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-2 text-sm border border-[--border-1] focus:outline-none focus:border-[--accent] font-mono text-xs"
                 />
               </div>
             </div>
@@ -538,7 +542,7 @@ async function linkTelegram() {
             <button
               @click="saveLLMConfig"
               :disabled="llmStatus === 'saving'"
-              class="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+              class="flex-1 bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
             >
               {{ llmStatus === 'saving' ? 'Saving...' : 'Save' }}
             </button>

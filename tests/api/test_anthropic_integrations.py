@@ -110,7 +110,7 @@ async def test_start_no_url_returns_502(auth_app_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_complete_success(auth_app_client, tmp_path):
+async def test_complete_success(auth_app_client):
     """Stash a fake pending entry; complete receives token from _complete_pexpect_sync and persists it."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
@@ -120,7 +120,6 @@ async def test_complete_success(auth_app_client, tmp_path):
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
-        "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
@@ -142,7 +141,7 @@ async def test_complete_success(auth_app_client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_path):
+async def test_complete_no_token_in_output_returns_error(auth_app_client):
     """If _complete_pexpect_sync finds no token it returns 'failed'; endpoint surfaces an error."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
@@ -151,7 +150,6 @@ async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_pa
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
-        "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
@@ -171,7 +169,7 @@ async def test_complete_no_token_in_output_returns_error(auth_app_client, tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_complete_success_does_not_log_token(auth_app_client, tmp_path, caplog):
+async def test_complete_success_does_not_log_token(auth_app_client, caplog):
     """The OAuth token must never appear in any log output, even at DEBUG level."""
     import logging
     import api.routes.integrations as ant_routes
@@ -188,7 +186,6 @@ async def test_complete_success_does_not_log_token(auth_app_client, tmp_path, ca
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
-        "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
@@ -228,7 +225,7 @@ async def test_complete_no_pending_returns_404(auth_app_client):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
+async def test_complete_process_timeout_returns_504(auth_app_client):
     """If _complete_pexpect_sync returns 'timeout', endpoint returns 504."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
@@ -237,7 +234,6 @@ async def test_complete_process_timeout_returns_504(auth_app_client, tmp_path):
 
     ant_routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
-        "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
@@ -336,7 +332,7 @@ async def test_start_requires_auth():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
+async def test_complete_broken_pipe_returns_502(auth_app_client):
     """If _complete_pexpect_sync returns 'error' (e.g. sendline failed), return 502."""
     import api.routes.integrations as routes
     client, mock_vault, app = auth_app_client
@@ -345,7 +341,6 @@ async def test_complete_broken_pipe_returns_502(auth_app_client, tmp_path):
 
     routes._pending_setups[TEST_USER_ID] = {
         "child": mock_child,
-        "temp_dir": str(tmp_path),
         "started_at": time.time(),
     }
 
@@ -409,3 +404,30 @@ async def test_cfg_vault_key_roundtrip(monkeypatch):
         await vault.store_initial("user1", {"oauth_token": "sk-ant-oat01-roundtrip"})
         async with vault.materialize("user1") as env:
             assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-roundtrip"}
+
+
+# ---------------------------------------------------------------------------
+# 10. /start pending entry must NOT contain temp_dir
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_start_pending_entry_has_no_temp_dir(auth_app_client):
+    """After /start succeeds, the pending entry must not have a 'temp_dir' key.
+    claude setup-token writes only to stdout — no filesystem temp dir needed.
+    """
+    import api.routes.integrations as ant_routes
+    client, mock_vault, app = auth_app_client
+
+    mock_child = MagicMock()
+    expected_url = "https://console.anthropic.com/oauth/authorize?code=abc"
+
+    with patch(
+        "api.routes.integrations._start_pexpect_sync",
+        return_value=(mock_child, expected_url),
+    ):
+        resp = await client.post("/api/integrations/anthropic/start")
+
+    assert resp.status_code == 200
+    entry = ant_routes._pending_setups.get(TEST_USER_ID)
+    assert entry is not None
+    assert "temp_dir" not in entry, "pending entry must not contain temp_dir after OAuth migration"

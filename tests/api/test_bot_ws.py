@@ -4,6 +4,8 @@ Tests cover:
 - Auth layer (cookie validation)
 - Status message immediate push
 - Parallel stop signal handling (asyncio.wait race)
+- Timeout error — user-friendly message, connection kept alive
+- Session error recovery — error+done frame, connection stays open
 - WebSocket disconnect cleanup
 """
 from __future__ import annotations
@@ -35,7 +37,7 @@ class _FakePool:
 @asynccontextmanager
 async def _noop_lifespan(app):
     app.state.pool = _FakePool()
-    app.state.vault = None   # Required by bot_chat: websocket.app.state.vault
+    app.state.vault = None  # vault not needed for these WS tests
     yield
 
 
@@ -74,7 +76,7 @@ def test_bot_ws_invalid_token_rejected_1008():
 
 
 # ---------------------------------------------------------------------------
-# Basic round-trip (updated for new handler: handle_message returns str|None)
+# Basic round-trip (redesigned handler: handle_message returns str|None)
 # ---------------------------------------------------------------------------
 
 def test_bot_ws_valid_cookie_accepted():
@@ -202,7 +204,7 @@ def test_multiple_status_messages_in_order():
 def test_stop_message_cancels_session():
     """Sending {"type": "stop"} while a session is running cancels it.
 
-    The mock holds on an asyncio.Event so the session never completes on its
+    The mock holds on an asyncio.sleep so the session never completes on its
     own.  The test sends stop immediately after the user message; the handler
     must cancel the session_task and reply with status("Stopped.") + done.
     """
@@ -267,7 +269,7 @@ def test_idle_stop_ignored():
 
 
 # ---------------------------------------------------------------------------
-# Disconnect cleanup
+# Input validation
 # ---------------------------------------------------------------------------
 
 def test_missing_content_sends_error_keeps_connection():
@@ -287,7 +289,7 @@ def test_missing_content_sends_error_keeps_connection():
                 ws.send_json({"type": "user"})  # missing content
                 error = ws.receive_json()
                 assert error["type"] == "error"
-                assert "content" in error["message"].lower() or "missing" in error["message"].lower()
+                assert "missing" in error["message"].lower() or "content" in error["message"].lower()
 
                 # Connection must still be alive — can send another message
                 ws.send_json({"type": "user", "content": "retry"})
@@ -297,8 +299,57 @@ def test_missing_content_sends_error_keeps_connection():
                 assert done["type"] == "done"
 
 
+# ---------------------------------------------------------------------------
+# Session error recovery — connection stays alive for all error types
+# ---------------------------------------------------------------------------
+
+def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
+    """When handle_message raises TimeoutError, the handler must:
+    1. Send a timeout-specific error message (not generic "Internal error").
+    2. NOT close the connection — continue the loop so the user can retry.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    call_count = 0
+
+    async def handle_first_timeouts_second_ok(content, send_fn, pool, user_id,
+                                               vault=None, status_fn=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise TimeoutError("session timed out")
+        return "recovered response"
+
+    with patch("api.routes.bot.handle_message", new=handle_first_timeouts_second_ok):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                # First message — triggers timeout
+                ws.send_json({"type": "user", "content": "plan my week"})
+                error_msg = ws.receive_json()
+                assert error_msg["type"] == "error"
+                msg_lower = error_msg["message"].lower()
+                assert "timed out" in msg_lower or "timeout" in msg_lower
+                assert "state is saved" in msg_lower or "continue" in msg_lower
+                assert "Internal error" not in error_msg["message"]
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+                # Second message — proves loop continued (connection still alive)
+                ws.send_json({"type": "user", "content": "try again"})
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                assert chunk["content"] == "recovered response"
+                done2 = ws.receive_json()
+                assert done2["type"] == "done"
+
+
 def test_session_error_sends_error_keeps_connection():
-    """If handle_message raises, the WS receives error+done and stays open."""
+    """If handle_message raises a non-timeout error, the WS receives error+done
+    and stays open — the redesigned handler is resilient for all error types."""
     app = _make_app()
     token = _valid_token()
 
@@ -331,6 +382,10 @@ def test_session_error_sends_error_keeps_connection():
                 done2 = ws.receive_json()
                 assert done2["type"] == "done"
 
+
+# ---------------------------------------------------------------------------
+# Disconnect cleanup
+# ---------------------------------------------------------------------------
 
 def test_disconnect_cancels_session_task():
     """WebSocketDisconnect while a session is running must cancel session_task.
