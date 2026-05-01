@@ -81,7 +81,7 @@ export const useMilestoneStore = defineStore('milestones', () => {
     return m
   }
 
-  async function patchMilestone(id: string, fields: Partial<Pick<Milestone, 'name' | 'description' | 'target_date' | 'status' | 'color' | 'motif'>>) {
+  async function patchMilestone(id: string, fields: Partial<Pick<Milestone, 'name' | 'description' | 'target_date' | 'status' | 'status_override' | 'color' | 'motif'>>) {
     const resp = await api(`/api/milestones/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
