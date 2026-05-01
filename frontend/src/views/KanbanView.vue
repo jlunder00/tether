@@ -137,11 +137,11 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
 </script>
 
 <template>
-  <div class="h-screen bg-gray-900 text-white p-6 flex flex-col overflow-hidden">
+  <div class="h-screen bg-[--bg-canvas] text-[--fg-1] p-6 flex flex-col overflow-hidden">
     <h1 class="text-2xl font-bold mb-4 flex-shrink-0">Kanban</h1>
 
-    <div v-if="kanbanStore.loading || kanbanStore.tasksLoading" class="text-white/40 text-sm">Loading...</div>
-    <div v-else-if="kanbanStore.error" class="text-red-400 text-sm">{{ kanbanStore.error }}</div>
+    <div v-if="kanbanStore.loading || kanbanStore.tasksLoading" class="text-[--fg-4] text-sm">Loading...</div>
+    <div v-else-if="kanbanStore.error" class="text-[--status-block-fg] text-sm">{{ kanbanStore.error }}</div>
 
     <div v-else class="flex gap-4 overflow-x-auto flex-1 min-h-0">
       <KanbanColumn

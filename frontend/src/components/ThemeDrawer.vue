@@ -124,7 +124,7 @@ watch(() => props.modelValue, async (open) => {
               class="relative flex flex-col items-start gap-1.5 rounded-lg p-2.5 border transition-all text-left"
               :class="[
                 activeTheme === theme.id
-                  ? 'border-indigo-500 ring-1 ring-indigo-500'
+                  ? 'border-[--accent] ring-1 ring-[--accent]'
                   : 'border-[--border-1] hover:border-[--border-2]',
               ]"
             >

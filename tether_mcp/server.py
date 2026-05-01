@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import date as date_type, datetime
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server.fastmcp import FastMCP
 
@@ -19,13 +20,35 @@ async def _get_pool() -> pg.asyncpg.Pool:
     return _pool
 
 
+def _resolve_tz(tz_str: str) -> tuple[ZoneInfo, str]:
+    """Resolve an IANA timezone string to (ZoneInfo, canonical_name).
+
+    Falls back to UTC when the string is empty or invalid — LLM-provided
+    values may be malformed and we must never raise here.
+    """
+    utc = ZoneInfo("UTC")
+    if not tz_str:
+        return utc, "UTC"
+    try:
+        return ZoneInfo(tz_str), tz_str
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
+        return utc, "UTC"
+
+
 def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict:
     if now is None:
         now = datetime.now()
     today = now.date()
+
     def anchor_start(a: dict) -> datetime:
         h, m = map(int, a["time"].split(":"))
-        return datetime(today.year, today.month, today.day, h, m)
+        dt = datetime(today.year, today.month, today.day, h, m)
+        # When now is timezone-aware, build an aware anchor_start in the same zone
+        # so the >= comparison doesn't raise TypeError.
+        if now.tzinfo is not None:
+            dt = dt.replace(tzinfo=now.tzinfo)
+        return dt
+
     active = anchors[0]
     for anchor in anchors:
         if now >= anchor_start(anchor):
@@ -125,24 +148,57 @@ async def read_tasks(
 
 
 @mcp.tool()
-async def get_plan(date: str = "") -> dict:
-    """Get structured daily plan with anchor-grouped tasks. Default=today."""
+async def get_plan(date: str = "", client_timezone: str = "") -> dict:
+    """Get structured daily plan with anchor-grouped tasks. Default=today.
+
+    client_timezone: IANA timezone string (e.g. 'America/Los_Angeles').
+    When provided and date is omitted, the plan date is resolved using the
+    client's local date rather than the server's (UTC) date.
+    """
     from db.pg_queries import get_plan as _get_plan
-    d = date or str(date_type.today())
+    if date:
+        d = date
+    elif client_timezone:
+        tz, _ = _resolve_tz(client_timezone)
+        d = str(datetime.now(tz).date())
+    else:
+        d = str(date_type.today())
     pool = await _get_pool()
     async with pg.get_conn(pool, get_user_id()) as conn:
         return await _get_plan(conn, d)
 
 
 @mcp.tool()
-async def get_anchors() -> dict:
-    """Get all anchor definitions + currently active anchor."""
+async def get_anchors(client_timezone: str = "") -> dict:
+    """Get all anchor definitions + currently active anchor.
+
+    client_timezone: IANA timezone string (e.g. 'America/Los_Angeles').
+    When provided, the active anchor is determined using the client's local
+    time. Falls back to UTC when absent or invalid — the response always
+    includes a timezone_used field indicating which zone was applied.
+
+    Each anchor in the anchors list includes an is_current: bool field.
+    The top-level current field holds the active anchor (back-compat).
+    """
     from db.pg_queries import get_anchors as _get_anchors_db
+    tz, tz_name = _resolve_tz(client_timezone)
+    now = datetime.now(tz)
+
     pool = await _get_pool()
     async with pg.get_conn(pool, get_user_id()) as conn:
         anchors = await _get_anchors_db(conn)
-    current = _current_anchor(anchors) if anchors else None
-    return {"anchors": anchors, "current": current}
+
+    current = _current_anchor(anchors, now=now) if anchors else None
+
+    # Annotate each anchor with is_current and return enriched copies so the
+    # original dicts fetched from DB are not mutated.
+    current_id = current["anchor_id"] if current else None
+    anchors_out = [
+        {**a, "is_current": (a["anchor_id"] == current_id)}
+        for a in anchors
+    ]
+
+    return {"anchors": anchors_out, "current": current, "timezone_used": tz_name}
 
 
 @mcp.tool()

@@ -80,38 +80,38 @@ onMounted(fetchInvites)
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6">
     <div class="max-w-lg mx-auto">
       <!-- Header -->
       <div class="flex items-center gap-3 mb-8">
-        <router-link to="/" class="text-white/40 hover:text-white text-sm">← Back</router-link>
+        <router-link to="/" class="text-[--fg-4] hover:text-[--fg-1] text-sm">← Back</router-link>
         <h1 class="text-xl font-bold">Admin</h1>
       </div>
 
       <!-- Generate Invite -->
       <section class="mb-8">
-        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Generate Invite</h2>
-        <div class="bg-gray-800 rounded-xl p-4">
+        <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Generate Invite</h2>
+        <div class="bg-[--bg-elev-1] rounded-xl p-4">
           <button
             @click="generateInvite"
             :disabled="inviteLoading"
-            class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors"
+            class="bg-[--accent] hover:opacity-90 disabled:opacity-50 text-[--accent-fg] text-sm font-medium rounded-lg px-4 py-2 transition-colors"
           >
             {{ inviteLoading ? 'Generating…' : 'Generate Invite Link' }}
           </button>
 
-          <div v-if="inviteError" class="mt-3 text-red-400 text-sm">{{ inviteError }}</div>
+          <div v-if="inviteError" class="mt-3 text-[--status-block-fg] text-sm">{{ inviteError }}</div>
 
           <div v-if="inviteLink" class="mt-3">
             <div class="flex items-center gap-2">
               <input
                 :value="inviteLink"
                 readonly
-                class="flex-1 bg-gray-700 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 focus:outline-none font-mono truncate"
+                class="flex-1 bg-[--bg-elev-2] text-[--fg-1] text-sm rounded-lg px-3 py-2 border border-[--border-1] focus:outline-none font-mono truncate"
               />
               <button
                 @click="copyInviteLink"
-                class="bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg px-3 py-2 border border-gray-600 transition-colors whitespace-nowrap"
+                class="bg-[--bg-elev-2] hover:bg-[--bg-elev-3] text-[--fg-1] text-sm rounded-lg px-3 py-2 border border-[--border-1] transition-colors whitespace-nowrap"
               >
                 {{ invitesCopied ? 'Copied!' : 'Copy' }}
               </button>
@@ -122,23 +122,23 @@ onMounted(fetchInvites)
 
       <!-- Invite Tokens List -->
       <section class="mb-8">
-        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Invite Tokens</h2>
-        <div class="bg-gray-800 rounded-xl overflow-hidden">
-          <div v-if="listLoading" class="p-4 text-white/40 text-sm">Loading…</div>
-          <div v-else-if="listError" class="p-4 text-red-400 text-sm">{{ listError }}</div>
-          <div v-else-if="invites.length === 0" class="p-4 text-white/40 text-sm">No invites yet.</div>
+        <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Invite Tokens</h2>
+        <div class="bg-[--bg-elev-1] rounded-xl overflow-hidden">
+          <div v-if="listLoading" class="p-4 text-[--fg-4] text-sm">Loading…</div>
+          <div v-else-if="listError" class="p-4 text-[--status-block-fg] text-sm">{{ listError }}</div>
+          <div v-else-if="invites.length === 0" class="p-4 text-[--fg-4] text-sm">No invites yet.</div>
           <div v-else>
             <div
               v-for="invite in invites"
               :key="invite.token"
-              class="flex items-center justify-between px-4 py-3 border-b border-gray-700/60 last:border-0"
+              class="flex items-center justify-between px-4 py-3 border-b border-[--border-1] last:border-0"
             >
               <div>
-                <div class="font-mono text-sm text-white/80">{{ invite.token.slice(0, 8) }}…</div>
-                <div class="text-xs text-white/40 mt-0.5">{{ formatDate(invite.created_at) }}</div>
+                <div class="font-mono text-sm text-[--fg-2]">{{ invite.token.slice(0, 8) }}…</div>
+                <div class="text-xs text-[--fg-4] mt-0.5">{{ formatDate(invite.created_at) }}</div>
               </div>
               <span
-                :class="invite.used_by ? 'bg-gray-700 text-white/40' : 'bg-green-900/40 text-green-400'"
+                :class="invite.used_by ? 'bg-[--bg-elev-2] text-[--fg-4]' : 'bg-[--status-done-bg] text-[--status-done-fg]'"
                 class="text-xs font-medium px-2 py-0.5 rounded-full"
               >
                 {{ invite.used_by ? 'Used' : 'Unused' }}
@@ -150,9 +150,9 @@ onMounted(fetchInvites)
 
       <!-- User Management -->
       <section class="mb-8">
-        <h2 class="text-sm font-semibold text-white/50 uppercase tracking-wider mb-3">Users</h2>
-        <div class="bg-gray-800 rounded-xl p-4">
-          <p class="text-sm text-white/40">User management coming soon.</p>
+        <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Users</h2>
+        <div class="bg-[--bg-elev-1] rounded-xl p-4">
+          <p class="text-sm text-[--fg-4]">User management coming soon.</p>
         </div>
       </section>
     </div>
