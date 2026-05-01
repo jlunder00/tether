@@ -1,18 +1,27 @@
-"""Tests for /api/bot/chat WebSocket authentication (cookie-based).
+"""Tests for /api/bot/chat WebSocket handler.
 
-These tests do not require a database — they exercise the auth layer only.
+Tests cover:
+- Auth layer (cookie validation)
+- Status message immediate push
+- Parallel stop signal handling (asyncio.wait race)
+- Timeout error — user-friendly message, connection kept alive
+- Session error recovery — error+done frame, connection stays open
+- WebSocket disconnect cleanup
 """
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
+from contextlib import asynccontextmanager
+from unittest.mock import patch
+
+import pytest
+from starlette.testclient import TestClient
+
 os.environ.setdefault("TETHER_DISABLE_RATE_LIMITS", "1")
 os.environ.setdefault("TETHER_COOKIE_SECURE", "false")
 os.environ.setdefault("TETHER_JWT_SECRET", "test-secret-for-ws-tests")
-
-from contextlib import asynccontextmanager
-from unittest.mock import patch
-import pytest
-from starlette.testclient import TestClient
 
 from api.auth import create_jwt
 
@@ -37,6 +46,14 @@ def _make_app():
     return create_app(lifespan_override=_noop_lifespan)
 
 
+def _valid_token():
+    return create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
+
+
+# ---------------------------------------------------------------------------
+# Auth tests
+# ---------------------------------------------------------------------------
+
 def test_bot_ws_no_cookie_rejected_1008():
     """Connecting to /api/bot/chat without a cookie must be rejected with 1008."""
     app = _make_app()
@@ -58,13 +75,21 @@ def test_bot_ws_invalid_token_rejected_1008():
                 ws.receive_text()
 
 
-def test_bot_ws_valid_cookie_accepted():
-    """Connecting with a valid JWT cookie must be accepted; messages round-trip."""
-    app = _make_app()
-    token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
+# ---------------------------------------------------------------------------
+# Basic round-trip (redesigned handler: handle_message returns str|None)
+# ---------------------------------------------------------------------------
 
-    async def fake_handle_message(content, send_fn, pool, user_id, vault=None):
-        send_fn("pong")
+def test_bot_ws_valid_cookie_accepted():
+    """A valid JWT allows connection; a user message produces chunk + done.
+
+    The redesigned handler uses handle_message's *return value* as the chunk
+    content — send_fn is a no-op on WebSocket.  The mock must return a string.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        return "pong"
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -75,30 +100,226 @@ def test_bot_ws_valid_cookie_accepted():
                 ws.send_json({"type": "user", "content": "ping"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
+                assert chunk["content"] == "pong"
                 done = ws.receive_json()
                 assert done["type"] == "done"
 
+
+def test_bot_ws_none_response_skips_chunk():
+    """When handle_message returns None, no chunk frame is sent — just done."""
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        return None
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "hello"})
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Status messages — pushed immediately, not accumulated
+# ---------------------------------------------------------------------------
+
+def test_status_messages_pushed_immediately():
+    """status_fn pushes a status frame before the session completes.
+
+    The test verifies that the client receives:
+      1. {"type": "status", "content": "Working on it..."}
+      2. {"type": "chunk", "content": "final answer"}
+      3. {"type": "done"}
+    in that order — confirming real-time push rather than accumulation.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_with_status(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        if status_fn is not None:
+            await status_fn("Working on it...")
+        return "final answer"
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_with_status):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "plan my day"})
+
+                status = ws.receive_json()
+                assert status["type"] == "status"
+                assert status["content"] == "Working on it..."
+
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                assert chunk["content"] == "final answer"
+
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+def test_multiple_status_messages_in_order():
+    """Multiple status_fn calls are delivered in emission order."""
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_multi_status(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        if status_fn is not None:
+            await status_fn("Step 1: Reading tasks")
+            await status_fn("Step 2: Rescheduling blocks")
+        return "done planning"
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_multi_status):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "plan"})
+
+                s1 = ws.receive_json()
+                assert s1 == {"type": "status", "content": "Step 1: Reading tasks"}
+
+                s2 = ws.receive_json()
+                assert s2 == {"type": "status", "content": "Step 2: Rescheduling blocks"}
+
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Stop signal — parallel recv_task race
+# ---------------------------------------------------------------------------
+
+def test_stop_message_cancels_session():
+    """Sending {"type": "stop"} while a session is running cancels it.
+
+    The mock holds on an asyncio.sleep so the session never completes on its
+    own.  The test sends stop immediately after the user message; the handler
+    must cancel the session_task and reply with status("Stopped.") + done.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    # session_cancelled is set when the mock's CancelledError fires.
+    session_cancelled = threading.Event()
+
+    async def fake_long_session(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        try:
+            await asyncio.sleep(30)  # Long enough that stop fires first
+        except asyncio.CancelledError:
+            session_cancelled.set()
+            raise
+        return "this should never arrive"
+
+    with patch("api.routes.bot.handle_message", new=fake_long_session):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "plan my week"})
+                ws.send_json({"type": "stop"})
+
+                status = ws.receive_json()
+                assert status["type"] == "status"
+                assert status["content"] == "Stopped."
+
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+    # Give the background task a moment to propagate CancelledError
+    session_cancelled.wait(timeout=3)
+    assert session_cancelled.is_set(), "session_task was not cancelled on stop"
+
+
+def test_idle_stop_ignored():
+    """A stop message when no session is running must be silently ignored."""
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        return "ok"
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                # Send idle stop — handler must ignore it, loop must not crash
+                ws.send_json({"type": "stop"})
+
+                # Now send a real user message — should still work normally
+                ws.send_json({"type": "user", "content": "hello"})
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+def test_missing_content_sends_error_keeps_connection():
+    """A user message without 'content' sends error frame but does NOT close the WS."""
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        return "ok"
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user"})  # missing content
+                error = ws.receive_json()
+                assert error["type"] == "error"
+                assert "missing" in error["message"].lower() or "content" in error["message"].lower()
+
+                # Connection must still be alive — can send another message
+                ws.send_json({"type": "user", "content": "retry"})
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Session error recovery — connection stays alive for all error types
+# ---------------------------------------------------------------------------
 
 def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
     """When handle_message raises TimeoutError, the handler must:
     1. Send a timeout-specific error message (not generic "Internal error").
     2. NOT close the connection — continue the loop so the user can retry.
-
-    The loop continuing is proven by sending a second message successfully
-    after the timeout. The second call raises WebSocketDisconnect to end
-    the test cleanly.
     """
     app = _make_app()
-    token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
+    token = _valid_token()
 
     call_count = 0
 
-    async def handle_first_timeouts_second_ok(content, send_fn, pool, user_id, vault=None):
+    async def handle_first_timeouts_second_ok(content, send_fn, pool, user_id,
+                                               vault=None, status_fn=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise TimeoutError("session timed out")
-        send_fn("recovered response")
+        return "recovered response"
 
     with patch("api.routes.bot.handle_message", new=handle_first_timeouts_second_ok):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -110,63 +331,93 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
                 ws.send_json({"type": "user", "content": "plan my week"})
                 error_msg = ws.receive_json()
                 assert error_msg["type"] == "error"
-                # Must mention timeout and saved state — not just "Internal error"
                 msg_lower = error_msg["message"].lower()
                 assert "timed out" in msg_lower or "timeout" in msg_lower
                 assert "state is saved" in msg_lower or "continue" in msg_lower
                 assert "Internal error" not in error_msg["message"]
+                done = ws.receive_json()
+                assert done["type"] == "done"
 
                 # Second message — proves loop continued (connection still alive)
                 ws.send_json({"type": "user", "content": "try again"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                assert chunk["content"] == "recovered response"
+                done2 = ws.receive_json()
+                assert done2["type"] == "done"
 
 
-def test_bot_ws_non_timeout_exception_closes_connection():
-    """Non-timeout exceptions must still close the connection (existing behavior preserved).
-
-    When a non-timeout exception escapes handle_message, bot_chat re-raises it so
-    Starlette tears down the WebSocket. The test verifies the connection is closed
-    (either the receive raises or the connection context raises) — the key invariant
-    is that the loop does NOT continue and accept another message.
-    """
+def test_session_error_sends_error_keeps_connection():
+    """If handle_message raises a non-timeout error, the WS receives error+done
+    and stays open — the redesigned handler is resilient for all error types."""
     app = _make_app()
-    token = create_jwt(TEST_USER_ID, TEST_USERNAME, is_admin=False)
+    token = _valid_token()
 
     call_count = 0
 
-    async def handle_raises_then_succeeds(content, send_fn, pool, user_id, vault=None):
+    async def fake_handle_that_raises(content, send_fn, pool, user_id, vault=None, status_fn=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise RuntimeError("unexpected internal failure")
-        # Should never reach here — loop must be terminated by the re-raise
-        send_fn("should not arrive")
+            raise RuntimeError("simulated session failure")
+        return "recovered"
 
-    with patch("api.routes.bot.handle_message", new=handle_raises_then_succeeds):
+    with patch("api.routes.bot.handle_message", new=fake_handle_that_raises):
         with TestClient(app, raise_server_exceptions=False) as client:
-            connection_closed = False
-            try:
-                with client.websocket_connect(
-                    "/api/bot/chat",
-                    cookies={"tether_token": token},
-                ) as ws:
-                    ws.send_json({"type": "user", "content": "hello"})
-                    # The server re-raises RuntimeError, closing the connection.
-                    # Starlette may surface this as a closed-resource error on receive
-                    # or as an exception when the context manager exits.
-                    try:
-                        ws.receive_json()
-                    except Exception:
-                        connection_closed = True
-            except Exception:
-                connection_closed = True
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "first message"})
+                error = ws.receive_json()
+                assert error["type"] == "error"
+                done = ws.receive_json()
+                assert done["type"] == "done"
 
-    assert connection_closed, "Connection must be closed after a non-timeout exception"
-    # Crucially: handle_message was only called once — the loop did NOT continue
-    assert call_count == 1, (
-        f"handle_message must only be called once; got {call_count} calls — "
-        "loop must not continue after non-timeout errors"
-    )
+                # Connection must still be alive — next message works
+                ws.send_json({"type": "user", "content": "second message"})
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                assert chunk["content"] == "recovered"
+                done2 = ws.receive_json()
+                assert done2["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Disconnect cleanup
+# ---------------------------------------------------------------------------
+
+def test_disconnect_cancels_session_task():
+    """WebSocketDisconnect while a session is running must cancel session_task.
+
+    We verify this by checking that the mock's CancelledError branch fires
+    (session_cancelled is set) after the client disconnects.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    session_started = threading.Event()
+    session_cancelled = threading.Event()
+
+    async def fake_long_session(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        session_started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            session_cancelled.set()
+            raise
+        return "unreachable"
+
+    with patch("api.routes.bot.handle_message", new=fake_long_session):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "plan my day"})
+                # Wait until the session is running before disconnecting
+                session_started.wait(timeout=3)
+            # Exiting the `with ws` block closes the WebSocket
+
+    session_cancelled.wait(timeout=3)
+    assert session_cancelled.is_set(), "session_task was not cancelled on disconnect"
