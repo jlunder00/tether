@@ -1066,11 +1066,27 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
                     loop = mgr._loop
                     if loop and loop.is_running():
                         import asyncio as _asyncio
-                        _asyncio.run_coroutine_threadsafe(session.interrupt(), loop).result(timeout=5)
-                        _asyncio.run_coroutine_threadsafe(session.mark_interrupted(), loop).result(timeout=5)
-                    stopped = True
+                        fut_interrupt = _asyncio.run_coroutine_threadsafe(session.interrupt(), loop)
+                        try:
+                            fut_interrupt.result(timeout=5)
+                        except TimeoutError:
+                            fut_interrupt.cancel()
+                            logger.error("handle_message: /stop — interrupt timed out, future cancelled")
+                            send_fn("Could not stop the session in time — it may be stuck. Try again or wait for it to finish.")
+                            return
+                        fut_mark = _asyncio.run_coroutine_threadsafe(session.mark_interrupted(), loop)
+                        try:
+                            fut_mark.result(timeout=5)
+                        except TimeoutError:
+                            fut_mark.cancel()
+                            logger.error("handle_message: /stop — mark_interrupted timed out, future cancelled")
+                        stopped = True
+        except TimeoutError:
+            pass  # already handled above
         except Exception as _e:
-            logger.warning("handle_message: /stop error: %s", _e)
+            logger.error("handle_message: /stop error: %s", _e, exc_info=True)
+            send_fn("Stop attempt failed — the session may still be running.")
+            return
         if stopped:
             send_fn("Stopped. Send your next message to continue.")
         else:
