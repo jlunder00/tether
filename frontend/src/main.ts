@@ -5,6 +5,7 @@ import router from './router'
 import './assets/themes.css'
 import './assets/motifs.css'
 import './assets/theme-distinctives.css'
+import './assets/detail-panel.css'
 import './style.css'
 
 // Boot: apply saved theme + mode before Vue mounts (prevents flash)
