@@ -117,41 +117,41 @@ async function onAnchorColumnDrop(e: DragEvent) {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-900 text-white p-6">
+  <div class="min-h-screen bg-[--bg-canvas] text-[--fg-1] p-6">
     <div class="flex items-center justify-between mb-6">
       <div>
         <div class="flex items-center gap-2 mt-1">
           <template v-if="props.view === 'day'">
             <button @click="prevDay"
-                    class="text-white/40 hover:text-white text-lg leading-none px-1">‹</button>
+                    class="text-[--fg-4] hover:text-[--fg-1] text-lg leading-none px-1">‹</button>
             <span class="text-sm font-medium min-w-[90px] text-center">{{ displayDate }}</span>
             <button @click="nextDay"
-                    class="text-white/40 hover:text-white text-lg leading-none px-1">›</button>
+                    class="text-[--fg-4] hover:text-[--fg-1] text-lg leading-none px-1">›</button>
             <button v-if="!isToday" @click="goToday"
-                    class="text-xs text-white/40 hover:text-white ml-1 border border-white/20 rounded px-2 py-0.5">
+                    class="text-xs text-[--fg-4] hover:text-[--fg-1] ml-1 border border-[--border-1] rounded px-2 py-0.5">
               Today
             </button>
           </template>
           <template v-else>
-            <span class="text-sm text-white/50">{{ props.view === 'week' ? 'Week' : 'Month' }} view</span>
+            <span class="text-sm text-[--fg-3]">{{ props.view === 'week' ? 'Week' : 'Month' }} view</span>
           </template>
         </div>
       </div>
       <div class="flex items-center gap-3">
         <!-- Zoom controls -->
-        <div class="flex gap-1 bg-white/5 rounded-lg p-0.5">
+        <div class="flex gap-1 bg-[--bg-elev-1] rounded-lg p-0.5">
           <router-link :to="'/plan/day/' + activeDate"
-                       :class="props.view === 'day' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/70'"
+                       :class="props.view === 'day' ? 'bg-[--bg-elev-2] text-[--fg-1]' : 'text-[--fg-4] hover:text-[--fg-2]'"
                        class="px-2.5 py-1 rounded text-xs uppercase font-medium transition-colors">
             D
           </router-link>
           <router-link :to="'/plan/week/' + activeDate"
-                       :class="props.view === 'week' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/70'"
+                       :class="props.view === 'week' ? 'bg-[--bg-elev-2] text-[--fg-1]' : 'text-[--fg-4] hover:text-[--fg-2]'"
                        class="px-2.5 py-1 rounded text-xs uppercase font-medium transition-colors">
             W
           </router-link>
           <router-link :to="'/plan/month/' + activeDate"
-                       :class="props.view === 'month' ? 'bg-white/20 text-white' : 'text-white/40 hover:text-white/70'"
+                       :class="props.view === 'month' ? 'bg-[--bg-elev-2] text-[--fg-1]' : 'text-[--fg-4] hover:text-[--fg-2]'"
                        class="px-2.5 py-1 rounded text-xs uppercase font-medium transition-colors">
             M
           </router-link>
@@ -167,7 +167,7 @@ async function onAnchorColumnDrop(e: DragEvent) {
 
     <!-- Day view: two-column layout -->
     <template v-else>
-      <div v-if="planStore.loading" class="text-white/40">Loading...</div>
+      <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
       <!-- Two-column: anchor blocks left, day timeline right -->
       <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
         <!-- Left: anchor blocks -->

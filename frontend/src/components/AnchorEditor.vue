@@ -49,11 +49,11 @@ async function save() {
 </script>
 
 <template>
-  <div class="bg-white/5 border rounded-xl p-4 flex flex-col gap-3"
-       :class="isPending ? 'border-blue-400/40' : 'border-white/10'">
+  <div class="bg-[--bg-elev-1] border rounded-xl p-4 flex flex-col gap-3"
+       :class="isPending ? 'border-blue-400/40' : 'border-[--border-soft]'">
     <div class="flex items-center gap-3">
       <input v-model="draft.name" placeholder="Anchor name"
-             class="bg-transparent font-semibold text-white flex-1 outline-none border-b border-white/20 pb-0.5"
+             class="bg-transparent font-semibold text-[--fg-1] flex-1 outline-none border-b border-[--border-1] pb-0.5"
              :class="isPending ? 'border-blue-400/40' : ''" />
     </div>
     <div data-testid="anchor-motif-picker">
@@ -64,33 +64,33 @@ async function save() {
     </div>
 
     <div class="grid grid-cols-4 gap-3 text-sm">
-      <label class="flex flex-col gap-1 text-white/50">
+      <label class="flex flex-col gap-1 text-[--fg-3]">
         Start
         <input v-model="draft.time" type="time"
-               class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
+               class="bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-1.5 outline-none" />
       </label>
-      <label class="flex flex-col gap-1 text-white/50">
+      <label class="flex flex-col gap-1 text-[--fg-3]">
         End
         <input :value="endTime" @change="endTime = ($event.target as HTMLInputElement).value" type="time"
-               class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none" />
+               class="bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-1.5 outline-none" />
       </label>
-      <label class="flex flex-col gap-1 text-white/50">
+      <label class="flex flex-col gap-1 text-[--fg-3]">
         Duration
         <div class="flex items-center gap-1">
           <input :value="Math.floor(draft.duration_minutes / 60)" type="number" min="0" max="23"
                  @change="draft.duration_minutes = +($event.target as HTMLInputElement).value * 60 + (draft.duration_minutes % 60)"
-                 class="bg-white/10 text-white rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
-          <span class="text-white/30 text-xs">h</span>
+                 class="bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
+          <span class="text-[--fg-5] text-xs">h</span>
           <input :value="draft.duration_minutes % 60" type="number" min="0" max="59" step="5"
                  @change="draft.duration_minutes = Math.floor(draft.duration_minutes / 60) * 60 + +($event.target as HTMLInputElement).value"
-                 class="bg-white/10 text-white rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
-          <span class="text-white/30 text-xs">m</span>
+                 class="bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-2 py-1.5 outline-none w-12 text-center" />
+          <span class="text-[--fg-5] text-xs">m</span>
         </div>
       </label>
-      <label class="flex flex-col gap-1 text-white/50">
+      <label class="flex flex-col gap-1 text-[--fg-3]">
         Flexibility
         <select v-model="draft.flexibility"
-                class="bg-white/10 text-white rounded-lg px-3 py-1.5 outline-none">
+                class="bg-[--bg-elev-2] text-[--fg-1] rounded-lg px-3 py-1.5 outline-none">
           <option value="locked">Locked</option>
           <option value="flexible">Flexible</option>
           <option value="skippable">Skippable</option>
@@ -100,10 +100,10 @@ async function save() {
 
     <!-- Follow-up config section -->
     <details v-if="!isPending" class="text-sm">
-      <summary class="cursor-pointer text-white/50 hover:text-white/80 select-none py-1">
+      <summary class="cursor-pointer text-[--fg-3] hover:text-[--fg-2] select-none py-1">
         Follow-up config
       </summary>
-      <div class="mt-2 space-y-3 bg-white/5 rounded-lg p-3">
+      <div class="mt-2 space-y-3 bg-[--bg-elev-1] rounded-lg p-3">
         <label class="flex items-center gap-2">
           <input type="checkbox"
                  :checked="draft.followup_config?.enabled ?? false"
@@ -115,29 +115,29 @@ async function save() {
                          post_ack_interval_min: 15, post_ack_pings: 2 }
                  }"
                  class="accent-blue-400" />
-          <span class="text-white/70">Enable follow-up pings</span>
+          <span class="text-[--fg-2]">Enable follow-up pings</span>
         </label>
         <template v-if="draft.followup_config?.enabled">
           <div class="grid grid-cols-2 gap-3">
-            <label class="flex flex-col gap-1 text-white/50 text-xs">
+            <label class="flex flex-col gap-1 text-[--fg-3] text-xs">
               Pre-ack interval (min)
               <input v-model.number="draft.followup_config.pre_ack_interval_min" type="number" min="1"
-                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+                     class="bg-[--bg-elev-2] text-[--fg-1] rounded px-2 py-1 outline-none" />
             </label>
-            <label class="flex flex-col gap-1 text-white/50 text-xs">
+            <label class="flex flex-col gap-1 text-[--fg-3] text-xs">
               Max pre-ack pings
               <input v-model.number="draft.followup_config.pre_ack_max_pings" type="number" min="1"
-                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+                     class="bg-[--bg-elev-2] text-[--fg-1] rounded px-2 py-1 outline-none" />
             </label>
-            <label class="flex flex-col gap-1 text-white/50 text-xs">
+            <label class="flex flex-col gap-1 text-[--fg-3] text-xs">
               Post-ack interval (min)
               <input v-model.number="draft.followup_config.post_ack_interval_min" type="number" min="1"
-                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+                     class="bg-[--bg-elev-2] text-[--fg-1] rounded px-2 py-1 outline-none" />
             </label>
-            <label class="flex flex-col gap-1 text-white/50 text-xs">
+            <label class="flex flex-col gap-1 text-[--fg-3] text-xs">
               Post-ack pings
               <input v-model.number="draft.followup_config.post_ack_pings" type="number" min="1"
-                     class="bg-white/10 text-white rounded px-2 py-1 outline-none" />
+                     class="bg-[--bg-elev-2] text-[--fg-1] rounded px-2 py-1 outline-none" />
             </label>
           </div>
         </template>
@@ -147,22 +147,22 @@ async function save() {
     <div class="flex items-center gap-2 justify-between">
       <div v-if="!isPending" class="flex gap-1">
         <button @click="emit('moveUp', anchor.id)" title="Move up"
-                class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▲</button>
+                class="px-2 py-1.5 bg-[--bg-elev-2] hover:bg-[--bg-elev-3] rounded-lg text-sm text-[--fg-3]">▲</button>
         <button @click="emit('moveDown', anchor.id)" title="Move down"
-                class="px-2 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg text-sm text-white/50">▼</button>
+                class="px-2 py-1.5 bg-[--bg-elev-2] hover:bg-[--bg-elev-3] rounded-lg text-sm text-[--fg-3]">▼</button>
       </div>
       <div v-else />
       <div class="flex gap-2">
         <button v-if="isPending" @click="emit('discard')"
-                class="px-4 py-1.5 bg-white/10 hover:bg-white/20 text-white/50 rounded-lg text-sm">
+                class="px-4 py-1.5 bg-[--bg-elev-2] hover:bg-[--bg-elev-3] text-[--fg-3] rounded-lg text-sm">
           Cancel
         </button>
         <button v-if="!isPending" @click="emit('delete', anchor.id)"
-                class="px-4 py-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 rounded-lg text-sm">
+                class="px-4 py-1.5 bg-[--status-block-bg] hover:opacity-80 text-[--status-block-fg] rounded-lg text-sm">
           Delete
         </button>
         <button @click="save" :disabled="saving || !draft.name || !draft.time"
-                class="px-4 py-1.5 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-lg text-sm disabled:opacity-30">
+                class="px-4 py-1.5 bg-[--status-doing-bg] hover:opacity-80 text-[--status-doing-fg] rounded-lg text-sm disabled:opacity-30">
           {{ isPending ? 'Create' : (saving ? 'Saving…' : 'Save') }}
         </button>
       </div>

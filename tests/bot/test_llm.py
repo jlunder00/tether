@@ -143,51 +143,62 @@ class TestPipelineBackendSDKMigration:
 # ---------------------------------------------------------------------------
 
 class TestAnthropicBackend:
-    def test_unavailable_when_no_token_and_no_api_key(self, monkeypatch, tmp_path):
-        from bot.llm import AnthropicBackend
+    def test_unavailable_when_no_token_and_no_api_key(self, monkeypatch):
+        from bot.llm import AnthropicBackend, _llm_env_extras
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        b = AnthropicBackend(credentials_path=str(tmp_path / "nonexistent.json"))
-        assert b.is_available() is False
-
-    def test_available_when_api_key_set(self, monkeypatch, tmp_path):
-        from bot.llm import AnthropicBackend
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
-        b = AnthropicBackend(credentials_path=str(tmp_path / "nonexistent.json"))
-        assert b.is_available() is True
-
-    def test_available_when_valid_credentials_file_exists(self, tmp_path, monkeypatch):
-        import json, time
-        from bot.llm import AnthropicBackend
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        creds = {"claudeAiOauth": {
-            "accessToken": "tok",
-            "refreshToken": "ref",
-            "expiresAt": int(time.time() * 1000) + 3_600_000,  # 1h from now
-        }}
-        creds_file = tmp_path / ".credentials.json"
-        creds_file.write_text(json.dumps(creds))
-        b = AnthropicBackend(credentials_path=str(creds_file))
-        assert b.is_available() is True
-
-    def test_unavailable_when_credentials_expired_and_refresh_fails(self, tmp_path, monkeypatch):
-        import json, time
-        import unittest.mock as mock
-        from bot.llm import AnthropicBackend
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        creds = {"claudeAiOauth": {
-            "accessToken": "tok",
-            "refreshToken": "ref",
-            "expiresAt": int(time.time() * 1000) - 1000,  # expired
-        }}
-        creds_file = tmp_path / ".credentials.json"
-        creds_file.write_text(json.dumps(creds))
-        # Mock refresh to fail so get_valid_token returns None
-        with mock.patch("requests.post") as mock_post:
-            mock_post.return_value.ok = False
-            mock_post.return_value.status_code = 401
-            mock_post.return_value.text = "Unauthorized"
-            b = AnthropicBackend(credentials_path=str(creds_file))
+        token = _llm_env_extras.set(None)
+        try:
+            b = AnthropicBackend()
             assert b.is_available() is False
+        finally:
+            _llm_env_extras.reset(token)
+
+    def test_available_when_api_key_set(self, monkeypatch):
+        from bot.llm import AnthropicBackend, _llm_env_extras
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-key")
+        token = _llm_env_extras.set(None)
+        try:
+            b = AnthropicBackend()
+            assert b.is_available() is True
+        finally:
+            _llm_env_extras.reset(token)
+
+    def test_available_when_valid_oauth_token_in_env_extras(self, monkeypatch):
+        from bot.llm import AnthropicBackend, _llm_env_extras
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        token = _llm_env_extras.set({"CLAUDE_CODE_OAUTH_TOKEN": "fake-tok"})
+        try:
+            b = AnthropicBackend()
+            assert b.is_available() is True
+        finally:
+            _llm_env_extras.reset(token)
+
+    def test_get_oauth_token_does_not_use_bot_oauth_module(self, monkeypatch):
+        """_get_oauth_token must read _llm_env_extras, not import bot.oauth."""
+        import sys
+        from bot.llm import AnthropicBackend, _llm_env_extras
+
+        # Poison bot.oauth in sys.modules so any import attempt raises
+        sys.modules["bot.oauth"] = None  # type: ignore[assignment]
+        try:
+            token = _llm_env_extras.set({"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test"})
+            try:
+                b = AnthropicBackend()
+                result = b._get_oauth_token()
+                assert result == "sk-ant-test"
+            finally:
+                _llm_env_extras.reset(token)
+        finally:
+            sys.modules.pop("bot.oauth", None)
+
+    def test_no_credentials_path_param(self):
+        """AnthropicBackend() must not accept a credentials_path parameter."""
+        from bot.llm import AnthropicBackend
+        import inspect
+        sig = inspect.signature(AnthropicBackend.__init__)
+        assert "credentials_path" not in sig.parameters, (
+            "credentials_path param must be removed from AnthropicBackend.__init__"
+        )
 
 
 # ---------------------------------------------------------------------------
