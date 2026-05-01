@@ -91,6 +91,9 @@ describe('useApiKeysStore', () => {
 
       expect(store.createdKey).not.toBeNull()
       expect(store.createdKey?.raw_key).toBe('ttr_efgh_supersecret')
+      // raw_key must NOT be stored in the keys[] list (security invariant)
+      expect(store.keys).toHaveLength(1)
+      expect(store.keys[0]).not.toHaveProperty('raw_key')
     })
 
     it('sets error on failure', async () => {
