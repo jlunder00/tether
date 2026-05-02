@@ -28,11 +28,17 @@ export function useDropZone<TContext = unknown>(options: UseDropZoneOptions<TCon
   // Counter tracks nested dragenter/dragleave so child elements don't flicker isOver
   let enterCount = 0
 
+  // onDragEnter fires ONCE per element entered — use it for the counter.
+  // onDragOver fires continuously (~60fps) — only preventDefault + dropEffect here.
+  function onDragEnter(evt: DragEvent) {
+    evt.preventDefault()
+    enterCount++
+    isOver.value = true
+  }
+
   function onDragOver(evt: DragEvent) {
     evt.preventDefault()
     if (evt.dataTransfer) evt.dataTransfer.dropEffect = 'move'
-    enterCount++
-    isOver.value = true
   }
 
   function onDragLeave() {
@@ -60,6 +66,6 @@ export function useDropZone<TContext = unknown>(options: UseDropZoneOptions<TCon
 
   return {
     isOver,
-    dropHandlers: { onDragOver, onDragLeave, onDrop },
+    dropHandlers: { onDragEnter, onDragOver, onDragLeave, onDrop },
   }
 }

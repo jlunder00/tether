@@ -33,17 +33,26 @@ describe('useDropZone', () => {
     expect(isOver.value).toBe(false)
   })
 
-  it('onDragOver sets isOver to true and calls preventDefault', () => {
+  it('onDragEnter sets isOver to true and calls preventDefault', () => {
+    const { isOver, dropHandlers } = useDropZone({ onDrop: vi.fn() })
+    const evt = makeDragEvent()
+    dropHandlers.onDragEnter(evt)
+    expect(isOver.value).toBe(true)
+    expect(evt.preventDefault).toHaveBeenCalled()
+  })
+
+  it('onDragOver calls preventDefault but does NOT change isOver', () => {
     const { isOver, dropHandlers } = useDropZone({ onDrop: vi.fn() })
     const evt = makeDragEvent()
     dropHandlers.onDragOver(evt)
-    expect(isOver.value).toBe(true)
+    // dragover alone should not set isOver — only dragenter does
+    expect(isOver.value).toBe(false)
     expect(evt.preventDefault).toHaveBeenCalled()
   })
 
   it('onDragLeave sets isOver to false after single enter', () => {
     const { isOver, dropHandlers } = useDropZone({ onDrop: vi.fn() })
-    dropHandlers.onDragOver(makeDragEvent())
+    dropHandlers.onDragEnter(makeDragEvent())
     expect(isOver.value).toBe(true)
     dropHandlers.onDragLeave()
     expect(isOver.value).toBe(false)
@@ -51,9 +60,9 @@ describe('useDropZone', () => {
 
   it('requires matching onDragLeave calls to clear isOver (enter counter pattern)', () => {
     const { isOver, dropHandlers } = useDropZone({ onDrop: vi.fn() })
-    // Simulate entering parent then child — 2 enter events
-    dropHandlers.onDragOver(makeDragEvent())
-    dropHandlers.onDragOver(makeDragEvent())
+    // Simulate entering parent then child — 2 dragenter events
+    dropHandlers.onDragEnter(makeDragEvent())
+    dropHandlers.onDragEnter(makeDragEvent())
     dropHandlers.onDragLeave()
     expect(isOver.value).toBe(true)  // still inside, one enter outstanding
     dropHandlers.onDragLeave()
@@ -63,7 +72,7 @@ describe('useDropZone', () => {
   it('onDrop calls preventDefault, resets isOver, parses payload, calls onDrop callback', () => {
     const onDrop = vi.fn()
     const { isOver, dropHandlers } = useDropZone({ onDrop })
-    dropHandlers.onDragOver(makeDragEvent())
+    dropHandlers.onDragEnter(makeDragEvent())
     const payload = { type: 'task', taskId: 'task-1', title: 'Do thing' }
     const evt = makeDragEvent(JSON.stringify(payload))
     dropHandlers.onDrop(evt)
@@ -109,7 +118,7 @@ describe('useDropZone', () => {
     expect(isOver.value).toBe(false)
   })
 
-  it('sets dropEffect to "move" on dragover when dataTransfer present', () => {
+  it('sets dropEffect to "move" on onDragOver when dataTransfer present', () => {
     const { dropHandlers } = useDropZone({ onDrop: vi.fn() })
     const evt = makeDragEvent()
     dropHandlers.onDragOver(evt)
