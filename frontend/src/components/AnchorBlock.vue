@@ -197,6 +197,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <template v-for="mg in ctx.milestoneGroups" :key="mg.milestone.id">
             <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                  :data-task-id="task.id"
+                 draggable="true"
                  @dragstart="onDragStart($event, task)"
                  @dragover.prevent
                  @drop.stop.prevent="onDrop($event, i)">
@@ -206,6 +207,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
           </template>
           <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
                :data-task-id="task.id"
+               draggable="true"
                @dragstart="onDragStart($event, task)"
                @dragover.prevent
                @drop.stop.prevent="onDrop($event, i)">
@@ -240,6 +242,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
             <template v-if="mg.tasks.length === 1">
               <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                    :data-task-id="task.id"
+                   draggable="true"
                    @dragstart="onDragStart($event, task)"
                    @dragover.prevent
                    @drop.stop.prevent="onDrop($event, i)">
@@ -256,6 +259,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
               @header-click="pushPanel({ kind: 'milestone', entityId: mg.milestone.id })">
               <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                    :data-task-id="task.id"
+                   draggable="true"
                    @dragstart="onDragStart($event, task)"
                    @dragover.prevent
                    @drop.stop.prevent="onDrop($event, i)">
@@ -273,6 +277,7 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <!-- Ungrouped tasks within this context -->
           <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
                :data-task-id="task.id"
+               draggable="true"
                @dragstart="onDragStart($event, task)"
                @dragover.prevent
                @drop.stop.prevent="onDrop($event, i)">

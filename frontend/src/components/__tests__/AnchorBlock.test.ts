@@ -56,4 +56,24 @@ describe('AnchorBlock', () => {
     const w = await mountBlock({ isLast: false })
     expect(w.find('[data-testid="anchor-line"]').exists()).toBe(true)
   })
+
+  it('task wrapper divs have draggable="true" so DnD can initiate', async () => {
+    // Seed the plan store with one task in the target anchor
+    const { usePlanStore } = await import('../../stores/plan')
+    const store = usePlanStore()
+    store.plan = {
+      date: '2026-05-01',
+      anchors: {
+        a1: {
+          tasks: [{ id: 'task-1', text: 'Draggable task', status: 'pending', position: 0 } as any],
+          notes: '',
+        },
+      },
+    } as any
+
+    const w = await mountBlock()
+    const wrapper = w.find('[data-task-id="task-1"]')
+    expect(wrapper.exists()).toBe(true)
+    expect(wrapper.attributes('draggable')).toBe('true')
+  })
 })
