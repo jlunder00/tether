@@ -3,7 +3,6 @@ import { onMounted, computed } from 'vue'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { useKanbanStore, type KanbanTask } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
-import type { TaskStatus } from '../stores/plan'
 import { api } from '../lib/api'
 import { useSlideOver } from '../composables/useSlideOver'
 
@@ -41,58 +40,8 @@ async function onAddTask(columnId: string, opts: { context_subject?: string; mil
   }
 }
 
-const VALID_STATUSES: Set<string> = new Set(['pending', 'in_progress', 'done', 'skipped', 'blocked'])
-const pendingDrops = new Set<string>()
-
 async function onTaskDrop(taskId: string, columnId: string) {
-  if (pendingDrops.has(taskId)) return // ignore while a drop is in-flight for this task
-
-  const column = kanbanStore.columns.find(c => c.id === columnId)
-  if (!column) return
-
-  const task = kanbanStore.allTasks.find(t => t.id === taskId)
-  if (!task) return
-
-  const rules = column.entry_rules
-  const setStatus = rules['set_status']
-  if (typeof setStatus !== 'string') return
-  if (!VALID_STATUSES.has(setStatus)) return
-
-  // Build the patch — status change + schedule/unschedule
-  const patch: Record<string, unknown> = {}
-  if (task.status !== setStatus) patch.status = setStatus
-  if (rules['prompt_schedule'] && !task.plan_date) {
-    patch.plan_date = new Date().toISOString().slice(0, 10) // default to today
-  }
-  if (rules['unschedule'] && task.plan_date) {
-    patch.plan_date = null
-    patch.anchor_id = null
-  }
-
-  if (!Object.keys(patch).length) return
-
-  // Optimistic update
-  const oldStatus = task.status
-  const oldPlanDate = task.plan_date
-  if (patch.status) task.status = patch.status as TaskStatus
-  if ('plan_date' in patch) task.plan_date = patch.plan_date as string | null
-  pendingDrops.add(taskId)
-
-  try {
-    const resp = await api(`/api/tasks/${taskId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    })
-    if (!resp.ok) throw new Error(`PATCH failed: ${resp.status}`)
-  } catch (e) {
-    console.error('Failed to update task:', e)
-    task.status = oldStatus
-    task.plan_date = oldPlanDate
-    await kanbanStore.fetchAllTasks()
-  } finally {
-    pendingDrops.delete(taskId)
-  }
+  await kanbanStore.moveTaskToColumn(taskId, columnId)
 }
 
 /** For each column, evaluate match rules against all tasks. First matching column wins. */

@@ -8,6 +8,7 @@ import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { Milestone } from '../stores/milestones'
 import { api } from '../lib/api'
+import { useDropZone } from '../composables/useDropZone'
 import { useSlideOver } from '../composables/useSlideOver'
 
 const { push: pushPanel } = useSlideOver()
@@ -135,17 +136,28 @@ async function onAddNewTask(opts: { context_subject?: string; milestone_id?: str
 }
 
 // ── Drag and drop (native HTML5 DnD) ─────────────────────────────────────────
-// Drag handle removed; these handlers remain on wrapper divs for future card-level DnD.
+
+// Track which task is being dragged for source hiding via v-show.
+const draggingTaskId = ref<string | null>(null)
 
 function onDragStart(evt: DragEvent, task: Task) {
   if (!task.id) { evt.preventDefault(); return }
-  evt.dataTransfer!.effectAllowed = 'move'
-  evt.dataTransfer!.setData('text/plain', JSON.stringify({
+  // Set draggingTaskId first — source hiding must work even if dataTransfer is unavailable
+  draggingTaskId.value = task.id
+  if (!evt.dataTransfer) return
+  evt.dataTransfer.effectAllowed = 'move'
+  // Superset payload — includes type + title for composable compatibility
+  evt.dataTransfer.setData('text/plain', JSON.stringify({
+    type: 'task',
     taskId: task.id,
     title: task.text,
     fromAnchorId: props.anchorId,
     fromDate: effectiveDate.value,
   }))
+}
+
+function onDragEnd() {
+  draggingTaskId.value = null
 }
 
 function onDrop(evt: DragEvent, toIndex: number) {
@@ -161,6 +173,22 @@ function onDrop(evt: DragEvent, toIndex: number) {
     }
   } catch { /* ignore malformed data from other drag sources */ }
 }
+
+// ── Container-level drop zone (fixes empty-anchor drop bug) ──────────────────
+// When anchor has no tasks, there are no per-task wrapper drop zones. The
+// container drop zone catches those drops and appends the task.
+const { isOver: isContainerOver, dropHandlers: containerDropHandlers } = useDropZone({
+  onDrop(payload) {
+    const p = payload as { taskId?: string; fromAnchorId?: string; fromDate?: string }
+    if (!p.taskId) return
+    const toIndex = anchorPlan.value.tasks.length
+    if (p.fromAnchorId === props.anchorId && p.fromDate === effectiveDate.value) {
+      store.reorderTask(p.taskId, effectiveDate.value, props.anchorId, toIndex)
+    } else {
+      store.moveTask(p.taskId, p.fromDate ?? '', p.fromAnchorId ?? '', effectiveDate.value, props.anchorId, toIndex)
+    }
+  },
+})
 </script>
 
 <template>
@@ -183,8 +211,13 @@ function onDrop(evt: DragEvent, toIndex: number) {
       />
     </div>
 
-    <!-- Card content -->
-    <div class="min-w-0">
+    <!-- Card content — also serves as the container-level drop zone for empty anchors -->
+    <div class="min-w-0 transition-colors rounded"
+         :class="isContainerOver ? 'ring-1 ring-[--accent] bg-[--accent-veil]' : ''"
+         @dragenter="containerDropHandlers.onDragEnter"
+         @dragover="containerDropHandlers.onDragOver"
+         @dragleave="containerDropHandlers.onDragLeave"
+         @drop="containerDropHandlers.onDrop">
   <GroupContainer :label="`${anchorName} · ${time}`" :collapsible="true" :level="0">
     <template #header-right>
       <span class="text-xs text-[--fg-5]">{{ anchorPlan.tasks.length }}</span>
@@ -198,7 +231,9 @@ function onDrop(evt: DragEvent, toIndex: number) {
             <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                  :data-task-id="task.id"
                  draggable="true"
+                 v-show="draggingTaskId !== task.id"
                  @dragstart="onDragStart($event, task)"
+                 @dragend="onDragEnd"
                  @dragover.prevent
                  @drop.stop.prevent="onDrop($event, i)">
               <TaskCard class="min-w-0" :task="task" :hideTags="false"
@@ -208,7 +243,9 @@ function onDrop(evt: DragEvent, toIndex: number) {
           <div v-for="{ task, index: i } in ctx.ungrouped" :key="task.id || i"
                :data-task-id="task.id"
                draggable="true"
+               v-show="draggingTaskId !== task.id"
                @dragstart="onDragStart($event, task)"
+               @dragend="onDragEnd"
                @dragover.prevent
                @drop.stop.prevent="onDrop($event, i)">
             <TaskCard class="min-w-0" :task="task" :hideTags="false"

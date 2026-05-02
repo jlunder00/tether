@@ -65,7 +65,7 @@ describe('KanbanColumn drop target', () => {
     expect(body.classes()).toContain('ring-2')
   })
 
-  it('removes highlight after final dragleave (counter pattern)', async () => {
+  it('removes highlight after final dragleave (useDropZone counter pattern)', async () => {
     await body.trigger('dragenter')
     await body.trigger('dragenter')
     await body.trigger('dragleave')

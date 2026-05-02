@@ -8,6 +8,7 @@ import { useEventStore } from '../stores/events'
 import { useSlideOver } from '../composables/useSlideOver'
 import AnchorBlock from '../components/AnchorBlock.vue'
 import PlanWeekView from '../components/plan/PlanWeekView.vue'
+import MiniCalendar from '../components/plan/MiniCalendar.vue'
 import MonthView from '../components/MonthView.vue'
 import DayTimeline from '../components/DayTimeline.vue'
 import type { CalendarEvent } from '../types/events'
@@ -159,43 +160,54 @@ async function onAnchorColumnDrop(e: DragEvent) {
       </div>
     </div>
 
-    <!-- Week view: anchor rows × day columns grid -->
-    <PlanWeekView v-if="props.view === 'week'" />
+    <!-- Month view: full-width, no sidebar -->
+    <MonthView v-if="props.view === 'month'" />
 
-    <!-- Month view -->
-    <MonthView v-else-if="props.view === 'month'" />
-
-    <!-- Day view: two-column layout -->
-    <template v-else>
-      <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
-      <!-- Two-column: anchor blocks left, day timeline right -->
-      <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
-        <!-- Left: anchor blocks -->
-        <div
-          class="flex flex-col"
-          @dragover.prevent
-          @drop="onAnchorColumnDrop"
-        >
-          <AnchorBlock
-            v-for="(anchor, i) in anchorStore.anchors"
-            :key="anchor.id"
-            :anchor-id="anchor.id"
-            :anchor-name="anchor.name"
-            :time="anchor.time"
-            :color="anchor.color"
-            :motif="anchor.motif"
-            :is-now="anchorStates.get(anchor.id) === 'now'"
-            :is-past="anchorStates.get(anchor.id) === 'past'"
-            :is-last="i === anchorStore.anchors.length - 1" />
-        </div>
-        <!-- Right: day timeline -->
-        <DayTimeline
-          :date="activeDate"
-          @create-at="onCreateAt"
-          @open-event="onOpenEvent"
-        />
+    <!-- Week + Day views: shared flex layout with MiniCalendar sidebar -->
+    <div v-else class="flex gap-4 items-start">
+      <!-- Mini calendar sidebar — reschedule tasks by dropping onto a day -->
+      <div class="flex-shrink-0">
+        <MiniCalendar />
       </div>
-    </template>
+
+      <!-- Main view content -->
+      <div class="flex-1 min-w-0">
+        <!-- Week view: anchor rows × day columns grid -->
+        <PlanWeekView v-if="props.view === 'week'" />
+
+        <!-- Day view: two-column layout -->
+        <template v-else>
+          <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
+          <!-- Two-column: anchor blocks left, day timeline right -->
+          <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
+            <!-- Left: anchor blocks -->
+            <div
+              class="flex flex-col"
+              @dragover.prevent
+              @drop="onAnchorColumnDrop"
+            >
+              <AnchorBlock
+                v-for="(anchor, i) in anchorStore.anchors"
+                :key="anchor.id"
+                :anchor-id="anchor.id"
+                :anchor-name="anchor.name"
+                :time="anchor.time"
+                :color="anchor.color"
+                :motif="anchor.motif"
+                :is-now="anchorStates.get(anchor.id) === 'now'"
+                :is-past="anchorStates.get(anchor.id) === 'past'"
+                :is-last="i === anchorStore.anchors.length - 1" />
+            </div>
+            <!-- Right: day timeline -->
+            <DayTimeline
+              :date="activeDate"
+              @create-at="onCreateAt"
+              @open-event="onOpenEvent"
+            />
+          </div>
+        </template>
+      </div>
+    </div>
 
     <!-- Child route detail panels -->
     <router-view />

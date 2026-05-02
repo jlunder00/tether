@@ -87,12 +87,11 @@ describe('PlanWeekCell', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
-  it('sets dragover class on dragover and clears it on dragleave', async () => {
+  it('sets ring class on dragenter and clears it on dragleave', async () => {
     const wrapper = await mountCell()
     const dropZone = wrapper.find('[data-testid="week-cell-drop"]')
 
-    const dt = { getData: vi.fn(() => ''), dropEffect: 'copy' }
-    await dropZone.trigger('dragover', { dataTransfer: dt })
+    await dropZone.trigger('dragenter')
     expect(dropZone.classes()).toContain('ring-1')
 
     await dropZone.trigger('dragleave')
