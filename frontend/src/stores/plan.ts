@@ -160,7 +160,8 @@ export const usePlanStore = defineStore('plan', () => {
         if (!targetDay.anchors[anchorId]) {
           targetDay.anchors[anchorId] = { tasks: [], notes: '' }
         }
-        targetDay.anchors[anchorId].tasks.push({ ...foundTask })
+        // Include updated anchor_id so the task reflects its new home in cache
+        targetDay.anchors[anchorId].tasks.push({ ...foundTask, anchor_id: anchorId })
       }
     }
 

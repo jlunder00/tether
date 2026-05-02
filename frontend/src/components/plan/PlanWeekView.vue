@@ -9,6 +9,8 @@ const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 
 // ── Week navigation ────────────────────────────────────────────────────────────
+// Plan week view is intentionally Mon–Sun (spec requirement).
+// CalendarView uses Sun–Sat; these are different products with different needs.
 function getMonday(dateStr: string): Date {
   const d = new Date(dateStr + 'T12:00:00')
   const day = d.getDay()
@@ -63,8 +65,10 @@ function nextWeek() {
 }
 
 // ── Data loading ───────────────────────────────────────────────────────────────
+// fetchPlanRange populates planStore.plans (the keyed cache). fetchPlan would
+// clobber planStore.plan and activeDate — not what we want in week view.
 async function loadWeek() {
-  await Promise.all(weekDates.value.map(d => planStore.fetchPlan(d)))
+  await planStore.fetchPlanRange(weekDates.value[0], weekDates.value[6])
 }
 
 onMounted(() => {
