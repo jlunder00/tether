@@ -113,6 +113,65 @@ export const usePlanStore = defineStore('plan', () => {
     })
   }
 
+  /**
+   * Move a task to a new date/anchor cell. PATCHes both plan_date and anchor_id
+   * atomically (Track B confirmed both fields are accepted). Optimistically
+   * removes the task from its source cell (scans all cached plans + the active
+   * plan) and inserts it into the target cell if that day is already cached.
+   */
+  async function moveTaskToAnchor({
+    taskId,
+    newDate,
+    anchorId,
+  }: { taskId: string; newDate: string; anchorId: string }) {
+    // --- Optimistic update ---
+    // Find task in any cached plan and remove it from its source anchor.
+    let foundTask: Task | undefined
+
+    // Search plans range cache first
+    for (const dayPlan of Object.values(plans.value)) {
+      for (const anchorPlan of Object.values(dayPlan.anchors)) {
+        const idx = anchorPlan.tasks.findIndex(t => t.id === taskId)
+        if (idx !== -1) {
+          foundTask = anchorPlan.tasks[idx]
+          anchorPlan.tasks.splice(idx, 1)
+          break
+        }
+      }
+      if (foundTask) break
+    }
+
+    // Fall back to the active single-day plan
+    if (!foundTask && plan.value) {
+      for (const anchorPlan of Object.values(plan.value.anchors)) {
+        const idx = anchorPlan.tasks.findIndex(t => t.id === taskId)
+        if (idx !== -1) {
+          foundTask = anchorPlan.tasks[idx]
+          anchorPlan.tasks.splice(idx, 1)
+          break
+        }
+      }
+    }
+
+    // Insert into target cell if that day is already in the range cache
+    if (foundTask) {
+      const targetDay = plans.value[newDate]
+      if (targetDay) {
+        if (!targetDay.anchors[anchorId]) {
+          targetDay.anchors[anchorId] = { tasks: [], notes: '' }
+        }
+        targetDay.anchors[anchorId].tasks.push({ ...foundTask })
+      }
+    }
+
+    // --- API call (plan_date + anchor_id — Track B confirmed both fields work) ---
+    await api(`/api/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan_date: newDate, anchor_id: anchorId }),
+    })
+  }
+
   async function reorderTask(taskUuid: string, date: string, anchorId: string, newPosition: number) {
     const dayPlan = plans.value[date] ?? (date === activeDate.value ? plan.value : null)
     if (!dayPlan?.anchors[anchorId]) return
@@ -202,7 +261,7 @@ export const usePlanStore = defineStore('plan', () => {
     plan, loading, today, activeDate, savedDates, plans,
     fetchPlan, fetchSavedDates,
     goToPrevDay, goToNextDay, goToToday,
-    fetchPlanRange, moveTask, reorderTask,
+    fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
     updateAnchorTasks, updateTaskStatus, patchTaskFields, connectWebSocket,
   }
 })
