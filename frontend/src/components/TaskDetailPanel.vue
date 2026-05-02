@@ -202,7 +202,9 @@ async function onRescheduleDate(e: Event) {
   const newDate = (e.target as HTMLInputElement).value
   if (!newDate || newDate === taskPlanDate.value) return
   await planStore.moveTask(props.taskId, taskPlanDate.value, anchorId.value, newDate, anchorId.value)
-  await planStore.fetchPlan(newDate)
+  // Refresh the current day (no arg) — passing newDate would change activeDate and
+  // cause AnchorBlock to show the destination day's content under the wrong URL.
+  await planStore.fetchPlan()
 }
 
 // Delete

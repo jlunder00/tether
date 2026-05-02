@@ -93,17 +93,18 @@ export const usePlanStore = defineStore('plan', () => {
     toDate: string, toAnchor: string,
     position?: number,
   ) {
-    // Optimistic update in plans cache
+    // Optimistic update in plans cache — each side is independent so that
+    // moving to an uncached date still removes the task from the visible plan.
     const fromDay = plans.value[fromDate] ?? (fromDate === activeDate.value ? plan.value : null)
-    const toDay = plans.value[toDate] ?? (toDate === activeDate.value ? plan.value : null)
-    if (fromDay && toDay) {
-      const task = fromDay.anchors[fromAnchor]?.tasks.find(t => t.id === taskUuid)
-      if (task) {
-        fromDay.anchors[fromAnchor].tasks = fromDay.anchors[fromAnchor].tasks.filter(t => t.id !== taskUuid)
-        if (!toDay.anchors[toAnchor]) toDay.anchors[toAnchor] = { tasks: [], notes: '' }
-        const pos = position ?? toDay.anchors[toAnchor].tasks.length
-        toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
-      }
+    const toDay   = plans.value[toDate]   ?? (toDate   === activeDate.value ? plan.value : null)
+    const task = fromDay?.anchors[fromAnchor]?.tasks.find(t => t.id === taskUuid)
+    if (fromDay && task) {
+      fromDay.anchors[fromAnchor].tasks = fromDay.anchors[fromAnchor].tasks.filter(t => t.id !== taskUuid)
+    }
+    if (toDay && task) {
+      if (!toDay.anchors[toAnchor]) toDay.anchors[toAnchor] = { tasks: [], notes: '' }
+      const pos = position ?? toDay.anchors[toAnchor].tasks.length
+      toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
     }
     await api(`/api/tasks/${taskUuid}/move`, {
       method: 'PUT',

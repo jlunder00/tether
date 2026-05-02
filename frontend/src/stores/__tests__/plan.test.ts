@@ -1,16 +1,20 @@
 /**
- * plan store — patchTaskFields action
+ * plan store — patchTaskFields + moveTask actions
  *
  * Verifies that patchTaskFields:
  *   1. PATCHes /api/tasks/:id with the given fields
  *   2. Applies an optimistic update to the in-memory plan
  *   3. Returns true on success, false on API error
+ *
+ * Verifies that moveTask:
+ *   4. Removes task from in-memory plan even when toDate is not cached
+ *   5. Inserts into toDate when it's in plans cache, even if fromDay is not the active plan
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('../../lib/api', () => ({
-  api: vi.fn(() => Promise.resolve({ ok: false, json: async () => ({}) })),
+  api: vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) })),
 }))
 
 describe('usePlanStore – patchTaskFields', () => {
@@ -89,5 +93,58 @@ describe('usePlanStore – patchTaskFields', () => {
     const result = await store.patchTaskFields('task-abc', { status: 'done' })
     expect(result).toBe(false)
     expect(store.plan!.anchors.morning.tasks[0].status).toBe('pending')
+  })
+})
+
+describe('usePlanStore – moveTask optimistic updates', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('removes task from in-memory plan even when toDate is not cached', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    // Set active plan (fromDate) — toDate '2026-05-05' is NOT in plans cache
+    store.plan = {
+      date: '2026-05-01',
+      anchors: {
+        morning: {
+          tasks: [{ id: 'task-xyz', text: 'Move me', status: 'pending', position: 0 } as any],
+          notes: '',
+        },
+      },
+    } as any
+    // Ensure toDate is absent from range cache
+    delete (store.plans as any)['2026-05-05']
+
+    await store.moveTask('task-xyz', '2026-05-01', 'morning', '2026-05-05', 'morning')
+
+    // Task must be removed from the active day's anchor even though toDate wasn't cached
+    expect(store.plan!.anchors.morning.tasks).toHaveLength(0)
+  })
+
+  it('inserts task into toDate when it is in plans cache, even if fromDay is not active', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    // fromDate is in range cache (not the active plan)
+    const fromTask = { id: 'task-xyz', text: 'Move me', status: 'pending', position: 0 } as any
+    store.plans['2026-04-30'] = {
+      date: '2026-04-30',
+      anchors: { morning: { tasks: [fromTask], notes: '' } },
+    } as any
+    // toDate is also in range cache
+    store.plans['2026-05-01'] = {
+      date: '2026-05-01',
+      anchors: { morning: { tasks: [], notes: '' } },
+    } as any
+
+    await store.moveTask('task-xyz', '2026-04-30', 'morning', '2026-05-01', 'morning')
+
+    expect(store.plans['2026-04-30'].anchors.morning.tasks).toHaveLength(0)
+    expect(store.plans['2026-05-01'].anchors.morning.tasks).toHaveLength(1)
+    expect(store.plans['2026-05-01'].anchors.morning.tasks[0].id).toBe('task-xyz')
   })
 })
