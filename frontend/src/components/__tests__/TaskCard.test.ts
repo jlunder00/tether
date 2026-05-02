@@ -173,7 +173,7 @@ describe('TaskCard isDragging / source-hide behavior', () => {
     expect(wrapper.find('[data-testid="task-card"]').isVisible()).toBe(true)
   })
 
-  it('root element is hidden via v-show while dragging', async () => {
+  it('root element is hidden via v-show while dragging (after rAF fires)', async () => {
     const wrapper = mount(TaskCard, {
       props: { task: baseTask, editable: false },
       attachTo: document.body,
@@ -183,7 +183,9 @@ describe('TaskCard isDragging / source-hide behavior', () => {
     await card.trigger('dragstart', {
       dataTransfer: { setData, effectAllowed: '' },
     })
-    // After dragstart, isDragging=true → v-show="false" → display:none
+    // Advance rAF so source-hiding applies (isDragging=true → v-show="false")
+    await new Promise(r => requestAnimationFrame(r))
+    await wrapper.vm.$nextTick()
     expect(card.isVisible()).toBe(false)
   })
 
@@ -197,6 +199,8 @@ describe('TaskCard isDragging / source-hide behavior', () => {
     await card.trigger('dragstart', {
       dataTransfer: { setData, effectAllowed: '' },
     })
+    await new Promise(r => requestAnimationFrame(r))
+    await wrapper.vm.$nextTick()
     await card.trigger('dragend')
     expect(card.isVisible()).toBe(true)
   })

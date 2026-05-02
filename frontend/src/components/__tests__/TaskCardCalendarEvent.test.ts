@@ -194,6 +194,8 @@ describe('TaskCard – mode="calendar-event"', () => {
     await card.trigger('dragstart', {
       dataTransfer: { setData: vi.fn(), effectAllowed: '' },
     })
+    // Advance rAF so source-hiding applies
+    await new Promise(r => requestAnimationFrame(r))
     await wrapper.vm.$nextTick()
     expect(card.isVisible()).toBe(false)
     wrapper.unmount()

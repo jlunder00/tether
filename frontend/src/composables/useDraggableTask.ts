@@ -67,7 +67,10 @@ export function useDraggableTask(
 
     evt.dataTransfer.effectAllowed = 'move'
     evt.dataTransfer.setData('text/plain', JSON.stringify(payload))
-    isDragging.value = true
+    // Defer source-hiding to rAF so the browser can capture a visible ghost image
+    // before display:none is applied. Setting isDragging synchronously causes Vue's
+    // microtask DOM update to hide the element before Chrome snapshots the ghost.
+    requestAnimationFrame(() => { isDragging.value = true })
   }
 
   function onDragEnd() {

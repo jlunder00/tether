@@ -19,7 +19,6 @@ const draggingTaskId = ref<string | null>(null)
 
 function onTaskDragStart(evt: DragEvent, task: Task) {
   if (!task.id) { evt.preventDefault(); return }
-  draggingTaskId.value = task.id
   if (!evt.dataTransfer) return
   evt.dataTransfer.effectAllowed = 'move'
   evt.dataTransfer.setData('text/plain', JSON.stringify({
@@ -29,6 +28,8 @@ function onTaskDragStart(evt: DragEvent, task: Task) {
     fromDate: props.date,
     fromAnchorId: props.anchorId,
   }))
+  // Defer source-hiding to rAF so the browser can capture a visible ghost image.
+  requestAnimationFrame(() => { draggingTaskId.value = task.id })
 }
 
 function onTaskDragEnd() {

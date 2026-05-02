@@ -124,13 +124,16 @@ describe('PlanWeekCell — draggable task wrappers (Track 3)', () => {
     expect(wrapper.isVisible()).toBe(true)
   })
 
-  it('task wrapper is hidden while dragging (v-show=false after dragstart)', async () => {
+  it('task wrapper is hidden while dragging (v-show=false after dragstart + rAF)', async () => {
     const w = await mountCell()
     const wrapper = w.find('[data-task-id="task-abc"]')
 
     await wrapper.trigger('dragstart', {
       dataTransfer: { effectAllowed: '', setData: vi.fn() },
     })
+    // Advance rAF so source-hiding applies
+    await new Promise(r => requestAnimationFrame(r))
+    await w.vm.$nextTick()
 
     expect(wrapper.isVisible()).toBe(false)
   })
@@ -142,9 +145,38 @@ describe('PlanWeekCell — draggable task wrappers (Track 3)', () => {
     await wrapper.trigger('dragstart', {
       dataTransfer: { effectAllowed: '', setData: vi.fn() },
     })
+    await new Promise(r => requestAnimationFrame(r))
+    await w.vm.$nextTick()
     await wrapper.trigger('dragend')
 
     expect(wrapper.isVisible()).toBe(true)
+  })
+
+  it('task wrapper is still visible immediately after dragstart (ghost capture window — rAF not yet fired)', async () => {
+    // Source hiding must be deferred via rAF so the browser can capture a
+    // visible ghost image before the element is hidden.
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallbacks.push(cb)
+      return 0
+    })
+
+    const w = await mountCell()
+    const wrapper = w.find('[data-task-id="task-abc"]')
+
+    await wrapper.trigger('dragstart', {
+      dataTransfer: { effectAllowed: '', setData: vi.fn() },
+    })
+
+    // Ghost capture window: must be visible before rAF fires
+    expect(wrapper.isVisible()).toBe(true)
+
+    // Fire rAF → hiding applies
+    rafCallbacks.forEach(cb => cb(0))
+    await w.vm.$nextTick()
+    expect(wrapper.isVisible()).toBe(false)
+
+    vi.restoreAllMocks()
   })
 
   it('dragstart writes superset payload with type:task, taskId, fromDate, fromAnchorId', async () => {
