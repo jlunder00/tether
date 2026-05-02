@@ -611,11 +611,24 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
 
   if (payload.type === 'task' && payload.taskId) {
     const taskId = payload.taskId as string
-    // If already promoted, move the existing event rather than creating a duplicate
+    // Look up by task_id first; fall back to event.id for standalone/synced events
+    // (taskFromEvent maps event.id → task.id when task_id is null)
     const existingEvent = eventStore.events.find(ev => ev.task_id === taskId)
+      ?? eventStore.events.find(ev => ev.id === taskId)
     if (existingEvent) {
       const durationMs = new Date(existingEvent.end_time).getTime() - new Date(existingEvent.start_time).getTime()
       const endDate = new Date(startDate.getTime() + durationMs)
+      // Recurring occurrence: defer commit until user picks an edit scope
+      if (existingEvent.is_occurrence) {
+        pendingRecurrence.value = {
+          kind: 'event-move',
+          eventId: existingEvent.id,
+          startTime: startDate.toISOString(),
+          endTime: endDate.toISOString(),
+          originalStartTime: existingEvent.start_time,
+        }
+        return
+      }
       await eventStore.moveEvent(existingEvent.id, startDate.toISOString(), endDate.toISOString())
       return
     }
