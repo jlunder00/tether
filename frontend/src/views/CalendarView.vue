@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useDragEdgeScroll } from '../composables/useDragEdgeScroll'
 import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
 import { usePlanStore } from '../stores/plan'
@@ -724,6 +725,14 @@ function loadEvents() {
 }
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+// ── Edge-scroll: advance calendar week when dragging to left/right edge ────────
+const calendarGridRef = ref<HTMLElement | null>(null)
+const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, onDragEnd: calendarEdgeDragEnd } =
+  useDragEdgeScroll(calendarGridRef, (direction) => {
+    if (viewMode.value !== 'week') return
+    shiftWeek(direction === 'prev' ? -7 : 7)
+  })
 </script>
 
 <template>
@@ -922,7 +931,14 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
       <template v-if="viewMode === 'week'">
         <!-- Scrollable time grid — header lives inside so both share the same
              container width even when the scrollbar is visible. -->
-        <div class="flex-1 overflow-y-auto" data-testid="calendar-grid">
+        <div
+          ref="calendarGridRef"
+          class="flex-1 overflow-y-auto"
+          data-testid="calendar-grid"
+          @dragover="calendarEdgeDragOver"
+          @dragleave="calendarEdgeDragLeave"
+          @dragend="calendarEdgeDragEnd"
+        >
 
           <!-- Sticky header wrapper: day-of-week header + all-day band scroll together -->
           <div class="sticky top-0 z-10">

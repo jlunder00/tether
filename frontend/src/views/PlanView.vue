@@ -7,7 +7,7 @@ import { useMilestoneStore } from '../stores/milestones'
 import { useEventStore } from '../stores/events'
 import { useSlideOver } from '../composables/useSlideOver'
 import AnchorBlock from '../components/AnchorBlock.vue'
-import WeekView from '../components/WeekView.vue'
+import PlanWeekView from '../components/plan/PlanWeekView.vue'
 import MonthView from '../components/MonthView.vue'
 import DayTimeline from '../components/DayTimeline.vue'
 import type { CalendarEvent } from '../types/events'
@@ -159,8 +159,8 @@ async function onAnchorColumnDrop(e: DragEvent) {
       </div>
     </div>
 
-    <!-- Week view -->
-    <WeekView v-if="props.view === 'week'" />
+    <!-- Week view: anchor rows × day columns grid -->
+    <PlanWeekView v-if="props.view === 'week'" />
 
     <!-- Month view -->
     <MonthView v-else-if="props.view === 'month'" />
