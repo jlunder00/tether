@@ -4,18 +4,36 @@ import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 import { useSlideOver } from '../composables/useSlideOver'
+import { useDraggableTask } from '../composables/useDraggableTask'
+
 const milestoneStore = useMilestoneStore()
 const { push: pushPanel } = useSlideOver()
 
+/** Display mode for the card. Controls layout and drag behaviour.
+ *  - `plan`             — editable card in an AnchorBlock; drag sourced from wrapper div
+ *  - `kanban`           — read-only card; this element IS the drag source
+ *  - `calendar-event`  — positioned in a time-grid (absorbs CalendarEventBlock)
+ *  - `calendar-sidebar`— read-only compact card in calendar sidebar task list
+ */
+type TaskCardMode = 'plan' | 'kanban' | 'calendar-event' | 'calendar-sidebar'
+
 const props = withDefaults(defineProps<{
   task: Task
+  mode?: TaskCardMode
   editable?: boolean
   showRemove?: boolean
   showDetailLink?: boolean
   compact?: boolean
   hideTags?: boolean  // hide milestone/context tags (when inside a GroupContainer that already shows them)
   navigable?: boolean  // whether clicking the card navigates to detail panel
+  // ── calendar-event mode props (mirror CalendarEventBlock) ──────────────────
+  heightPx?: number
+  topPx?: number
+  leftPercent?: number
+  widthPercent?: number
+  resolvedColor?: string
 }>(), {
+  mode: 'plan',
   editable: true,
   showRemove: true,
   showDetailLink: true,
@@ -23,10 +41,24 @@ const props = withDefaults(defineProps<{
   hideTags: false,
   navigable: true,
 })
+
 const emit = defineEmits<{
   (e: 'update', task: Task): void
   (e: 'remove'): void
 }>()
+
+// ── Drag source — useDraggableTask ────────────────────────────────────────────
+// isDragging is set when THIS element is the drag source (kanban, calendar-event,
+// calendar-sidebar). In plan mode the AnchorBlock wrapper is the source, so
+// isDragging stays false — that's fine; Track 3 will wire the wrapper.
+const taskRef = computed(() => props.task)
+const { isDragging, dragHandlers } = useDraggableTask(taskRef)
+
+// Whether this card element is itself draggable (not just a container for a
+// wrapper-div drag in plan view).
+const isSelfDraggable = computed(() =>
+  !!props.task.id && (props.mode === 'kanban' || props.mode === 'calendar-event' || props.mode === 'calendar-sidebar' || !props.editable)
+)
 
 // Status pill colors (text + bg for the clickable pill)
 const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string }> = {
@@ -38,7 +70,6 @@ const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string 
 }
 
 // Tasks are transparent — the parent AnchorBlock's --m-band provides the surface.
-// Status is communicated by text dimming + pill + per-task sidebar line only.
 const STATUS_ROW_STYLE: Record<TaskStatus, Record<string, string>> = {
   pending:     {},
   in_progress: {},
@@ -92,17 +123,6 @@ function updateText(e: Event) {
   emit('update', { ...props.task, text: (e.target as HTMLInputElement).value })
 }
 
-function onDragStart(evt: DragEvent) {
-  if (!props.task.id) {
-    console.warn('[TaskCard] dragstart blocked: task has no id', props.task)
-    evt.preventDefault()
-    return
-  }
-  if (!evt.dataTransfer) return
-  evt.dataTransfer.effectAllowed = 'move'
-  evt.dataTransfer.setData('text/plain', JSON.stringify({ taskId: props.task.id }))
-}
-
 function toggleFollowup(enabled: boolean) {
   const fc: FollowupConfig = {
     enabled,
@@ -114,14 +134,53 @@ function toggleFollowup(enabled: boolean) {
   emit('update', { ...props.task, followup_config: enabled ? fc : null })
 }
 
+// ── Calendar-event mode: position/size styles ──────────────────────────────────
+const calendarEventStyle = computed(() => {
+  const lp = props.leftPercent ?? 0
+  const wp = props.widthPercent ?? 100
+  return {
+    position: 'absolute' as const,
+    top: `${props.topPx ?? 0}px`,
+    height: `${props.heightPx ?? 20}px`,
+    left: `calc(${lp}% + ${wp * 0.05}% + 2px)`,
+    width: `calc(${wp * 0.9}% - 4px)`,
+    backgroundColor: props.resolvedColor ?? '#6366f1',
+    borderLeft: `3px solid ${props.resolvedColor ?? '#6366f1'}`,
+    opacity: 0.92,
+  }
+})
 </script>
 
 <template>
-  <div class="group transition-colors cursor-pointer relative"
-      :style="STATUS_ROW_STYLE[task.status]"
-      :draggable="!editable && !!task.id"
-      @dragstart="onDragStart"
-      @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })">
+  <!-- ── calendar-event mode: absorbed from CalendarEventBlock ─────────────── -->
+  <div
+    v-if="mode === 'calendar-event'"
+    data-testid="task-card-calendar-event"
+    data-event-block
+    class="rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
+    :style="calendarEventStyle"
+    :draggable="!!task.id"
+    @dragstart="dragHandlers.onDragStart"
+    @dragend="dragHandlers.onDragEnd"
+    @click.stop="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
+  >
+    <div class="flex items-center gap-1 truncate pointer-events-none">
+      <span class="truncate font-medium text-[--accent-fg]">{{ task.text }}</span>
+    </div>
+  </div>
+
+  <!-- ── plan / kanban / calendar-sidebar modes ─────────────────────────────── -->
+  <div
+    v-else
+    data-testid="task-card"
+    v-show="!isDragging"
+    class="group transition-colors cursor-pointer relative"
+    :style="STATUS_ROW_STYLE[task.status]"
+    :draggable="isSelfDraggable"
+    @dragstart="dragHandlers.onDragStart"
+    @dragend="dragHandlers.onDragEnd"
+    @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
+  >
     <div v-if="task.motif || task.color"
          class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full pointer-events-none"
          :style="{ background: task.motif ? `var(--motif-${task.motif})` : task.color! }" />
