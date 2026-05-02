@@ -2,9 +2,11 @@
 import { ref, computed } from 'vue'
 import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
+import type { CalendarEvent } from '../types/events'
 import { useMilestoneStore } from '../stores/milestones'
 import { useSlideOver } from '../composables/useSlideOver'
 import { useDraggableTask } from '../composables/useDraggableTask'
+import type { DraggableTaskContext } from '../composables/useDraggableTask'
 
 const milestoneStore = useMilestoneStore()
 const { push: pushPanel } = useSlideOver()
@@ -27,6 +29,8 @@ const props = withDefaults(defineProps<{
   hideTags?: boolean  // hide milestone/context tags (when inside a GroupContainer that already shows them)
   navigable?: boolean  // whether clicking the card navigates to detail panel
   // ── calendar-event mode props (mirror CalendarEventBlock) ──────────────────
+  /** Optional CalendarEvent provides gcal-badge, recurring indicator, source-aware color */
+  event?: CalendarEvent
   heightPx?: number
   topPx?: number
   leftPercent?: number
@@ -52,7 +56,18 @@ const emit = defineEmits<{
 // calendar-sidebar). In plan mode the AnchorBlock wrapper is the source, so
 // isDragging stays false — that's fine; Track 3 will wire the wrapper.
 const taskRef = computed(() => props.task)
-const { isDragging, dragHandlers } = useDraggableTask(taskRef)
+
+// In calendar-event mode, enrich the drag payload with event timing so drop
+// targets can move the event preserving its duration.
+const calendarContext = computed<DraggableTaskContext | undefined>(() => {
+  if (props.mode !== 'calendar-event' || !props.event) return undefined
+  return {
+    fromStartTime: props.event.start_time,
+    durationMs: new Date(props.event.end_time).getTime() - new Date(props.event.start_time).getTime(),
+  }
+})
+
+const { isDragging, dragHandlers } = useDraggableTask(taskRef, calendarContext)
 
 // Whether this card element is itself draggable (not just a container for a
 // wrapper-div drag in plan view).
@@ -134,19 +149,26 @@ function toggleFollowup(enabled: boolean) {
   emit('update', { ...props.task, followup_config: enabled ? fc : null })
 }
 
-// ── Calendar-event mode: position/size styles ──────────────────────────────────
+// ── Calendar-event mode: helpers and position/size styles ─────────────────────
+
+function defaultEventColor(ev?: CalendarEvent): string {
+  if (!ev || ev.source === 'tether') return ev?.color ?? '#6366f1'
+  return '#4285f4'
+}
+
 const calendarEventStyle = computed(() => {
   const lp = props.leftPercent ?? 0
   const wp = props.widthPercent ?? 100
+  const color = props.resolvedColor ?? defaultEventColor(props.event)
   return {
     position: 'absolute' as const,
     top: `${props.topPx ?? 0}px`,
     height: `${props.heightPx ?? 20}px`,
     left: `calc(${lp}% + ${wp * 0.05}% + 2px)`,
     width: `calc(${wp * 0.9}% - 4px)`,
-    backgroundColor: props.resolvedColor ?? '#6366f1',
-    borderLeft: `3px solid ${props.resolvedColor ?? '#6366f1'}`,
-    opacity: 0.92,
+    backgroundColor: color,
+    borderLeft: `3px solid ${color}`,
+    opacity: props.event?.source !== 'tether' ? 0.75 : 0.92,
   }
 })
 </script>
@@ -155,17 +177,32 @@ const calendarEventStyle = computed(() => {
   <!-- ── calendar-event mode: absorbed from CalendarEventBlock ─────────────── -->
   <div
     v-if="mode === 'calendar-event'"
+    v-show="!isDragging"
     data-testid="task-card-calendar-event"
     data-event-block
     class="rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
     :style="calendarEventStyle"
-    :draggable="!!task.id"
+    :draggable="isSelfDraggable"
     @dragstart="dragHandlers.onDragStart"
     @dragend="dragHandlers.onDragEnd"
     @click.stop="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
   >
     <div class="flex items-center gap-1 truncate pointer-events-none">
-      <span class="truncate font-medium text-[--accent-fg]">{{ task.text }}</span>
+      <!-- gcal badge — shown when the event is from an external calendar -->
+      <span
+        v-if="event && event.source !== 'tether'"
+        data-testid="gcal-badge"
+        class="text-[9px] bg-black/20 rounded px-0.5 flex-shrink-0"
+        :title="event.source === 'google_calendar' ? 'Synced from Google Calendar' : 'Synced from external source'"
+      >{{ event.source === 'google_calendar' ? 'G' : '↗' }}</span>
+      <!-- recurring indicator -->
+      <span
+        v-if="event && (event.is_recurring || event.is_occurrence)"
+        data-testid="recurring-indicator"
+        class="text-[9px] flex-shrink-0 opacity-80"
+        title="Recurring event"
+      >↻</span>
+      <span class="truncate font-medium text-[--accent-fg]">{{ event?.title ?? task.text }}</span>
     </div>
   </div>
 

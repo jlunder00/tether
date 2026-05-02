@@ -317,17 +317,21 @@ describe('DayTimeline component', () => {
     await expect(timedArea.trigger('drop')).resolves.not.toThrow()
   })
 
-  it('grip strip has draggable attribute; CalendarEventBlock body does not', async () => {
+  it('event wrapper div is the drag source and contains the event title', async () => {
+    // New HTML5 DnD design: the wrapper div (data-event-id) is draggable="true"
+    // and contains the event title inline — no separate "grip strip".
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
-    // The grip element (left-edge strip) should have draggable="true"
-    const draggableGrips = wrapper.findAll('[draggable="true"]')
-    expect(draggableGrips.length).toBeGreaterThan(0)
-    // But the CalendarEventBlock rendered inside the event container should NOT be the draggable element
-    // (draggable is on the grip, not on the CalendarEventBlock absolute div)
-    for (const grip of draggableGrips) {
-      // Each grip is the narrow left-strip, it should not contain the event title text directly
-      expect(grip.text()).not.toContain('Team standup')
+    // Event wrapper divs should be draggable
+    const eventWrapper = wrapper.find('[data-event-id="ev-timed"]')
+    expect(eventWrapper.exists()).toBe(true)
+    expect(eventWrapper.attributes('draggable')).toBe('true')
+    // The wrapper IS the visual element so it contains the title
+    expect(eventWrapper.text()).toContain('Team standup')
+    // Time-slot drop targets should NOT be draggable
+    const slots = wrapper.findAll('[data-time-slot]')
+    for (const slot of slots) {
+      expect(slot.attributes('draggable')).toBeUndefined()
     }
   })
 

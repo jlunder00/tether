@@ -4,7 +4,6 @@ import { useEventStore } from '../stores/events'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 import { useContextStore } from '../stores/context'
-import CalendarEventBlock from './CalendarEventBlock.vue'
 import RecurrenceEditDialog from './RecurrenceEditDialog.vue'
 import {
   eventTopPx,
@@ -21,6 +20,7 @@ import { computeOverlapLayout, computeOverlapBands } from '../composables/useOve
 import { resolveEventColor } from '../composables/useColorResolver'
 import type { CalendarEvent } from '../types/events'
 import type { RecurrenceEditScope } from '../types/recurrence'
+import type { DropPayload } from '../composables/useDropZone'
 
 const props = defineProps<{
   date: string  // YYYY-MM-DD
@@ -105,8 +105,6 @@ onMounted(() => {
 })
 watch(() => props.date, fetchForDate)
 
-// --- Drag / move state ---
-
 // --- Timed area ref for auto-scroll ---
 const timedAreaEl = ref<HTMLElement | null>(null)
 
@@ -136,74 +134,110 @@ function onRecurrenceCancel() {
   pendingMove.value = null
 }
 
-// --- Drag-to-move (vertical) ---
+// --- 15-min slot drop zones ---
 
-// draggingEvent tracks the event being dragged and the initial cursor offset.
-// justDragged guards against the browser firing a trailing click after mouseup.
-const draggingEvent = ref<{
-  event: CalendarEvent
-  startY: number
-  origTopPx: number
-  durationMin: number
-} | null>(null)
+const SLOT_COUNT = (AXIS_END_HOUR - AXIS_START_HOUR) * 4  // e.g. 18h × 4 = 72
 
-const dragOffsetY = ref(0)
-const justDragged = ref(false)
-
-function onEventMousedown(event: CalendarEvent, mouseEvent: MouseEvent) {
-  const top = eventTopPx(event.start_time)
-  const dur = (new Date(event.end_time).getTime() - new Date(event.start_time).getTime()) / 60_000
-  draggingEvent.value = {
-    event,
-    startY: mouseEvent.clientY,
-    origTopPx: top,
-    durationMin: dur,
-  }
-  dragOffsetY.value = 0
-
-  const onMove = (e: MouseEvent) => {
-    if (!draggingEvent.value) return
-    dragOffsetY.value = e.clientY - draggingEvent.value.startY
-  }
-
-  const onUp = async (e: MouseEvent) => {
-    window.removeEventListener('mousemove', onMove)
-    window.removeEventListener('mouseup', onUp)
-    if (!draggingEvent.value) return
-
-    const deltaMin = Math.round((e.clientY - draggingEvent.value.startY) / PX_PER_MINUTE / 15) * 15
-    if (deltaMin === 0) {
-      draggingEvent.value = null
-      return
-    }
-
-    // Set guard BEFORE clearing draggingEvent so the trailing click is blocked.
-    // Clear it after nextTick once the click event has been processed.
-    justDragged.value = true
-    const origStart = new Date(draggingEvent.value.event.start_time)
-    const origEnd = new Date(draggingEvent.value.event.end_time)
-    const newStart = new Date(origStart.getTime() + deltaMin * 60_000)
-    const newEnd = new Date(origEnd.getTime() + deltaMin * 60_000)
-
-    const ev = draggingEvent.value.event
-    draggingEvent.value = null
-    await handleEventMove(ev, newStart.toISOString(), newEnd.toISOString())
-    await nextTick()
-    justDragged.value = false
-  }
-
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
+/** Format slot index as 'HH:MM'. Slot 0 = AXIS_START_HOUR:00. */
+function slotTime(i: number): string {
+  const totalMin = i * 15 + AXIS_START_HOUR * 60
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
+
+async function handleSlotDrop(payload: DropPayload, time: string) {
+  const slotStart = `${props.date}T${time}:00`
+  const slotStartMs = new Date(slotStart).getTime()
+
+  if (payload.type === 'calendar-event') {
+    // Reposition existing event, preserving its duration.
+    const p = payload as { eventId?: string; durationMs?: number }
+    const dur = p.durationMs ?? 30 * 60_000
+    const newEnd = toLocalIso(new Date(slotStartMs + dur))
+    const ev = eventStore.events.find(e => e.id === p.eventId)
+    if (!ev) return
+    await handleEventMove(ev, slotStart, newEnd)
+  } else {
+    // type === 'task' (or legacy AnchorBlock format with taskId field)
+    const taskId = (payload as { taskId?: string }).taskId
+    if (!taskId) return
+    const title = (payload as { title?: string }).title ?? taskId
+    // Check if this task is already promoted to avoid creating a duplicate event.
+    const existing = eventStore.events.find(e => e.task_id === taskId)
+    if (existing) {
+      const dur = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
+      const newEnd = toLocalIso(new Date(slotStartMs + (dur || 30 * 60_000)))
+      await eventStore.moveEvent(existing.id, slotStart, newEnd)
+    } else {
+      const endISO = toLocalIso(new Date(slotStartMs + 30 * 60_000))
+      await eventStore.promoteTask(taskId, slotStart, endISO, title)
+    }
+  }
+}
+
+/** Index of the currently hovered slot (for drop-zone highlight), or null. */
+const overSlotIndex = ref<number | null>(null)
+
+function onSlotDragOver(e: DragEvent, i: number) {
+  e.preventDefault()
+  overSlotIndex.value = i
+}
+
+function onSlotDragLeave(e: DragEvent, i: number) {
+  // Only clear when leaving the element entirely (not entering a child)
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as HTMLElement).contains(related)) return
+  if (overSlotIndex.value === i) overSlotIndex.value = null
+}
+
+async function onSlotDrop(e: DragEvent, i: number) {
+  e.preventDefault()
+  overSlotIndex.value = null
+  const rawJson = e.dataTransfer?.getData('application/json')
+  const rawText = e.dataTransfer?.getData('text/plain')
+  const raw = rawJson || rawText
+  if (!raw) return
+  try {
+    await handleSlotDrop(JSON.parse(raw), slotTime(i))
+  } catch { /* ignore malformed payload */ }
+}
+
+// --- Calendar-event drag source ---
+
+/** ID of the event being dragged (used to hide the source element via v-show). */
+const draggingEventId = ref<string | null>(null)
+
+function onEventDragStart(evt: DragEvent, ev: CalendarEvent) {
+  if (evt.dataTransfer) {
+    const durationMs = new Date(ev.end_time).getTime() - new Date(ev.start_time).getTime()
+    const payload = JSON.stringify({
+      type: 'calendar-event',
+      eventId: ev.id,
+      taskId: ev.task_id,
+      title: ev.title,
+      anchorId: ev.anchor_id,
+      fromStartTime: ev.start_time,
+      durationMs,
+    })
+    evt.dataTransfer.effectAllowed = 'move'
+    evt.dataTransfer.setData('application/json', payload)
+    evt.dataTransfer.setData('text/plain', payload)
+  }
+  // Set synchronously (consistent with useDraggableTask pattern).
+  draggingEventId.value = ev.id
+}
+
+function onEventDragEnd() {
+  draggingEventId.value = null
+}
+
+// Array used purely for v-for slot grid rendering
+const slotIndices = Array.from({ length: SLOT_COUNT }, (_, i) => i)
 
 // --- Click-to-create ---
 
 function onTimedAreaClick(e: MouseEvent) {
-  // Block click fired immediately after a drag-end (mouseup → click ordering)
-  if (justDragged.value) return
-  // Also block if we're mid-drag (shouldn't happen, but guard anyway)
-  if (draggingEvent.value) return
-
   const target = e.currentTarget as HTMLElement
   const rect = target.getBoundingClientRect()
   const offsetY = e.clientY - rect.top + target.scrollTop
@@ -231,64 +265,8 @@ function toLocalIso(d: Date): string {
   return `${year}-${mo}-${day}T${hh}:${mm}`
 }
 
-// --- Drop from anchor block (task promotion) ---
-// Note: drag of event block to LEFT column (demote) is handled by PlanView droptarget
-
-async function onTimedAreaDrop(e: DragEvent) {
-  e.preventDefault()
-  // AnchorBlock writes 'text/plain'; we also accept 'application/json' for future-proofing.
-  // Try application/json first, fall back to text/plain.
-  const rawJson = e.dataTransfer?.getData('application/json')
-  const rawText = e.dataTransfer?.getData('text/plain')
-  const raw = rawJson || rawText
-  if (!raw) return
-  try {
-    const data = JSON.parse(raw)
-    // AnchorBlock drag payload: { taskId, title, fromAnchorId, fromDate }
-    // Check for taskId directly (AnchorBlock format) or type:'task' (application/json format)
-    const isTask = data.taskId && (data.type === 'task' || data.fromAnchorId !== undefined)
-    if (isTask) {
-      // Compute drop time from cursor position — use local ISO to match click-create format
-      const target = e.currentTarget as HTMLElement
-      const rect = target.getBoundingClientRect()
-      const offsetY = e.clientY - rect.top + target.scrollTop
-      const rawMin = offsetY / PX_PER_MINUTE
-      const snappedMin = Math.round(rawMin / 15) * 15
-
-      const d = new Date(props.date + 'T00:00:00')
-      d.setHours(AXIS_START_HOUR, 0, 0, 0)
-      d.setMinutes(d.getMinutes() + snappedMin)
-      const startISO = toLocalIso(d)
-      const endD = new Date(d.getTime() + 30 * 60_000)
-      const endISO = toLocalIso(endD)
-
-      // TODO: if task is recurring, show RecurrenceEditDialog with title "Edit recurring task: move to timeline?"
-      await eventStore.promoteTask(data.taskId, startISO, endISO, data.title ?? data.taskId)
-    }
-  } catch {
-    // ignore malformed drag data
-  }
-}
-
-// --- Drag event block (for demote: drag to left anchor column) ---
-
-function onEventDragstart(event: CalendarEvent, dragEvent: DragEvent) {
-  dragEvent.dataTransfer!.effectAllowed = 'move'
-  // Include anchor_id so the drop target can return the task to its original anchor
-  const payload = JSON.stringify({
-    type: 'calendar-event',
-    eventId: event.id,
-    taskId: event.task_id,
-    title: event.title,
-    anchorId: event.anchor_id,
-  })
-  dragEvent.dataTransfer!.setData('application/json', payload)
-  dragEvent.dataTransfer!.setData('text/plain', payload)
-}
-
-function onDragover(e: DragEvent) {
-  e.preventDefault()
-}
+// Note: drag of calendar-event blocks is now handled by TaskCard mode="calendar-event".
+// onDrop for task promotion is now handled by slot-level useDropZone instances.
 
 // --- Anchor color helper ---
 
@@ -342,8 +320,6 @@ function timedEventStyle(event: CalendarEvent) {
       class="relative flex overflow-y-auto"
       :style="{ height: 'calc(100vh - 200px)' }"
       @click="onTimedAreaClick"
-      @dragover="onDragover"
-      @drop="onTimedAreaDrop"
     >
       <!-- Hour grid + labels -->
       <div class="relative flex-shrink-0 w-10" :style="{ height: `${AXIS_TOTAL_PX}px` }">
@@ -387,43 +363,72 @@ function timedEventStyle(event: CalendarEvent) {
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         />
 
+        <!-- 15-min slot drop targets — transparent absolute divs at each 15-min interval -->
+        <div
+          v-for="i in slotIndices"
+          :key="'slot-' + i"
+          data-time-slot
+          :data-date="date"
+          :data-time="slotTime(i)"
+          class="absolute inset-x-0 transition-colors"
+          :class="{ 'ring-1 ring-[--accent] bg-[--accent]/10 z-30': overSlotIndex === i }"
+          :style="{
+            top: `${i * 15 * PX_PER_MINUTE}px`,
+            height: `${15 * PX_PER_MINUTE}px`,
+          }"
+          @dragover="(e) => onSlotDragOver(e, i)"
+          @dragleave="(e) => onSlotDragLeave(e, i)"
+          @drop="(e) => onSlotDrop(e, i)"
+        />
+
         <!--
-          Timed event wrapper.
-          Layout: an absolute positioned container holds two children:
-            1. A narrow left-edge grip strip — has draggable="true" for HTML5 demote-to-sidebar drag.
-               HTML5 drag suppresses mousemove once started (Chromium/WebKit), so it lives on its
-               own element, separate from the mousedown-based vertical reposition.
-            2. CalendarEventBlock — handles mousedown (vertical reposition) and click (open panel).
-               No draggable attr here so the browser's drag threshold never cancels mousemove.
+          Timed event blocks — inline CalendarEventBlock-equivalent (CalendarEventBlock absorbed).
+          The wrapper div owns: absolute positioning, HTML5 drag source, click-to-open, v-show.
+          This avoids needing TaskCard here and lets us write the 'calendar-event' payload
+          (with eventId + durationMs) instead of the 'task' payload that useDraggableTask writes.
         -->
         <div
           v-for="ev in timedEvents"
           :key="ev.id"
-          class="absolute flex"
+          :data-event-id="ev.id"
+          v-show="draggingEventId !== ev.id"
+          draggable="true"
+          class="absolute z-10 cursor-grab"
           :style="{
             top: `${eventTopPx(ev.start_time)}px`,
             left: timedEventStyle(ev).left,
             width: timedEventStyle(ev).width,
             height: `${eventHeightPx(ev.start_time, ev.end_time)}px`,
           }"
+          @dragstart="(e) => onEventDragStart(e, ev)"
+          @dragend="onEventDragEnd"
+          @click.stop="emit('open-event', ev)"
         >
-          <!-- Drag grip (HTML5 demote drag) — narrow left strip -->
+          <!-- Event visual: absorbs CalendarEventBlock.vue template -->
           <div
-            class="flex-shrink-0 w-2 cursor-grab z-20 rounded-l opacity-0 hover:opacity-100 bg-[--bg-elev-4] transition-opacity"
-            :title="'Drag to anchor column to un-schedule'"
-            draggable="true"
-            @dragstart.stop="(de) => onEventDragstart(ev, de)"
-          />
-          <!-- Event block body — mousedown for vertical reposition only, no draggable -->
-          <CalendarEventBlock
-            class="flex-1 min-w-0"
-            :event="ev"
-            :top-px="0"
-            :height-px="eventHeightPx(ev.start_time, ev.end_time)"
-            :resolved-color="resolveColor(ev)"
-            @click="emit('open-event', ev)"
-            @mousedown="(me) => onEventMousedown(ev, me)"
-          />
+            class="absolute inset-0 rounded overflow-hidden text-xs px-1.5 py-0.5 shadow-md hover:brightness-110 transition-all"
+            :style="{
+              backgroundColor: resolveColor(ev),
+              borderLeft: '3px solid ' + resolveColor(ev),
+              opacity: ev.source !== 'tether' ? 0.75 : 0.92,
+            }"
+          >
+            <div class="flex items-center gap-1 truncate pointer-events-none">
+              <span
+                v-if="ev.source !== 'tether'"
+                data-testid="gcal-badge"
+                class="text-[9px] bg-black/20 rounded px-0.5 flex-shrink-0"
+                :title="ev.source === 'google_calendar' ? 'Synced from Google Calendar' : 'Synced from external source'"
+              >{{ ev.source === 'google_calendar' ? 'G' : '↗' }}</span>
+              <span
+                v-if="ev.is_recurring || ev.is_occurrence"
+                data-testid="recurring-indicator"
+                class="text-[9px] flex-shrink-0 opacity-80"
+                title="Recurring event"
+              >↻</span>
+              <span class="truncate font-medium text-[--accent-fg]">{{ ev.title }}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
