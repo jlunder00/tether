@@ -49,11 +49,35 @@ onMounted(() => {
   anchorStore.fetchAnchors()
   milestoneStore.fetchAll()
   clockTimer = setInterval(() => { now.value = new Date() }, 60_000)
+  document.addEventListener('click', onDocumentClick)
 })
 
 onUnmounted(() => {
   if (clockTimer) clearInterval(clockTimer)
+  document.removeEventListener('click', onDocumentClick)
 })
+
+// MiniCalendar popover toggle
+const miniCalOpen = ref(false)
+
+function toggleMiniCal() {
+  miniCalOpen.value = !miniCalOpen.value
+}
+
+function onMiniCalDayClick(date: string) {
+  goToDate(date)
+  miniCalOpen.value = false
+}
+
+function onDocumentClick(e: MouseEvent) {
+  const popover = document.getElementById('mini-cal-popover')
+  const toggle = document.querySelector('[data-testid="mini-cal-toggle"]')
+  if (!popover || !toggle) return
+  if (!popover.contains(e.target as Node) && !toggle.contains(e.target as Node)) {
+    miniCalOpen.value = false
+  }
+}
+
 
 function offsetDate(base: string, days: number): string {
   const d = new Date(base + 'T12:00:00')
@@ -139,6 +163,25 @@ async function onAnchorColumnDrop(e: DragEvent) {
         </div>
       </div>
       <div class="flex items-center gap-3">
+        <!-- Mini calendar popover toggle -->
+        <div class="relative">
+          <button
+            data-testid="mini-cal-toggle"
+            class="text-[--fg-4] hover:text-[--fg-1] transition-colors px-1.5 py-1 rounded text-sm"
+            :class="miniCalOpen ? 'text-[--fg-1] bg-[--bg-elev-2]' : ''"
+            title="Jump to date"
+            @click.stop="toggleMiniCal"
+          >📅</button>
+          <div
+            v-if="miniCalOpen"
+            id="mini-cal-popover"
+            class="absolute right-0 top-full mt-1 z-50"
+            @click.stop
+          >
+            <MiniCalendar @day-click="onMiniCalDayClick" />
+          </div>
+        </div>
+
         <!-- Zoom controls -->
         <div class="flex gap-1 bg-[--bg-elev-1] rounded-lg p-0.5">
           <router-link :to="'/plan/day/' + activeDate"
@@ -160,54 +203,43 @@ async function onAnchorColumnDrop(e: DragEvent) {
       </div>
     </div>
 
-    <!-- Month view: full-width, no sidebar -->
+    <!-- Month view -->
     <MonthView v-if="props.view === 'month'" />
 
-    <!-- Week + Day views: shared flex layout with MiniCalendar sidebar -->
-    <div v-else class="flex gap-4 items-start">
-      <!-- Mini calendar sidebar — reschedule tasks by dropping onto a day -->
-      <div class="flex-shrink-0">
-        <MiniCalendar />
-      </div>
+    <!-- Week view -->
+    <PlanWeekView v-else-if="props.view === 'week'" />
 
-      <!-- Main view content -->
-      <div class="flex-1 min-w-0">
-        <!-- Week view: anchor rows × day columns grid -->
-        <PlanWeekView v-if="props.view === 'week'" />
-
-        <!-- Day view: two-column layout -->
-        <template v-else>
-          <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
-          <!-- Two-column: anchor blocks left, day timeline right -->
-          <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
-            <!-- Left: anchor blocks -->
-            <div
-              class="flex flex-col"
-              @dragover.prevent
-              @drop="onAnchorColumnDrop"
-            >
-              <AnchorBlock
-                v-for="(anchor, i) in anchorStore.anchors"
-                :key="anchor.id"
-                :anchor-id="anchor.id"
-                :anchor-name="anchor.name"
-                :time="anchor.time"
-                :color="anchor.color"
-                :motif="anchor.motif"
-                :is-now="anchorStates.get(anchor.id) === 'now'"
-                :is-past="anchorStates.get(anchor.id) === 'past'"
-                :is-last="i === anchorStore.anchors.length - 1" />
-            </div>
-            <!-- Right: day timeline -->
-            <DayTimeline
-              :date="activeDate"
-              @create-at="onCreateAt"
-              @open-event="onOpenEvent"
-            />
-          </div>
-        </template>
+    <!-- Day view: two-column layout -->
+    <template v-else>
+      <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
+      <!-- Two-column: anchor blocks left, day timeline right -->
+      <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
+        <!-- Left: anchor blocks -->
+        <div
+          class="flex flex-col"
+          @dragover.prevent
+          @drop="onAnchorColumnDrop"
+        >
+          <AnchorBlock
+            v-for="(anchor, i) in anchorStore.anchors"
+            :key="anchor.id"
+            :anchor-id="anchor.id"
+            :anchor-name="anchor.name"
+            :time="anchor.time"
+            :color="anchor.color"
+            :motif="anchor.motif"
+            :is-now="anchorStates.get(anchor.id) === 'now'"
+            :is-past="anchorStates.get(anchor.id) === 'past'"
+            :is-last="i === anchorStore.anchors.length - 1" />
+        </div>
+        <!-- Right: day timeline -->
+        <DayTimeline
+          :date="activeDate"
+          @create-at="onCreateAt"
+          @open-event="onOpenEvent"
+        />
       </div>
-    </div>
+    </template>
 
     <!-- Child route detail panels -->
     <router-view />

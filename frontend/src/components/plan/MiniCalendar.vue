@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { usePlanStore } from '../../stores/plan'
-import { useAnchorStore } from '../../stores/anchors'
 import MiniCalendarDay from './MiniCalendarDay.vue'
 
 const planStore = usePlanStore()
-const anchorStore = useAnchorStore()
+
+const emit = defineEmits<{
+  (e: 'day-click', date: string): void
+}>()
 
 function localDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -49,7 +51,7 @@ function taskCount(date: string): number {
   return Object.values(day.anchors).reduce((sum, a) => sum + a.tasks.length, 0)
 }
 
-// Load plan data for visible dates when month changes
+// Load plan data for visible dates when month changes (for task count dots)
 async function loadMonth() {
   const dates = calendarDates.value
   await planStore.fetchPlanRange(dates[0], dates[41])
@@ -57,17 +59,6 @@ async function loadMonth() {
 
 onMounted(loadMonth)
 watch(viewDate, loadMonth)
-
-async function onTaskDropped(payload: { taskId: string; date: string; fromAnchorId?: string }) {
-  // Pick the first anchor as default when we don't have context
-  const defaultAnchorId = anchorStore.anchors[0]?.id ?? ''
-  const anchorId = payload.fromAnchorId ?? defaultAnchorId
-  await planStore.moveTaskToAnchor({
-    taskId: payload.taskId,
-    newDate: payload.date,
-    anchorId,
-  })
-}
 </script>
 
 <template>
@@ -96,7 +87,7 @@ async function onTaskDropped(payload: { taskId: string; date: string; fromAnchor
       >{{ dow }}</span>
     </div>
 
-    <!-- Calendar grid — MiniCalendarDay handles drop zone per cell -->
+    <!-- Calendar grid -->
     <div class="grid grid-cols-7 gap-px">
       <MiniCalendarDay
         v-for="date in calendarDates"
@@ -104,7 +95,7 @@ async function onTaskDropped(payload: { taskId: string; date: string; fromAnchor
         :date="date"
         :task-count="taskCount(date)"
         :is-today="date === today"
-        @task-dropped="onTaskDropped"
+        @day-click="emit('day-click', $event)"
       />
     </div>
   </div>
