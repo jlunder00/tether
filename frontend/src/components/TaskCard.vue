@@ -182,7 +182,7 @@ const calendarEventStyle = computed(() => {
     data-event-block
     class="rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
     :style="calendarEventStyle"
-    :draggable="isSelfDraggable"
+    :draggable="isSelfDraggable || undefined"
     @dragstart="dragHandlers.onDragStart"
     @dragend="dragHandlers.onDragEnd"
     @click.stop="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
@@ -213,7 +213,7 @@ const calendarEventStyle = computed(() => {
     v-show="!isDragging"
     class="group transition-colors cursor-pointer relative"
     :style="STATUS_ROW_STYLE[task.status]"
-    :draggable="isSelfDraggable"
+    :draggable="isSelfDraggable || undefined"
     @dragstart="dragHandlers.onDragStart"
     @dragend="dragHandlers.onDragEnd"
     @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
