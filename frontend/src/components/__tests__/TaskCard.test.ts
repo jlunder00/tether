@@ -38,18 +38,21 @@ describe('TaskCard drag behavior', () => {
     expect(wrapper.find('[data-testid="task-card"]').attributes('draggable')).toBe('true')
   })
 
-  it('sets draggable="false" when editable is true (plan mode)', () => {
+  it('omits draggable attribute when editable is true (plan mode — lets parent wrapper govern)', () => {
+    // HTML5 DnD: explicit draggable="false" on a child hard-blocks the parent's draggable="true".
+    // When TaskCard is not the drag source (plan mode), the attribute must be absent so
+    // AnchorBlock's outer wrapper div can own drag initiation.
     const wrapper = mount(TaskCard, {
       props: { task: baseTask, editable: true },
     })
-    expect(wrapper.find('[data-testid="task-card"]').attributes('draggable')).toBe('false')
+    expect(wrapper.find('[data-testid="task-card"]').attributes('draggable')).toBeUndefined()
   })
 
-  it('sets draggable="false" when task has no id', () => {
+  it('omits draggable attribute when task has no id', () => {
     const wrapper = mount(TaskCard, {
       props: { task: { ...baseTask, id: '' }, editable: false },
     })
-    expect(wrapper.find('[data-testid="task-card"]').attributes('draggable')).toBe('false')
+    expect(wrapper.find('[data-testid="task-card"]').attributes('draggable')).toBeUndefined()
   })
 
   it('serializes superset payload (type, taskId, title) as text/plain on dragstart', async () => {
