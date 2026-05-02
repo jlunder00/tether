@@ -202,6 +202,8 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     await eventBlock.trigger('dragstart', {
       dataTransfer: { setData: vi.fn(), effectAllowed: '' },
     })
+    // Advance rAF so source-hiding applies
+    await new Promise(r => requestAnimationFrame(r))
     await nextTick()
 
     expect(eventBlock.isVisible()).toBe(false)

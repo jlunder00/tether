@@ -142,8 +142,6 @@ const draggingTaskId = ref<string | null>(null)
 
 function onDragStart(evt: DragEvent, task: Task) {
   if (!task.id) { evt.preventDefault(); return }
-  // Set draggingTaskId first — source hiding must work even if dataTransfer is unavailable
-  draggingTaskId.value = task.id
   if (!evt.dataTransfer) return
   evt.dataTransfer.effectAllowed = 'move'
   // Superset payload — includes type + title for composable compatibility
@@ -154,6 +152,10 @@ function onDragStart(evt: DragEvent, task: Task) {
     fromAnchorId: props.anchorId,
     fromDate: effectiveDate.value,
   }))
+  // Defer source-hiding to rAF so the browser can capture a visible ghost image.
+  // Setting draggingTaskId synchronously causes Vue's microtask DOM update to apply
+  // display:none before Chrome snapshots the ghost — resulting in no visible ghost.
+  requestAnimationFrame(() => { draggingTaskId.value = task.id })
 }
 
 function onDragEnd() {

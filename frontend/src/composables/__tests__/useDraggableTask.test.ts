@@ -51,20 +51,28 @@ describe('useDraggableTask', () => {
     expect(isDragging.value).toBe(false)
   })
 
-  it('onDragStart sets isDragging to true', () => {
+  it('onDragStart sets isDragging to true (after rAF fires)', () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { rafCallbacks.push(cb); return 0 })
     const taskRef = ref(makeTask())
     const { isDragging, dragHandlers } = useDraggableTask(taskRef)
     dragHandlers.onDragStart(makeDragEvent())
+    rafCallbacks.forEach(cb => cb(0))
     expect(isDragging.value).toBe(true)
+    vi.restoreAllMocks()
   })
 
   it('onDragEnd restores isDragging to false', () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { rafCallbacks.push(cb); return 0 })
     const taskRef = ref(makeTask())
     const { isDragging, dragHandlers } = useDraggableTask(taskRef)
     dragHandlers.onDragStart(makeDragEvent())
+    rafCallbacks.forEach(cb => cb(0))
     expect(isDragging.value).toBe(true)
     dragHandlers.onDragEnd()
     expect(isDragging.value).toBe(false)
+    vi.restoreAllMocks()
   })
 
   it('onDragStart writes type and taskId to dataTransfer', () => {
@@ -133,5 +141,30 @@ describe('useDraggableTask', () => {
     // Should not throw
     expect(() => dragHandlers.onDragStart(evt)).not.toThrow()
     expect(isDragging.value).toBe(false)
+  })
+
+  it('isDragging is NOT set synchronously during onDragStart — deferred via rAF so ghost capture window stays open', () => {
+    // HTML5 DnD: browsers capture the ghost image after dragstart handlers complete
+    // but before rAF. Setting isDragging=true synchronously causes Vue to apply
+    // display:none before the ghost snapshot — resulting in no visible ghost.
+    // Fix: wrap the source-hiding assignment in requestAnimationFrame.
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallbacks.push(cb)
+      return 0
+    })
+
+    const taskRef = ref(makeTask())
+    const { isDragging, dragHandlers } = useDraggableTask(taskRef)
+    dragHandlers.onDragStart(makeDragEvent())
+
+    // Immediately after — isDragging must still be false (browser is capturing ghost here)
+    expect(isDragging.value).toBe(false)
+
+    // Fire rAF — source hiding now applies
+    rafCallbacks.forEach(cb => cb(0))
+    expect(isDragging.value).toBe(true)
+
+    vi.restoreAllMocks()
   })
 })
