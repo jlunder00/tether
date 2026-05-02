@@ -9,7 +9,7 @@ import { useKanbanStore } from '../stores/kanban'
 import { useContextStore } from '../stores/context'
 import { useCalendarFocus } from '../composables/useCalendarFocus'
 import { useSlideOver } from '../composables/useSlideOver'
-import CalendarEventBlock from '../components/CalendarEventBlock.vue'
+import TaskCard from '../components/TaskCard.vue'
 import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
 import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
@@ -18,6 +18,7 @@ import { textOnColor } from '../composables/useTextOnColor'
 import { computeOverlapLayout, computeOverlapBands, type EventLayout, type OverlapBand } from '../composables/useOverlapLayout'
 import type { CalendarEvent } from '../types/events'
 import type { Anchor } from '../stores/anchors'
+import type { Task } from '../stores/plan'
 
 const anchorStore = useAnchorStore()
 const eventStore = useEventStore()
@@ -50,17 +51,6 @@ function onResizeHandleMousedown(e: MouseEvent) {
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
 }
-
-// ─── Event drag-to-reposition (mouse) ─────────────────────────
-interface DragState {
-  eventId: string
-  originalStart: string
-  originalEnd: string
-  currentTop: number
-  currentDayIndex: number
-  columnRect: DOMRect | null
-}
-const draggingEvent = ref<DragState | null>(null)
 
 const pendingRecurrence = ref<PendingRecurrence>(null)
 
@@ -105,31 +95,6 @@ function onRecurrenceScopeCancel() {
   pendingRecurrence.value = null
 }
 
-// Distinguish click-as-open from click-and-drag-to-move. A bare click triggers
-// mousedown→mouseup with no movement; without a threshold, mouseup commits a
-// no-op move that still PATCHes the event (and triggers a backend round-trip).
-const DRAG_THRESHOLD_PX = 5
-let dragStartX = 0
-let dragStartY = 0
-let dragIntentConfirmed = false
-
-function onEventMousedown(e: MouseEvent, event: CalendarEvent) {
-  e.stopPropagation()
-  const colEl = (e.target as HTMLElement).closest('[data-day-col]') as HTMLElement | null
-  dragStartX = e.clientX
-  dragStartY = e.clientY
-  dragIntentConfirmed = false
-  draggingEvent.value = {
-    eventId: event.id,
-    originalStart: event.start_time,
-    originalEnd: event.end_time,
-    currentTop: eventTopPx(event),
-    currentDayIndex: dayKeys.value.indexOf(event.start_time.slice(0, 10)),
-    columnRect: colEl?.getBoundingClientRect() ?? null,
-  }
-  document.body.style.userSelect = 'none'
-}
-
 // ─── Drag-to-create on time grid (mouse) ──────────────────────
 interface CreateState {
   dayKey: string
@@ -156,19 +121,6 @@ function onWindowMousemove(e: MouseEvent) {
     sidebarWidth.value = Math.min(MAX_SIDEBAR, Math.max(MIN_SIDEBAR, resizeStartWidth + delta))
     return
   }
-  if (draggingEvent.value) {
-    if (!dragIntentConfirmed) {
-      const dx = e.clientX - dragStartX
-      const dy = e.clientY - dragStartY
-      if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD_PX) return
-      dragIntentConfirmed = true
-    }
-    // Update ghost position — track cursor Y relative to column
-    if (draggingEvent.value.columnRect) {
-      draggingEvent.value.currentTop = e.clientY - draggingEvent.value.columnRect.top
-    }
-    return
-  }
   if (creatingEvent.value) {
     const relY = e.clientY - creatingEvent.value.columnRect.top
     creatingEvent.value.currentY = relY
@@ -176,65 +128,11 @@ function onWindowMousemove(e: MouseEvent) {
   }
 }
 
-async function onWindowMouseup(e: MouseEvent) {
+async function onWindowMouseup(_e: MouseEvent) {
   if (resizing) {
     resizing = false
     document.body.style.cursor = ''
     document.body.style.userSelect = ''
-    return
-  }
-
-  if (draggingEvent.value) {
-    const state = draggingEvent.value
-    const wasConfirmedDrag = dragIntentConfirmed
-    draggingEvent.value = null
-    dragIntentConfirmed = false
-    document.body.style.userSelect = ''
-
-    // Click without drag — bail. The block's own @click handler opens the
-    // event panel. Without this guard, a plain click commits a no-op move
-    // that still fires a PATCH.
-    if (!wasConfirmedDrag) return
-
-    // Find which day column the mouse is over
-    const el = document.elementFromPoint(e.clientX, e.clientY)
-    const colEl = el?.closest('[data-day-col]') as HTMLElement | null
-
-    if (!colEl) {
-      // Dropped outside grid — snap back (no-op, original is already in store)
-      return
-    }
-
-    const rect = colEl.getBoundingClientRect()
-    const relY = Math.max(0, e.clientY - rect.top)
-    const snapY = snapToMinutes(relY, 15)
-    const hour = Math.floor(snapY / HOUR_HEIGHT) + START_HOUR
-    const minute = Math.round(((snapY % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
-
-    const dayStr = colEl.getAttribute('data-day-col')!
-    const existing = eventStore.events.find(ev => ev.id === state.eventId)
-    if (!existing) return
-
-    const durationMs = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
-    const newStart = new Date(dayStr + 'T00:00:00')
-    newStart.setHours(hour, minute, 0, 0)
-    const newEnd = new Date(newStart.getTime() + durationMs)
-
-    // Recurring occurrence — defer commit until the user picks an edit scope.
-    // Backend (PR #219) requires {scope, original_start_time} to know whether
-    // to EXDATE this instance, split the series, or move the master.
-    if (existing.is_occurrence) {
-      pendingRecurrence.value = {
-        kind: 'event-move',
-        eventId: state.eventId,
-        startTime: newStart.toISOString(),
-        endTime: newEnd.toISOString(),
-        originalStartTime: state.originalStart,
-      }
-      return
-    }
-
-    await eventStore.moveEvent(state.eventId, newStart.toISOString(), newEnd.toISOString())
     return
   }
 
@@ -646,66 +544,104 @@ const anchorsWithTasks = computed(() => {
   }))
 })
 
-// ─── Drag-to-promote: task → event (HTML5 DnD — sidebar to calendar) ────────────
-const dragOverDay = ref<string | null>(null)
-const dragOverHour = ref<number | null>(null)
+// ─── Column HTML5 DnD drop handlers ──────────────────────────
+// Track which column is hovered for visual highlight
+const overDayIndex = ref<number | null>(null)
+// Capture cursor position on dragover for time-slot computation in onColumnDrop
+const dragPos = ref<{ y: number; rect: DOMRect } | null>(null)
 
-function onDragOver(e: DragEvent, day: Date) {
+function onColumnDragOver(e: DragEvent, dayIndex: number) {
   e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-  dragOverDay.value = localDateString(day)
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  overDayIndex.value = dayIndex
   if (e.currentTarget instanceof HTMLElement) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const relY = e.clientY - rect.top
-    dragOverHour.value = Math.floor(relY / HOUR_HEIGHT) + START_HOUR
+    dragPos.value = { y: e.clientY, rect: e.currentTarget.getBoundingClientRect() }
   }
 }
 
-function onDragLeave() {
-  dragOverDay.value = null
-  dragOverHour.value = null
+function onColumnDragLeave(e: DragEvent, dayIndex: number) {
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as HTMLElement)?.contains(related)) return
+  if (overDayIndex.value === dayIndex) overDayIndex.value = null
 }
 
-async function onDrop(e: DragEvent, day: Date) {
+async function onColumnDrop(e: DragEvent, dayIndex: number) {
   e.preventDefault()
-  dragOverDay.value = null
-  dragOverHour.value = null
+  const pos = dragPos.value
+  overDayIndex.value = null
+  dragPos.value = null
 
   const raw = e.dataTransfer?.getData('text/plain')
-  if (!raw || !(e.currentTarget instanceof HTMLElement)) return
+  if (!raw) return
 
-  let payload: { taskId?: string }
+  let payload: Record<string, unknown>
   try { payload = JSON.parse(raw) } catch { return }
 
-  // Only handle task→event promotions here (eventId moves handled by mouse drag)
-  if (!payload.taskId) return
+  const dayKey = dayKeys.value[dayIndex]
+  let startDate: Date
+  if (pos) {
+    const relY = Math.max(0, pos.y - pos.rect.top)
+    const snapY = snapToMinutes(relY, 15)
+    const hour = Math.floor(snapY / HOUR_HEIGHT) + START_HOUR
+    const minute = Math.round(((snapY % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
+    startDate = new Date(dayKey + 'T00:00:00')
+    startDate.setHours(hour, minute, 0, 0)
+  } else {
+    startDate = new Date(dayKey + 'T12:00:00')
+  }
 
-  // Map drop position to a quarter-hour slot.
-  const rect = e.currentTarget.getBoundingClientRect()
-  const relY = e.clientY - rect.top
-  const hour = Math.floor(relY / HOUR_HEIGHT) + START_HOUR
-  const minute = Math.round(((relY % HOUR_HEIGHT) / HOUR_HEIGHT) * 60 / 15) * 15
-  const startDate = new Date(day)
-  startDate.setHours(hour, minute, 0, 0)
-
-  // If the dragged task already has a calendar event, move it instead of
-  // promoting again — promoting creates a duplicate event row.
-  const existingEvent = eventStore.events.find(ev => ev.task_id === payload.taskId)
-  if (existingEvent) {
-    const durationMs = new Date(existingEvent.end_time).getTime() - new Date(existingEvent.start_time).getTime()
+  if (payload.type === 'calendar-event' && payload.eventId) {
+    // Move event preserving duration (fromStartTime + durationMs from payload)
+    const durationMs = (payload.durationMs as number) || 30 * 60_000
     const endDate = new Date(startDate.getTime() + durationMs)
-    await eventStore.moveEvent(existingEvent.id, startDate.toISOString(), endDate.toISOString())
+    const existing = eventStore.events.find(ev => ev.id === payload.eventId)
+    if (existing?.is_occurrence) {
+      pendingRecurrence.value = {
+        kind: 'event-move',
+        eventId: payload.eventId as string,
+        startTime: startDate.toISOString(),
+        endTime: endDate.toISOString(),
+        originalStartTime: payload.fromStartTime as string,
+      }
+      return
+    }
+    await eventStore.moveEvent(payload.eventId as string, startDate.toISOString(), endDate.toISOString())
     return
   }
 
-  // Promoting a sidebar task (not yet on calendar) to an event.
-  let title = 'Task'
-  for (const anchorPlan of Object.values(planStore.plan?.anchors ?? {})) {
-    const found = anchorPlan.tasks.find(t => t.id === payload.taskId)
-    if (found) { title = found.text; break }
+  if (payload.type === 'task' && payload.taskId) {
+    const taskId = payload.taskId as string
+    // If already promoted, move the existing event rather than creating a duplicate
+    const existingEvent = eventStore.events.find(ev => ev.task_id === taskId)
+    if (existingEvent) {
+      const durationMs = new Date(existingEvent.end_time).getTime() - new Date(existingEvent.start_time).getTime()
+      const endDate = new Date(startDate.getTime() + durationMs)
+      await eventStore.moveEvent(existingEvent.id, startDate.toISOString(), endDate.toISOString())
+      return
+    }
+    const endDate = new Date(startDate.getTime() + 60 * 60_000)
+    const title = (payload.title as string) ?? 'Task'
+    await eventStore.promoteTask(taskId, startDate.toISOString(), endDate.toISOString(), title)
   }
-  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000) // 1 hour default
-  await eventStore.promoteTask(payload.taskId!, startDate.toISOString(), endDate.toISOString(), title)
+}
+
+// ─── Synthetic Task from CalendarEvent ────────────────────────
+// TaskCard mode="calendar-event" needs a Task prop. Build a minimal one from
+// the event so the drag payload and click handler have the right ids/title.
+function taskFromEvent(event: CalendarEvent): Task {
+  return {
+    id: event.task_id ?? event.id,
+    text: event.title,
+    description: null,
+    status: 'pending',
+    position: 0,
+    followup_config: null,
+    blocks: [],
+    blocked_by: [],
+    context_subject: event.context_subject,
+    context_node_id: null,
+    anchor_id: event.anchor_id,
+  }
 }
 
 // ─── Panel navigation ─────────────────────────────────────────
@@ -789,8 +725,8 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
               @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
               @dragstart="(e: DragEvent) => {
                 if (e.dataTransfer) {
-                  e.dataTransfer.effectAllowed = 'copy'
-                  e.dataTransfer.setData('text/plain', JSON.stringify({ taskId: task.id }))
+                  e.dataTransfer.effectAllowed = 'move'
+                  e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'task', taskId: task.id, title: task.text }))
                 }
               }"
             >
@@ -978,7 +914,6 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
                 :style="{ backgroundColor: resolveColor(ev), color: textOnColor(resolveColor(ev)) }"
                 data-event-block
                 @click="openEventPanel(ev)"
-                @mousedown.stop="(e: MouseEvent) => onEventMousedown(e, ev)"
               >
                 {{ ev.title }}
               </div>
@@ -1002,21 +937,21 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
 
             <!-- Day columns -->
             <div
-              v-for="(day, i) in days"
+              v-for="(_, i) in days"
               :key="dayKeys[i]"
               :data-testid="`day-col-${dayKeys[i]}`"
               :data-day-col="dayKeys[i]"
               class="flex-1 relative border-l border-[--border-soft] min-w-0"
               :class="[
-                dragOverDay === dayKeys[i] ? 'bg-[--accent-veil]' : '',
+                overDayIndex === i ? 'bg-[--accent-veil]' : '',
                 focusedDay === dayKeys[i] ? 'ring-1 ring-inset ring-[--accent-soft]' : '',
               ]"
               :style="{ height: `${HOUR_HEIGHT * (END_HOUR - START_HOUR)}px` }"
               @click.self="focusDay(dayKeys[i])"
               @mousedown="(e: MouseEvent) => onDayColumnMousedown(e, dayKeys[i])"
-              @dragover="(e: DragEvent) => onDragOver(e, day)"
-              @dragleave="onDragLeave"
-              @drop="(e: DragEvent) => onDrop(e, day)"
+              @dragover="(e: DragEvent) => onColumnDragOver(e, i)"
+              @dragleave="(e: DragEvent) => onColumnDragLeave(e, i)"
+              @drop="(e: DragEvent) => onColumnDrop(e, i)"
             >
               <!-- Hour grid lines -->
               <div
@@ -1047,20 +982,20 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
                 :style="{ top: `${band.topPx}px`, height: `${band.heightPx}px` }"
               />
 
-              <!-- Event blocks — using CalendarEventBlock component -->
-              <CalendarEventBlock
+              <!-- Event blocks — TaskCard in calendar-event mode -->
+              <TaskCard
                 v-for="event in eventsByDay[dayKeys[i]]"
                 :key="event.id"
+                :task="taskFromEvent(event)"
+                mode="calendar-event"
                 :event="event"
                 :top-px="eventTopPx(event)"
                 :height-px="eventHeightPx(event)"
                 :left-percent="overlapLayouts[dayKeys[i]]?.[event.id]?.leftPercent ?? 0"
                 :width-percent="overlapLayouts[dayKeys[i]]?.[event.id]?.widthPercent ?? 100"
                 :resolved-color="resolveColor(event)"
-                :style="draggingEvent?.eventId === event.id ? { opacity: 0.5 } : {}"
                 data-event-block
                 @click="openEventPanel(event)"
-                @mousedown="(e: MouseEvent) => onEventMousedown(e, event)"
               />
 
               <!-- Creation drag selection rectangle -->
@@ -1068,13 +1003,6 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
                 v-if="creatingEvent?.dayKey === dayKeys[i] && createSelectionStyle"
                 class="absolute inset-x-1 bg-blue-500/30 border border-blue-400 rounded pointer-events-none z-20"
                 :style="createSelectionStyle"
-              />
-
-              <!-- Drop indicator (sidebar DnD) -->
-              <div
-                v-if="dragOverDay === dayKeys[i] && dragOverHour !== null"
-                class="absolute inset-x-1 h-0.5 bg-[--accent] rounded pointer-events-none z-20"
-                :style="{ top: `${(dragOverHour! - START_HOUR) * HOUR_HEIGHT}px` }"
               />
             </div>
           </div>
