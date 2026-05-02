@@ -1,6 +1,7 @@
 /**
- * MiniCalendar — compact month sidebar for plan view
- * Day cells are drop targets via MiniCalendarDay child component (one useDropZone per cell).
+ * MiniCalendar — compact month navigation popover
+ * Clicking a day emits 'day-click' up to PlanView for navigation.
+ * No drag-and-drop — MiniCalendar is navigation-only.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -20,7 +21,7 @@ vi.mock('../MiniCalendarDay.vue', () => ({
   default: {
     props: ['date', 'taskCount', 'isToday'],
     template: '<div :data-testid="\'day-\' + date" :data-date="date" />',
-    emits: ['task-dropped'],
+    emits: ['day-click'],
   },
 }))
 
@@ -56,7 +57,7 @@ describe('MiniCalendar — rendering', () => {
   })
 })
 
-describe('MiniCalendar — drop delegation', () => {
+describe('MiniCalendar — day-click navigation', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
@@ -67,16 +68,8 @@ describe('MiniCalendar — drop delegation', () => {
     return mount(MiniCalendar, {})
   }
 
-  it('calls planStore.moveTaskToAnchor when a task-dropped event is emitted from a day cell', async () => {
-    const { usePlanStore } = await import('../../../stores/plan')
-    const store = usePlanStore()
-    const spy = vi.spyOn(store, 'moveTaskToAnchor').mockResolvedValue(undefined)
-
+  it('emits day-click with the date when a day cell emits day-click', async () => {
     const w = await mountCalendar()
-
-    // Use findAllComponents to get Vue component wrappers (not DOM wrappers).
-    // trigger('task-dropped') fires a native DOM event — Vue's @task-dropped listener
-    // only fires when the child component calls emit(). We need vm.$emit() here.
     const { default: MiniCalendarDayStub } = await import('../MiniCalendarDay.vue')
     const dayWrappers = w.findAllComponents(MiniCalendarDayStub)
     expect(dayWrappers).toHaveLength(42)
@@ -84,14 +77,10 @@ describe('MiniCalendar — drop delegation', () => {
     const targetWrapper = dayWrappers[10]
     const targetDate = targetWrapper.props('date') as string
 
-    // Emit via Vue's component emit — propagates to parent's @task-dropped listener
-    await targetWrapper.vm.$emit('task-dropped', { taskId: 'task-xyz', date: targetDate, fromAnchorId: 'morning' })
+    await targetWrapper.vm.$emit('day-click', targetDate)
     await w.vm.$nextTick()
 
-    // MiniCalendar handles the event and calls the store
-    expect(spy).toHaveBeenCalledOnce()
-    const call = spy.mock.calls[0][0]
-    expect(call.taskId).toBe('task-xyz')
-    expect(call.newDate).toBe(targetDate)
+    expect(w.emitted('day-click')).toBeTruthy()
+    expect(w.emitted('day-click')![0][0]).toBe(targetDate)
   })
 })
