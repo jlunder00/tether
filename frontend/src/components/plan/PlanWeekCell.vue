@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { usePlanStore } from '../../stores/plan'
 import type { Task } from '../../stores/plan'
+import { useDropZone } from '../../composables/useDropZone'
 import TaskCard from '../TaskCard.vue'
 
 const props = defineProps<{
@@ -13,42 +14,39 @@ const props = defineProps<{
 
 const planStore = usePlanStore()
 
-// ── Drag-over visual state ────────────────────────────────────────────────────
-const isDragOver = ref(false)
+// ── Source hiding ─────────────────────────────────────────────────────────────
+const draggingTaskId = ref<string | null>(null)
 
-function onDragOver(e: DragEvent) {
-  e.preventDefault()
-  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
-  isDragOver.value = true
+function onTaskDragStart(evt: DragEvent, task: Task) {
+  if (!task.id) { evt.preventDefault(); return }
+  draggingTaskId.value = task.id
+  if (!evt.dataTransfer) return
+  evt.dataTransfer.effectAllowed = 'move'
+  evt.dataTransfer.setData('text/plain', JSON.stringify({
+    type: 'task',
+    taskId: task.id,
+    title: task.text,
+    fromDate: props.date,
+    fromAnchorId: props.anchorId,
+  }))
 }
 
-function onDragLeave() {
-  isDragOver.value = false
+function onTaskDragEnd() {
+  draggingTaskId.value = null
 }
 
-// ── Drop: move task to this anchor×day cell ───────────────────────────────────
-async function onDrop(e: DragEvent) {
-  e.preventDefault()
-  isDragOver.value = false
-
-  const raw = e.dataTransfer?.getData('text/plain')
-  if (!raw) return
-
-  let payload: { taskId?: string }
-  try {
-    payload = JSON.parse(raw)
-  } catch {
-    return // ignore malformed drag data from other drag sources
-  }
-
-  if (!payload.taskId) return
-
-  await planStore.moveTaskToAnchor({
-    taskId: payload.taskId,
-    newDate: props.date,
-    anchorId: props.anchorId,
-  })
-}
+// ── Drop: move task to this anchor×day cell via useDropZone ───────────────────
+const { isOver, dropHandlers } = useDropZone({
+  onDrop(payload) {
+    const p = payload as { taskId?: string }
+    if (!p.taskId) return
+    planStore.moveTaskToAnchor({
+      taskId: p.taskId,
+      newDate: props.date,
+      anchorId: props.anchorId,
+    })
+  },
+})
 </script>
 
 <template>
@@ -56,22 +54,31 @@ async function onDrop(e: DragEvent) {
     data-testid="week-cell-drop"
     class="min-h-[80px] p-1 rounded transition-colors"
     :class="[
-      isDragOver
+      isOver
         ? 'ring-1 ring-[--accent] bg-[--accent-veil]'
         : 'bg-[--bg-elev-1] hover:bg-[--bg-elev-2]',
     ]"
-    @dragover="onDragOver"
-    @dragleave="onDragLeave"
-    @drop="onDrop"
+    @dragenter="dropHandlers.onDragEnter"
+    @dragover="dropHandlers.onDragOver"
+    @dragleave="dropHandlers.onDragLeave"
+    @drop="dropHandlers.onDrop"
   >
     <div class="flex flex-col gap-0.5">
-      <TaskCard
+      <div
         v-for="task in tasks"
         :key="task.id"
-        :task="task"
-        :hide-tags="true"
-        class="text-xs"
-      />
+        :data-task-id="task.id"
+        draggable="true"
+        v-show="draggingTaskId !== task.id"
+        @dragstart="onTaskDragStart($event, task)"
+        @dragend="onTaskDragEnd"
+      >
+        <TaskCard
+          :task="task"
+          :hide-tags="true"
+          class="text-xs"
+        />
+      </div>
       <div v-if="!tasks.length" class="text-[11px] text-[--fg-6] px-1 py-0.5 italic">
         No tasks
       </div>

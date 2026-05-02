@@ -6,6 +6,7 @@ import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { KanbanColumn } from '../stores/kanban'
 import { api } from '../lib/api'
+import { useDropZone } from '../composables/useDropZone'
 import { useSlideOver } from '../composables/useSlideOver'
 
 const { push: pushPanel } = useSlideOver()
@@ -100,48 +101,39 @@ function addOpts(contextSubject: string | null, milestoneId?: string) {
   return opts
 }
 
-// ── Drop target (dragenter counter avoids highlight flicker on child elements) ──
+// ── Source hiding ─────────────────────────────────────────────────────────────
+// Track which task is being dragged so its wrapper div can be hidden via v-show.
+const draggingTaskId = ref<string | null>(null)
 
-const dragEnterCount = ref(0)
-
-function onColumnDragEnter() {
-  dragEnterCount.value++
+function onTaskDragStart(evt: DragEvent, task: Task) {
+  if (!task.id) { evt.preventDefault(); return }
+  draggingTaskId.value = task.id
+  if (!evt.dataTransfer) return
+  evt.dataTransfer.effectAllowed = 'move'
+  evt.dataTransfer.setData('text/plain', JSON.stringify({
+    type: 'task',
+    taskId: task.id,
+    title: task.text,
+  }))
 }
 
-function onColumnDragOver(evt: DragEvent) {
-  evt.preventDefault()
-  if (evt.dataTransfer) {
-    evt.dataTransfer.dropEffect = 'move'
-  }
+function onTaskDragEnd() {
+  draggingTaskId.value = null
 }
 
-function onColumnDragLeave() {
-  dragEnterCount.value = Math.max(0, dragEnterCount.value - 1)
-}
-
-function onColumnDrop(evt: DragEvent) {
-  evt.preventDefault()
-  evt.stopPropagation()
-  dragEnterCount.value = 0
-  const raw = evt.dataTransfer?.getData('text/plain')
-  if (!raw) return
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    return // ignore drops from external sources (files, other apps)
-  }
-
-  if (
-    parsed !== null &&
-    typeof parsed === 'object' &&
-    'taskId' in parsed &&
-    typeof (parsed as Record<string, unknown>).taskId === 'string'
-  ) {
-    emit('task-drop', (parsed as { taskId: string }).taskId, props.column.id)
-  }
-}
+// ── Drop target — useDropZone replaces manual dragEnterCount ─────────────────
+const { isOver, dropHandlers } = useDropZone({
+  onDrop(payload) {
+    if (
+      payload !== null &&
+      typeof payload === 'object' &&
+      'taskId' in payload &&
+      typeof (payload as Record<string, unknown>).taskId === 'string'
+    ) {
+      emit('task-drop', (payload as { taskId: string }).taskId, props.column.id)
+    }
+  },
+})
 </script>
 
 <template>
@@ -159,11 +151,11 @@ function onColumnDrop(evt: DragEvent) {
 
     <!-- Scrollable body (fills remaining column height) -->
     <div class="flex-1 overflow-y-auto p-2 space-y-2 min-h-0 transition-all"
-         :class="dragEnterCount > 0 ? 'ring-2 ring-[--accent] bg-[--accent-veil]' : ''"
-         @dragenter="onColumnDragEnter"
-         @dragover="onColumnDragOver"
-         @dragleave="onColumnDragLeave"
-         @drop="onColumnDrop">
+         :class="isOver ? 'ring-2 ring-[--accent] bg-[--accent-veil]' : ''"
+         @dragenter="dropHandlers.onDragEnter"
+         @dragover="dropHandlers.onDragOver"
+         @dragleave="dropHandlers.onDragLeave"
+         @drop="dropHandlers.onDrop">
       <template v-if="!tasks.length">
         <p class="text-[--fg-6] text-xs text-center py-4">No tasks</p>
       </template>
@@ -185,14 +177,22 @@ function onColumnDrop(evt: DragEvent) {
             class="mb-1"
             @header-click="pushPanel({ kind: 'milestone', entityId: mg.id })">
             <div class="space-y-px">
-              <TaskCard
+              <div
                 v-for="task in mg.tasks"
                 :key="task.id"
-                :task="task"
-                :editable="false"
-                :showRemove="false"
-                :compact="true" :hideTags="true"
-                @update="onTaskUpdate" />
+                :data-task-id="task.id"
+                draggable="true"
+                v-show="draggingTaskId !== task.id"
+                @dragstart="onTaskDragStart($event, task)"
+                @dragend="onTaskDragEnd"
+              >
+                <TaskCard
+                  :task="task"
+                  :editable="false"
+                  :showRemove="false"
+                  :compact="true" :hideTags="true"
+                  @update="onTaskUpdate" />
+              </div>
             </div>
             <button @click.stop="emit('add-task', addOpts(group.contextSubject, mg.id))"
                     class="mt-1 text-xs text-[--fg-4] hover:text-[--fg-2] w-full text-left">
@@ -202,14 +202,22 @@ function onColumnDrop(evt: DragEvent) {
 
           <!-- Ungrouped tasks -->
           <div v-if="group.ungrouped.length" class="space-y-1">
-            <TaskCard
+            <div
               v-for="task in group.ungrouped"
               :key="task.id"
-              :task="task"
-              :editable="false"
-              :showRemove="false"
-              :compact="true" :hideTags="true"
-              @update="onTaskUpdate" />
+              :data-task-id="task.id"
+              draggable="true"
+              v-show="draggingTaskId !== task.id"
+              @dragstart="onTaskDragStart($event, task)"
+              @dragend="onTaskDragEnd"
+            >
+              <TaskCard
+                :task="task"
+                :editable="false"
+                :showRemove="false"
+                :compact="true" :hideTags="true"
+                @update="onTaskUpdate" />
+            </div>
           </div>
 
           <button @click.stop="emit('add-task', addOpts(group.contextSubject))"
