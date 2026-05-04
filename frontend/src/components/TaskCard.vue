@@ -257,7 +257,7 @@ const calendarEventStyle = computed(() => {
           data-testid="plan-status-glyph"
           @click.stop="editable && cycleStatus()"
           :class="STATUS_GLYPH_CLASS[task.status]"
-          class="flex-shrink-0 w-4 font-mono text-xs leading-5 text-[--fg-3] hover:text-[--fg-1] cursor-pointer transition-colors"
+          class="flex-shrink-0 font-mono text-sm leading-5 text-[--fg-3] hover:text-[--fg-1] cursor-pointer transition-colors whitespace-nowrap"
           :title="task.status" />
 
         <!-- Task text — wraps, fills available width -->
@@ -448,6 +448,13 @@ const calendarEventStyle = computed(() => {
    Characters are defined as CSS custom properties in themes.css so terminal
    and dracula themes get ASCII bracket notation ([ ] [~] [x] [-] [!]) while
    all other themes use Unicode circles (○ ◑ ● ⊘ ⊗). No JS required. */
+.status-glyph-pending::before,
+.status-glyph-in_progress::before,
+.status-glyph-done::before,
+.status-glyph-skipped::before,
+.status-glyph-blocked::before {
+  white-space: nowrap; /* prevents [ ] splitting across lines in terminal theme */
+}
 .status-glyph-pending::before    { content: var(--glyph-pending); }
 .status-glyph-in_progress::before { content: var(--glyph-in-progress); }
 .status-glyph-done::before       { content: var(--glyph-done); }
