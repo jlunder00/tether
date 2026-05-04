@@ -197,6 +197,104 @@ describe('TaskCard mode prop', () => {
   })
 })
 
+describe('TaskCard plan mode compact layout', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  // TDD: these tests define the target compact list layout for plan mode.
+  // Status glyphs replace the old absolute-positioned status pill.
+
+  it('renders a status glyph button in plan mode', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: baseTask, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').exists()).toBe(true)
+  })
+
+  // Glyph characters are injected via CSS ::before / --glyph-* custom properties
+  // (see themes.css), so jsdom cannot observe the rendered character. We test the
+  // CSS class applied to the button instead — the class drives the right ::before rule.
+
+  it('applies status-glyph-pending class for pending status', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: baseTask, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').classes()).toContain('status-glyph-pending')
+  })
+
+  it('applies status-glyph-in_progress class for in_progress status', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'in_progress' }, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').classes()).toContain('status-glyph-in_progress')
+  })
+
+  it('applies status-glyph-done class for done status', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'done' }, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').classes()).toContain('status-glyph-done')
+  })
+
+  it('applies status-glyph-skipped class for skipped status', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'skipped' }, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').classes()).toContain('status-glyph-skipped')
+  })
+
+  it('applies status-glyph-blocked class for blocked status', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'blocked' }, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').classes()).toContain('status-glyph-blocked')
+  })
+
+  it('clicking glyph cycles status from pending → in_progress', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: baseTask, mode: 'plan', editable: true },
+    })
+    await wrapper.find('[data-testid="plan-status-glyph"]').trigger('click')
+    const updateEvents = wrapper.emitted('update')
+    expect(updateEvents).toBeTruthy()
+    expect((updateEvents![0][0] as Task).status).toBe('in_progress')
+  })
+
+  it('clicking glyph cycles status from done → skipped', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'done' }, mode: 'plan', editable: true },
+    })
+    await wrapper.find('[data-testid="plan-status-glyph"]').trigger('click')
+    const updateEvents = wrapper.emitted('update')
+    expect((updateEvents![0][0] as Task).status).toBe('skipped')
+  })
+
+  it('clicking glyph cycles status from blocked → pending (wrap-around)', async () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: { ...baseTask, status: 'blocked' }, mode: 'plan', editable: true },
+    })
+    await wrapper.find('[data-testid="plan-status-glyph"]').trigger('click')
+    const updateEvents = wrapper.emitted('update')
+    expect((updateEvents![0][0] as Task).status).toBe('pending')
+  })
+
+  it('does not show old status pill in plan mode', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: baseTask, mode: 'plan' },
+    })
+    expect(wrapper.find('[data-testid="task-card-status-pill"]').exists()).toBe(false)
+  })
+
+  it('kanban mode still shows status pill, not status glyph', () => {
+    const wrapper = mount(TaskCard, {
+      props: { task: baseTask, mode: 'kanban' },
+    })
+    expect(wrapper.find('[data-testid="plan-status-glyph"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="task-card-status-pill"]').exists()).toBe(true)
+  })
+})
+
 describe('TaskCard isDragging / source-hide behavior', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

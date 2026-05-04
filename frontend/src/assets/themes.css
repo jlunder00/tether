@@ -133,6 +133,13 @@
   --motion-fast:  150ms;
   --motion-mid:   300ms;
   --motion-slow:  900ms;
+
+  /* status glyphs — plan-mode compact task list (terminal themes override below) */
+  --glyph-pending:     "○";
+  --glyph-in-progress: "◑";
+  --glyph-done:        "●";
+  --glyph-skipped:     "⊘";
+  --glyph-blocked:     "⊗";
 }
 
 
@@ -579,6 +586,13 @@
   --shadow-pop:    0 0 0 1px #3D703D, 0 8px 24px rgba(0, 0, 0, 0.80);
   --shadow-event:  0 0 0 1px #2A4F2A;
   --shadow-focus:  0 0 0 2px #50FA7B;
+
+  /* ASCII bracket glyphs for terminal voice */
+  --glyph-pending:     "[ ]";
+  --glyph-in-progress: "[~]";
+  --glyph-done:        "[x]";
+  --glyph-skipped:     "[-]";
+  --glyph-blocked:     "[!]";
 }
 
 /* TERMINAL · DAYLIGHT — paper-white canvas, dark forest green text.
@@ -821,6 +835,13 @@
   --type-voice:   terminal;
   --font-display: "JetBrains Mono", ui-monospace, monospace;
   --font-sans:    "Inter", system-ui, sans-serif;
+
+  /* ASCII bracket glyphs for terminal voice */
+  --glyph-pending:     "[ ]";
+  --glyph-in-progress: "[~]";
+  --glyph-done:        "[x]";
+  --glyph-skipped:     "[-]";
+  --glyph-blocked:     "[!]";
 }
 
 [data-theme="dracula"][data-mode="light"] {
