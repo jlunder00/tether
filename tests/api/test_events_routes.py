@@ -566,11 +566,11 @@ async def _ensure_anchor(conn) -> str:
     )
     if row:
         return str(row["id"])
-    # Create a minimal anchor for testing
+    # Create a minimal anchor for testing — id has no DB default, must supply explicitly
     row = await conn.fetchrow(
         """
-        INSERT INTO anchors (user_id, name, time, duration_minutes)
-        VALUES (current_setting('app.current_user_id', true)::uuid, 'Morning', '09:00', 120)
+        INSERT INTO anchors (id, user_id, name, time, duration_minutes)
+        VALUES (gen_random_uuid(), current_setting('app.current_user_id', true)::uuid, 'Morning', '09:00', 120)
         RETURNING id
         """
     )
