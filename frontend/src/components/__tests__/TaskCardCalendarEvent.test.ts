@@ -133,21 +133,43 @@ describe('TaskCard – mode="calendar-event"', () => {
     expect(wrapper.find('[data-testid="recurring-indicator"]').exists()).toBe(true)
   })
 
-  it('uses resolvedColor for background and left border; falls back to default #6366f1 for tether events', async () => {
+  it('non-tether event: resolvedColor still drives background and left border', async () => {
     const { default: TaskCard } = await import('../TaskCard.vue')
-    // With explicit resolvedColor
     const wrapper = mount(TaskCard, {
-      props: { task: mockTask, mode: 'calendar-event', event: mockEvent, heightPx: 60, topPx: 0, resolvedColor: '#ff0000' },
+      props: { task: mockTask, mode: 'calendar-event', event: googleEvent, heightPx: 60, topPx: 0, resolvedColor: '#ff0000' },
     })
     const style = wrapper.find('[data-testid="task-card-calendar-event"]').attributes('style') ?? ''
     expect(style).toContain('#ff0000')
+  })
 
-    // Without resolvedColor — tether source falls back to #6366f1
-    const wrapper2 = mount(TaskCard, {
+  it('tether event with motif set: data-motif attribute carries the motif, style uses var(--m)', async () => {
+    const { default: TaskCard } = await import('../TaskCard.vue')
+    const taskWithMotif = { ...mockTask, motif: 'focus' }
+    const wrapper = mount(TaskCard, {
+      props: { task: taskWithMotif, mode: 'calendar-event', event: mockEvent, heightPx: 60, topPx: 0, resolvedColor: '#ff0000' },
+    })
+    const card = wrapper.find('[data-testid="task-card-calendar-event"]')
+    // Motif conveyed via data-motif attribute (drives --m CSS variable in motifs.css)
+    expect(card.attributes('data-motif')).toBe('focus')
+    const style = card.attributes('style') ?? ''
+    // Must NOT use the hex resolvedColor for tether events
+    expect(style).not.toContain('#ff0000')
+    // Style references the --m token (resolved at paint time from data-motif)
+    expect(style).toContain('var(--m)')
+  })
+
+  it('tether event with null motif: data-motif falls back to anchor', async () => {
+    const { default: TaskCard } = await import('../TaskCard.vue')
+    const wrapper = mount(TaskCard, {
       props: { task: mockTask, mode: 'calendar-event', event: mockEvent, heightPx: 60, topPx: 0 },
     })
-    const style2 = wrapper2.find('[data-testid="task-card-calendar-event"]').attributes('style') ?? ''
-    expect(style2).toContain('#6366f1')
+    const card = wrapper.find('[data-testid="task-card-calendar-event"]')
+    // null motif → anchor fallback
+    expect(card.attributes('data-motif')).toBe('anchor')
+    const style = card.attributes('style') ?? ''
+    // Must NOT fall back to legacy default hex
+    expect(style).not.toContain('#6366f1')
+    expect(style).toContain('var(--m)')
   })
 
   // ── KEY FAILING TEST ── calendarContext not yet wired in TaskCard

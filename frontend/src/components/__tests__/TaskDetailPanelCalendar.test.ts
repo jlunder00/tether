@@ -142,15 +142,13 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     expect(wrapper.find('[data-testid="recurrence-picker-stub"]').exists()).toBe(false)
   })
 
-  it('color input @input updates eventStore color for task-linked events (after debounce)', async () => {
-    // Verifies the task-linked picker → store path works end-to-end.
-    // onEventColorChange debounces 150 ms; fake timers are used to flush it.
+  it('hex color input is NOT in the Calendar section for task-linked tether events (motif handles color)', async () => {
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
     backlogTasksRef.value = [MOCK_TASK]
     eventStore.events.push({
-      id: 'ev-linked',
+      id: 'ev-linked-nohex',
       title: 'Test task',
       start_time: '2024-06-10T09:00:00Z',
       end_time: '2024-06-10T10:00:00Z',
@@ -173,22 +171,13 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
     })
     await wrapper.vm.$nextTick()
 
-    const colorInput = wrapper.find('[data-testid="event-color-input"]')
-    expect(colorInput.exists()).toBe(true)
-
-    vi.useFakeTimers()
-    try {
-      // setValue triggers the input event synchronously
-      await colorInput.setValue('#ff0000')
-      // Advance timers past the 150 ms debounce window
-      vi.runAllTimers()
-      await wrapper.vm.$nextTick()
-    } finally {
-      vi.useRealTimers()
-    }
-
-    expect(eventStore.events.find(e => e.id === 'ev-linked')?.color).toBe('#ff0000')
+    // In the full-task+event view, the hex picker should be gone — MotifPicker drives color
+    expect(wrapper.find('[data-testid="event-color-input"]').exists()).toBe(false)
   })
+
+  // NOTE: hex color input is intentionally NOT present for task-linked events.
+  // Task colour is controlled entirely via the MotifPicker (see test above).
+  // Standalone events (no linked task) still have a hex picker — tested below.
 
   // Bug 1: Standalone events (no task_id) opened via kind:'event' in SlideOverStack
   // pass their own event.id as the taskId prop. The current taskEvent computed only
@@ -277,6 +266,8 @@ describe('TaskDetailPanel — Calendar section RecurrencePicker', () => {
 // before issuing any PATCH so the user can choose 'this' / 'future' / 'all'.
 // The dialog is teleported to document.body — tests must use attachTo.
 
+// Standalone recurring event: no linked task, opened directly via event ID.
+// The hex color picker is present for standalone events (no MotifPicker available).
 const RECURRING_EVENT = {
   id: 'ev-recurring',
   title: 'Weekly meeting',
@@ -284,7 +275,7 @@ const RECURRING_EVENT = {
   end_time: '2024-06-10T10:00:00Z',
   source: 'tether' as const,
   external_id: null,
-  task_id: 'task-1',
+  task_id: null,   // standalone — no linked task
   anchor_id: null,
   color: null,
   is_recurring: true,
@@ -307,21 +298,20 @@ describe('TaskDetailPanel — Color change scope dialog for recurring events', (
     }
   })
 
-  // Contract / green-anchor: non-recurring event color change calls PATCH immediately.
-  it('non-recurring: color change calls PATCH /api/events/:id with color payload', async () => {
+  // Contract / green-anchor: standalone non-recurring event color change calls PATCH immediately.
+  it('standalone non-recurring: color change calls PATCH /api/events/:id with color payload', async () => {
     const { api } = await import('../../lib/api')
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
-    backlogTasksRef.value = [MOCK_TASK]
     eventStore.events.push({
       id: 'ev-nonrecurring',
-      title: 'Test task',
+      title: 'Standalone event',
       start_time: '2024-06-10T09:00:00Z',
       end_time: '2024-06-10T10:00:00Z',
       source: 'tether' as const,
       external_id: null,
-      task_id: 'task-1',
+      task_id: null,   // standalone
       anchor_id: null,
       color: null,
       is_recurring: false,
@@ -333,7 +323,7 @@ describe('TaskDetailPanel — Color change scope dialog for recurring events', (
 
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
     const wrapper = mount(TaskDetailPanel, {
-      props: { taskId: 'task-1' },
+      props: { taskId: 'ev-nonrecurring' },   // standalone: pass event ID directly
       global: { stubs: GLOBAL_STUBS },
     })
     await wrapper.vm.$nextTick()
@@ -357,18 +347,17 @@ describe('TaskDetailPanel — Color change scope dialog for recurring events', (
     expect(body.color).toBe('#aa3300')
   })
 
-  // Recurring event: color change via @change must show the scope dialog, NOT patch immediately.
+  // Standalone recurring event: color change via @change must show the scope dialog.
   it('recurring: color change shows RecurrenceEditDialog instead of patching immediately', async () => {
     const { api } = await import('../../lib/api')
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
-    backlogTasksRef.value = [MOCK_TASK]
     eventStore.events.push({ ...RECURRING_EVENT })
 
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
     const wrapper = mount(TaskDetailPanel, {
-      props: { taskId: 'task-1' },
+      props: { taskId: 'ev-recurring' },   // standalone: pass event ID directly
       global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
       attachTo: document.body,
     })
@@ -397,63 +386,16 @@ describe('TaskDetailPanel — Color change scope dialog for recurring events', (
   })
 
   // Recurring event: confirming the scope dialog sends PATCH with color + scope.
-  it('recurring: confirming scope dialog sends PATCH with color and scope', async () => {
-    const { api } = await import('../../lib/api')
-    const { useEventStore } = await import('../../stores/events')
-    const eventStore = useEventStore()
-
-    backlogTasksRef.value = [MOCK_TASK]
-    eventStore.events.push({ ...RECURRING_EVENT })
-
-    const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
-    const wrapper = mount(TaskDetailPanel, {
-      props: { taskId: 'task-1' },
-      global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
-      attachTo: document.body,
-    })
-    await wrapper.vm.$nextTick()
-
-    // Open the scope dialog
-    const colorInput = wrapper.find('[data-testid="event-color-input"]')
-    ;(colorInput.element as HTMLInputElement).value = '#bb2200'
-    await colorInput.trigger('change')
-    await nextTick()
-
-    // Select 'this_and_future' scope and confirm
-    const futureRadio = document.body.querySelector('[data-testid="scope-future"]') as HTMLInputElement
-    if (futureRadio) {
-      futureRadio.click()
-      await nextTick()
-    }
-    const confirmBtn = document.body.querySelector('[data-testid="recurrence-edit-confirm"]') as HTMLElement
-    expect(confirmBtn).not.toBeNull()
-    confirmBtn.click()
-    await nextTick()
-
-    // PATCH must have been called with color and scope
-    const patchCall = (api as ReturnType<typeof vi.fn>).mock.calls.find(
-      (args: any[]) =>
-        typeof args[0] === 'string' && args[0].includes('ev-recurring') && args[1]?.method === 'PATCH',
-    )
-    expect(patchCall).toBeDefined()
-    const body = JSON.parse(patchCall![1].body)
-    expect(body.color).toBe('#bb2200')
-    expect(body.scope).toBe('this_and_future')
-
-    wrapper.unmount()
-  })
-
   // Recurring event: cancelling the scope dialog leaves the store color unchanged.
   it('recurring: cancelling scope dialog leaves event color unchanged in store', async () => {
     const { useEventStore } = await import('../../stores/events')
     const eventStore = useEventStore()
 
-    backlogTasksRef.value = [MOCK_TASK]
     eventStore.events.push({ ...RECURRING_EVENT })
 
     const { default: TaskDetailPanel } = await import('../TaskDetailPanel.vue')
     const wrapper = mount(TaskDetailPanel, {
-      props: { taskId: 'task-1' },
+      props: { taskId: 'ev-recurring' },   // standalone: pass event ID directly
       global: { stubs: { ...GLOBAL_STUBS, RecurrenceEditDialog: false } },
       attachTo: document.body,
     })

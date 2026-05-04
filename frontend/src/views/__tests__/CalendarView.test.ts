@@ -403,9 +403,9 @@ describe('CalendarView', () => {
     expect(timedTitles).not.toContain('GCal All Day Event')
   })
 
-  it('event block backgroundColor updates reactively when ev.color is mutated in the store', async () => {
-    // Bug 1: color picker in TaskDetailPanel calls updateEventColor which mutates ev.color;
-    // the CalendarView template must re-render and pass the new resolvedColor to CalendarEventBlock.
+  it('tether event block renders with data-motif attribute (motif drives background, not ev.color)', async () => {
+    // Tether tasks: background is driven by task.motif via data-motif attribute
+    // on the TaskCard. The hex event.color is no longer used for card backgrounds.
     const { useEventStore } = await import('../../stores/events')
     const { default: CalendarView } = await import('../CalendarView.vue')
     const wrapper = mount(CalendarView)
@@ -415,10 +415,9 @@ describe('CalendarView', () => {
     const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
     const eventStore = useEventStore()
-    // Seed a tether event with no custom color (will render with default indigo #6366f1)
     eventStore.events.push({
-      id: 'ev-color-test',
-      title: 'Color Reactive Test',
+      id: 'ev-motif-test',
+      title: 'Motif Background Test',
       start_time: `${TODAY}T10:00:00`,
       end_time: `${TODAY}T11:00:00`,
       source: 'tether',
@@ -434,20 +433,18 @@ describe('CalendarView', () => {
     })
     await nextTick()
 
-    // Verify the event block is rendered
+    // Verify the event block renders with data-motif (no task motif → anchor fallback)
     const block = wrapper.find('[data-event-block]')
     expect(block.exists()).toBe(true)
+    expect(block.attributes('data-motif')).toBe('anchor')
 
-    // Mutate the color directly on the reactive store object (as updateEventColor does)
-    const ev = eventStore.events.find(e => e.id === 'ev-color-test')!
+    // Mutating ev.color must NOT change data-motif — motif is stable
+    const ev = eventStore.events.find(e => e.id === 'ev-motif-test')!
     ev.color = '#ff0000'
     await nextTick()
 
-    // The CalendarEventBlock's resolvedColor prop is recomputed via the template's
-    // resolveColor(event) call, which reads event.color — a reactive dependency.
-    // Therefore the block's backgroundColor should now be '#ff0000'.
-    // Note: JSDOM preserves hex literals; real browsers normalize to rgb().
     const updatedBlock = wrapper.find('[data-event-block]')
-    expect(updatedBlock.attributes('style')).toContain('background-color: #ff0000')
+    expect(updatedBlock.attributes('data-motif')).toBe('anchor')
+    expect(updatedBlock.attributes('style')).not.toContain('#ff0000')
   })
 })

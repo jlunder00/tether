@@ -631,23 +631,8 @@ onMounted(async () => {
                 <input type="datetime-local" :value="isoToDatetimeLocal(taskEvent.end_time)"
                        @change="onCalendarEndChange" class="dp-input" />
               </div>
-              <!-- Color picker — @input for live preview, @change gates scope dialog on recurring -->
-              <div class="dp-field">
-                <span class="dp-field__label">Color</span>
-                <div style="display:flex; align-items:center; gap:8px;">
-                  <input type="color" data-testid="event-color-input" :value="displayColor"
-                         style="width:32px;height:28px;cursor:pointer;border:1px solid var(--border-1);border-radius:3px;background:transparent;"
-                         @input="onColorInput" @change="onColorChange" />
-                  <button v-if="taskEvent.color || pendingColorValue != null"
-                          data-testid="event-color-reset"
-                          style="font-size:11px;color:var(--fg-5);cursor:pointer;background:none;border:none;"
-                          @click="onColorReset">Reset</button>
-                </div>
-              </div>
               <RecurrencePicker :model-value="taskEvent.rrule" :start-time="taskEvent.start_time"
                                 @update:model-value="onRecurrenceChange" />
-              <RecurrenceEditDialog :visible="showColorScopeDialog" mode="event" action="edit"
-                                    @confirm="onColorScopeConfirm" @cancel="onColorScopeCancel" />
             </template>
             <template v-else-if="task?.anchor_id && !task?.start_time">
               <p class="dp-notes">Anchor task — drag to the calendar grid to schedule</p>

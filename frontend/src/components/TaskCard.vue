@@ -151,23 +151,31 @@ function toggleFollowup(enabled: boolean) {
 
 // ── Calendar-event mode: helpers and position/size styles ─────────────────────
 
-function defaultEventColor(ev?: CalendarEvent): string {
-  if (!ev || ev.source === 'tether') return ev?.color ?? '#6366f1'
-  return '#4285f4'
-}
+const isTetherEvent = computed(() =>
+  !props.event || props.event.source === 'tether',
+)
 
 const calendarEventStyle = computed(() => {
   const lp = props.leftPercent ?? 0
   const wp = props.widthPercent ?? 100
-  const color = props.resolvedColor ?? defaultEventColor(props.event)
+  // For non-tether events (Google Calendar etc.) use the resolved hex color.
+  // For tether tasks, data-motif is set on the element so --m resolves to the
+  // correct motif colour — reference var(--m) here rather than the literal
+  // var(--motif-X) so the border tracks the same token automatically.
+  // Note: borderLeft shorthand cannot carry a CSS variable without Vue expanding
+  // the value incorrectly, so the border properties are split explicitly.
+  const hexColor = props.resolvedColor ?? '#4285f4'  // Google blue fallback
+  const bg = isTetherEvent.value ? 'var(--m)' : hexColor
   return {
     position: 'absolute' as const,
     top: `${props.topPx ?? 0}px`,
     height: `${props.heightPx ?? 20}px`,
     left: `calc(${lp}% + ${wp * 0.05}% + 2px)`,
     width: `calc(${wp * 0.9}% - 4px)`,
-    backgroundColor: color,
-    borderLeft: `3px solid ${color}`,
+    background: bg,
+    borderLeftWidth: '3px',
+    borderLeftStyle: 'solid' as const,
+    borderLeftColor: bg,
     opacity: props.event?.source !== 'tether' ? 0.75 : 0.92,
   }
 })
@@ -180,6 +188,7 @@ const calendarEventStyle = computed(() => {
     v-show="!isDragging"
     data-testid="task-card-calendar-event"
     data-event-block
+    :data-motif="isTetherEvent ? (task.motif ?? 'anchor') : undefined"
     class="rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
     :style="calendarEventStyle"
     :draggable="isSelfDraggable || undefined"

@@ -117,7 +117,8 @@ describe('TaskCard mode prop', () => {
     expect(style).toContain('height: 60px')
   })
 
-  it('calendar-event mode applies resolvedColor as background', () => {
+  it('calendar-event mode tether event: background driven by data-motif, not hex resolvedColor', () => {
+    // Tether events ignore resolvedColor — motif CSS variable drives the background.
     const wrapper = mount(TaskCard, {
       props: {
         task: baseTask,
@@ -125,10 +126,46 @@ describe('TaskCard mode prop', () => {
         topPx: 0,
         heightPx: 60,
         resolvedColor: '#6366f1',
+        // no event prop → isTetherEvent = true
       },
     })
     const el = wrapper.find('[data-testid="task-card-calendar-event"]')
-    expect(el.attributes('style')).toContain('#6366f1')
+    expect(el.attributes('data-motif')).toBe('anchor')  // null motif → anchor fallback
+    expect(el.attributes('style')).not.toContain('#6366f1')  // hex not used
+    expect(el.attributes('style')).toContain('var(--m)')
+  })
+
+  it('calendar-event mode non-tether event: resolvedColor hex drives background', () => {
+    // Google Calendar events have no motif — use resolvedColor directly.
+    const googleEvent = {
+      id: 'ev-gcal',
+      title: 'GCal event',
+      start_time: '2024-06-10T09:00:00',
+      end_time: '2024-06-10T10:00:00',
+      source: 'google_calendar' as const,
+      external_id: null,
+      task_id: null,
+      anchor_id: null,
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      rrule: null,
+      is_all_day: false,
+      context_subject: null,
+    }
+    const wrapper = mount(TaskCard, {
+      props: {
+        task: baseTask,
+        mode: 'calendar-event',
+        topPx: 0,
+        heightPx: 60,
+        event: googleEvent,
+        resolvedColor: '#4285f4',
+      },
+    })
+    const el = wrapper.find('[data-testid="task-card-calendar-event"]')
+    expect(el.attributes('data-motif')).toBeUndefined()  // non-tether: no motif attr
+    expect(el.attributes('style')).toContain('#4285f4')
   })
 
   it('calendar-event mode applies leftPercent and widthPercent to style', () => {
