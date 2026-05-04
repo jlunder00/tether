@@ -596,4 +596,74 @@ describe('CalendarView', () => {
     // FAILS before fix: patchTaskFields only updates plan.value, not plans.value
     expect(wrapper.find('[data-event-block]').attributes('data-motif')).toBe('focus')
   })
+
+  // ── fetchPlanRange coverage ────────────────────────────────────────────────────
+  // Bug: CalendarView fetched events for a full 7-day week but never called
+  // fetchPlanRange, so planStore.plans was always empty. taskFromEvent() fell
+  // through to planStore.plan (focused day only) — events on non-focused days
+  // always returned a synthetic motifless object.
+  // Fix: loadEvents() must call fetchPlanRange for the same week range.
+
+  it('calls planStore.fetchPlanRange for the visible week on mount', async () => {
+    const { usePlanStore } = await import('../../stores/plan')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+
+    const planStore = usePlanStore()
+    const spy = vi.spyOn(planStore, 'fetchPlanRange').mockResolvedValue(undefined)
+
+    mount(CalendarView)
+    await flushPromises()
+
+    // FAILS before fix: loadEvents() only calls eventStore.fetchEvents, never fetchPlanRange
+    expect(spy).toHaveBeenCalledOnce()
+
+    // The range must span exactly 6 days (Sun→Sat inclusive = 6-day diff)
+    const [start, end] = spy.mock.calls[0] as [string, string]
+    const diff =
+      (new Date(end + 'T12:00:00').getTime() - new Date(start + 'T12:00:00').getTime()) /
+      86_400_000
+    expect(diff).toBe(6)
+  })
+
+  it('calls planStore.fetchPlanRange again when navigating to next week', async () => {
+    const { usePlanStore } = await import('../../stores/plan')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+
+    const planStore = usePlanStore()
+    const spy = vi.spyOn(planStore, 'fetchPlanRange').mockResolvedValue(undefined)
+
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+    spy.mockClear()
+
+    const buttons = wrapper.findAll('button')
+    const nextBtn = buttons.find(b => b.text() === '›')
+    expect(nextBtn).toBeDefined()
+    await nextBtn!.trigger('click')
+    await flushPromises()
+
+    // FAILS before fix: shiftWeek → loadEvents() never calls fetchPlanRange
+    expect(spy).toHaveBeenCalledOnce()
+  })
+
+  it('calls planStore.fetchPlanRange again when navigating to previous week', async () => {
+    const { usePlanStore } = await import('../../stores/plan')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+
+    const planStore = usePlanStore()
+    const spy = vi.spyOn(planStore, 'fetchPlanRange').mockResolvedValue(undefined)
+
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+    spy.mockClear()
+
+    const buttons = wrapper.findAll('button')
+    const prevBtn = buttons.find(b => b.text() === '‹')
+    expect(prevBtn).toBeDefined()
+    await prevBtn!.trigger('click')
+    await flushPromises()
+
+    // FAILS before fix: shiftWeek → loadEvents() never calls fetchPlanRange
+    expect(spy).toHaveBeenCalledOnce()
+  })
 })

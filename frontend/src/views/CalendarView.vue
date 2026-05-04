@@ -690,6 +690,9 @@ function openEventPanel(event: CalendarEvent) {
 // ─── Data loading ──────────────────────────────────────────────
 function loadEvents() {
   eventStore.fetchEvents(dayKeys.value[0], dayKeys.value[6])
+  // Populate planStore.plans for the full visible week so taskFromEvent() returns
+  // live reactive task objects (with motif) for every day — not just the focused day.
+  planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
 }
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
