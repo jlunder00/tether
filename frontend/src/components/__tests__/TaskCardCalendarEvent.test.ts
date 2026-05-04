@@ -9,7 +9,8 @@
  *   3. Renders recurring indicator (↻) when is_recurring or is_occurrence
  *   4. Uses resolvedColor prop for background/border; falls back to defaultColor()
  *   5. Has draggable="true" and dragstart payload includes fromStartTime + durationMs
- *   6. Click opens event panel via pushPanel
+ *   6. Click panel navigation is handled by CalendarView via @click fallthrough —
+ *      TaskCard itself does NOT call pushPanel on click (avoids duplicate panel bug)
  *   7. Hides itself (v-show=false) when isDragging is true
  *   8. Does NOT render plan-mode elements (status controls) in calendar-event mode
  */
@@ -173,13 +174,17 @@ describe('TaskCard – mode="calendar-event"', () => {
     expect(payload.durationMs).toBe(1_800_000)   // 30 min in ms
   })
 
-  it('click opens event panel via pushPanel with task entityId', async () => {
+  it('click does NOT call pushPanel directly — panel navigation is delegated to CalendarView via @click fallthrough', async () => {
+    // TaskCard in calendar-event mode intentionally has no own @click handler.
+    // The parent (CalendarView) provides @click="openEventPanel" which Vue 3 merges as
+    // a fallthrough attribute onto the root element. Having both would cause two pushPanel
+    // calls per click (the duplicate panel bug).
     const { default: TaskCard } = await import('../TaskCard.vue')
     const wrapper = mount(TaskCard, {
       props: { task: mockTask, mode: 'calendar-event', event: mockEvent, heightPx: 60, topPx: 0 },
     })
     await wrapper.find('[data-testid="task-card-calendar-event"]').trigger('click')
-    expect(mockPushPanel).toHaveBeenCalledWith({ kind: 'task', entityId: 'task-1' })
+    expect(mockPushPanel).not.toHaveBeenCalled()
   })
 
   it('is hidden (v-show=false) while drag is active', async () => {

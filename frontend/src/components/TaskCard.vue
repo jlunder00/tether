@@ -185,7 +185,6 @@ const calendarEventStyle = computed(() => {
     :draggable="isSelfDraggable || undefined"
     @dragstart="dragHandlers.onDragStart"
     @dragend="dragHandlers.onDragEnd"
-    @click.stop="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
   >
     <div class="flex items-center gap-1 truncate pointer-events-none">
       <!-- gcal badge — shown when the event is from an external calendar -->
