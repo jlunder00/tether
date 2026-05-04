@@ -447,4 +447,153 @@ describe('CalendarView', () => {
     expect(updatedBlock.attributes('data-motif')).toBe('anchor')
     expect(updatedBlock.attributes('style')).not.toContain('#ff0000')
   })
+
+  // ── Reactivity: taskFromEvent must return live planStore ref ──────────────────
+  // Bug: taskFromEvent() always built a fresh synthetic Task with no motif, so
+  // data-motif was always "anchor" regardless of what patchTaskFields set.
+  // Fix: look up the live task from planStore.plans / planStore.plan and return it
+  // directly — Vue reactivity will then propagate motif mutations to the card.
+
+  it('task motif change in planStore.plans propagates reactively to calendar card data-motif', async () => {
+    const { usePlanStore } = await import('../../stores/plan')
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    const planStore = usePlanStore()
+    const eventStore = useEventStore()
+
+    // Seed a task in the plans range cache (mirrors what fetchPlanRange populates)
+    planStore.plans[TODAY] = {
+      date: TODAY,
+      anchors: {
+        morning: {
+          tasks: [
+            {
+              id: 'task-live-motif',
+              text: 'Live Motif Task',
+              description: null,
+              status: 'pending',
+              position: 0,
+              followup_config: null,
+              blocks: [],
+              blocked_by: [],
+              context_subject: null,
+              context_node_id: null,
+              anchor_id: 'morning',
+              motif: null,
+            },
+          ],
+          notes: '',
+        },
+      },
+      acknowledgements: {},
+      check_in_log: [],
+    }
+
+    // Seed event that links to the plan task
+    eventStore.events.push({
+      id: 'ev-live-motif',
+      title: 'Live Motif Task',
+      start_time: `${TODAY}T10:00:00`,
+      end_time: `${TODAY}T11:00:00`,
+      source: 'tether',
+      external_id: null,
+      task_id: 'task-live-motif',
+      anchor_id: 'morning',
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    const block = wrapper.find('[data-event-block]')
+    expect(block.exists()).toBe(true)
+    // Initial: no motif → falls back to 'anchor'
+    expect(block.attributes('data-motif')).toBe('anchor')
+
+    // Simulate patchTaskFields mutating the live task object in plans cache
+    const liveTask = planStore.plans[TODAY].anchors['morning'].tasks[0]
+    Object.assign(liveTask, { motif: 'focus' })
+    await nextTick()
+
+    // FAILS before fix: taskFromEvent returns a stale synthetic copy, not the live ref
+    expect(wrapper.find('[data-event-block]').attributes('data-motif')).toBe('focus')
+  })
+
+  it('patchTaskFields updates task in plans range cache so calendar card reacts', async () => {
+    // Integration test: exercises the real patchTaskFields → plans mutation path.
+    // Verifies the production workflow: MotifPicker → patchTaskFields → CalendarView.
+    // Default api mock already returns { ok: true } — sufficient for PATCH to apply.
+    const { usePlanStore } = await import('../../stores/plan')
+    const { useEventStore } = await import('../../stores/events')
+    const { default: CalendarView } = await import('../CalendarView.vue')
+
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const d = new Date()
+    const TODAY = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    const planStore = usePlanStore()
+    const eventStore = useEventStore()
+
+    // Seed a task in BOTH plan (single-day) and plans (range cache)
+    const taskObj = {
+      id: 'task-patch-motif',
+      text: 'Patch Motif Task',
+      description: null,
+      status: 'pending' as const,
+      position: 0,
+      followup_config: null,
+      blocks: [],
+      blocked_by: [],
+      context_subject: null,
+      context_node_id: null,
+      anchor_id: 'morning',
+      motif: null,
+    }
+    planStore.plans[TODAY] = {
+      date: TODAY,
+      anchors: { morning: { tasks: [taskObj], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    }
+
+    eventStore.events.push({
+      id: 'ev-patch-motif',
+      title: 'Patch Motif Task',
+      start_time: `${TODAY}T10:00:00`,
+      end_time: `${TODAY}T11:00:00`,
+      source: 'tether',
+      external_id: null,
+      task_id: 'task-patch-motif',
+      anchor_id: 'morning',
+      color: null,
+      is_recurring: false,
+      is_occurrence: false,
+      is_all_day: false,
+      rrule: null,
+      context_subject: null,
+    })
+    await nextTick()
+
+    const block = wrapper.find('[data-event-block]')
+    expect(block.exists()).toBe(true)
+    expect(block.attributes('data-motif')).toBe('anchor')
+
+    // Call patchTaskFields — the same action MotifPicker calls
+    await planStore.patchTaskFields('task-patch-motif', { motif: 'focus' })
+    await nextTick()
+
+    // FAILS before fix: patchTaskFields only updates plan.value, not plans.value
+    expect(wrapper.find('[data-event-block]').attributes('data-motif')).toBe('focus')
+  })
 })

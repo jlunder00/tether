@@ -238,10 +238,21 @@ export const usePlanStore = defineStore('plan', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
-    if (resp.ok && plan.value) {
-      for (const anchor of Object.values(plan.value.anchors)) {
-        const task = anchor.tasks.find(t => t.id === taskId)
-        if (task) { Object.assign(task, fields); break }
+    if (resp.ok) {
+      // Update task in single-day plan (plan view)
+      if (plan.value?.anchors) {
+        for (const anchor of Object.values(plan.value.anchors)) {
+          const task = anchor.tasks.find(t => t.id === taskId)
+          if (task) { Object.assign(task, fields); break }
+        }
+      }
+      // Update task in range cache (CalendarView uses plans for multi-day display)
+      for (const dayPlan of Object.values(plans.value)) {
+        if (!dayPlan?.anchors) continue
+        for (const anchor of Object.values(dayPlan.anchors)) {
+          const task = anchor.tasks.find(t => t.id === taskId)
+          if (task) { Object.assign(task, fields); break }
+        }
       }
     }
     return resp.ok

@@ -639,9 +639,28 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
 }
 
 // ─── Synthetic Task from CalendarEvent ────────────────────────
-// TaskCard mode="calendar-event" needs a Task prop. Build a minimal one from
-// the event so the drag payload and click handler have the right ids/title.
+// TaskCard mode="calendar-event" needs a Task prop. For task-linked events,
+// return the LIVE task object from planStore so motif / status mutations from
+// patchTaskFields propagate reactively to the calendar card. Only fall back to
+// a synthetic object for standalone events (no task_id).
 function taskFromEvent(event: CalendarEvent): Task {
+  if (event.task_id) {
+    // Search range cache first (populated by fetchPlanRange, used by CalendarView)
+    for (const dayPlan of Object.values(planStore.plans)) {
+      for (const anchor of Object.values(dayPlan.anchors)) {
+        const t = anchor.tasks.find(t => t.id === event.task_id)
+        if (t) return t
+      }
+    }
+    // Fallback: single-day plan (e.g. focused day loaded separately)
+    if (planStore.plan?.anchors) {
+      for (const anchor of Object.values(planStore.plan.anchors)) {
+        const t = anchor.tasks.find(t => t.id === event.task_id)
+        if (t) return t
+      }
+    }
+  }
+  // Standalone event or task not yet in any loaded plan — synthesise minimal Task
   return {
     id: event.task_id ?? event.id,
     text: event.title,
