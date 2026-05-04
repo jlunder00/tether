@@ -188,7 +188,7 @@ const calendarEventStyle = computed(() => {
     v-show="!isDragging"
     data-testid="task-card-calendar-event"
     data-event-block
-    :data-motif="isTetherEvent ? (task.motif ?? 'anchor') : undefined"
+    :data-motif="isTetherEvent ? (task.motif || 'anchor') : undefined"
     class="rounded overflow-hidden text-xs px-1.5 py-0.5 cursor-grab shadow-md hover:brightness-110 transition-all z-10"
     :style="calendarEventStyle"
     :draggable="isSelfDraggable || undefined"
