@@ -11,7 +11,7 @@
  *   1. Clicking a task-backed event pushes exactly one panel with kind:'task'
  *   2. Clicking a standalone event (no task_id) pushes exactly one panel with kind:'event'
  */
-import { describe, it, expect, vi, beforeEach, defineComponent } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
