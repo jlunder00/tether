@@ -511,3 +511,176 @@ async def test_delete_scope_this_repeated_does_not_duplicate_exdate(api_client, 
     assert len(matching) == 1, (
         f"EXDATE for 2026-05-11 must appear exactly once, got: {exdates}"
     )
+
+
+# ─── Fix A: promote_task_to_event sets plan_date ──────────────────────────────
+
+async def test_post_event_sets_plan_date(api_client, conn):
+    """Promoting a task to a calendar event must set plan_date to the UTC date of start_time."""
+    task_id = await _insert_task(conn, "Plan-date promotion test")
+
+    resp = await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-06-15T09:00:00Z",
+        "end_time": "2026-06-15T10:00:00Z",
+        "title": "Plan-date promotion test",
+    })
+    assert resp.status_code == 201, resp.text
+
+    row = await conn.fetchrow(
+        "SELECT plan_date FROM tasks WHERE uuid = $1::uuid", task_id
+    )
+    assert row is not None
+    assert row["plan_date"] is not None, (
+        "promote_task_to_event must set plan_date so the task is visible to /api/plan/range"
+    )
+    # plan_date should equal the UTC date of start_time
+    assert str(row["plan_date"]) == "2026-06-15", (
+        f"plan_date should be 2026-06-15, got {row['plan_date']!r}"
+    )
+
+
+# ─── Fix B: promote_task_to_event clears anchor_id ───────────────────────────
+
+async def _insert_task_with_anchor(conn, text: str, anchor_id: str, plan_date: str) -> str:
+    """Insert a plan task (with anchor_id) and return its UUID string."""
+    row = await conn.fetchrow(
+        """
+        INSERT INTO tasks (uuid, user_id, text, status, plan_date, anchor_id)
+        VALUES (
+            gen_random_uuid(),
+            current_setting('app.current_user_id', true)::uuid,
+            $1, 'pending', $2, $3::uuid
+        )
+        RETURNING uuid
+        """,
+        text, plan_date, anchor_id,
+    )
+    return str(row["uuid"])
+
+
+async def _ensure_anchor(conn) -> str:
+    """Return an existing anchor_id or create one, returning its UUID string."""
+    row = await conn.fetchrow(
+        "SELECT id FROM anchors WHERE user_id = current_setting('app.current_user_id', true)::uuid LIMIT 1"
+    )
+    if row:
+        return str(row["id"])
+    # Create a minimal anchor for testing — id has no DB default, must supply explicitly
+    row = await conn.fetchrow(
+        """
+        INSERT INTO anchors (id, user_id, name, time, duration_minutes)
+        VALUES (gen_random_uuid(), current_setting('app.current_user_id', true)::uuid, 'Morning', '09:00', 120)
+        RETURNING id
+        """
+    )
+    return str(row["id"])
+
+
+async def test_post_event_clears_anchor_id(api_client, conn):
+    """Promoting a plan task to a calendar event must clear anchor_id (tri-state model)."""
+    anchor_id = await _ensure_anchor(conn)
+    task_id = await _insert_task_with_anchor(conn, "Plan task to promote", anchor_id, "2026-06-15")
+
+    # Verify the task starts with an anchor_id
+    before = await conn.fetchrow("SELECT anchor_id FROM tasks WHERE uuid = $1::uuid", task_id)
+    assert before["anchor_id"] is not None, "Pre-condition: task must have anchor_id set"
+
+    resp = await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-06-15T14:00:00Z",
+        "end_time": "2026-06-15T15:00:00Z",
+        "title": "Plan task to promote",
+    })
+    assert resp.status_code == 201, resp.text
+
+    row = await conn.fetchrow("SELECT anchor_id FROM tasks WHERE uuid = $1::uuid", task_id)
+    assert row["anchor_id"] is None, (
+        "promote_task_to_event must clear anchor_id so the task leaves the plan sidebar"
+    )
+
+
+# ─── Fix A: update_event_time updates plan_date when day changes ──────────────
+
+async def test_patch_event_updates_plan_date_on_day_change(api_client, conn):
+    """Moving an event to a different day must update plan_date to the new UTC date."""
+    task_id = await _insert_task(conn, "Day-change event")
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-06-10T09:00:00Z",
+        "end_time": "2026-06-10T10:00:00Z",
+        "title": "Day-change event",
+    })
+
+    # Move to a different day
+    resp = await api_client.patch(f"/api/events/{task_id}", json={
+        "start_time": "2026-06-11T09:00:00Z",
+        "end_time": "2026-06-11T10:00:00Z",
+    })
+    assert resp.status_code == 200, resp.text
+
+    row = await conn.fetchrow("SELECT plan_date FROM tasks WHERE uuid = $1::uuid", task_id)
+    assert row["plan_date"] is not None, "plan_date must remain set after event is moved"
+    assert str(row["plan_date"]) == "2026-06-11", (
+        f"plan_date must update to new event date 2026-06-11, got {row['plan_date']!r}"
+    )
+
+
+async def test_patch_event_same_day_keeps_plan_date(api_client, conn):
+    """Moving an event within the same day must not change plan_date."""
+    task_id = await _insert_task(conn, "Same-day move event")
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-06-10T09:00:00Z",
+        "end_time": "2026-06-10T10:00:00Z",
+        "title": "Same-day move event",
+    })
+
+    resp = await api_client.patch(f"/api/events/{task_id}", json={
+        "start_time": "2026-06-10T14:00:00Z",
+        "end_time": "2026-06-10T15:00:00Z",
+    })
+    assert resp.status_code == 200, resp.text
+
+    row = await conn.fetchrow("SELECT plan_date FROM tasks WHERE uuid = $1::uuid", task_id)
+    assert str(row["plan_date"]) == "2026-06-10", (
+        f"plan_date must stay 2026-06-10 for same-day move, got {row['plan_date']!r}"
+    )
+
+
+# ─── Fix C: demote path regression test ──────────────────────────────────────
+
+async def test_demote_event_restores_plan_task_state(api_client, conn):
+    """Demoting a calendar event via PATCH /api/tasks/:id must restore anchor_id,
+    plan_date, and clear start_time and end_time (verifying Fix C parity)."""
+    anchor_id = await _ensure_anchor(conn)
+    task_id = await _insert_task(conn, "Demote regression task")
+
+    # Promote to event first
+    await api_client.post("/api/events", json={
+        "task_id": task_id,
+        "start_time": "2026-06-15T14:00:00Z",
+        "end_time": "2026-06-15T15:00:00Z",
+        "title": "Demote regression task",
+    })
+
+    # Demote back to plan task (frontend sends this payload via PATCH /api/tasks/:id)
+    resp = await api_client.patch(f"/api/tasks/{task_id}", json={
+        "start_time": None,
+        "end_time": None,
+        "anchor_id": anchor_id,
+        "plan_date": "2026-06-15",
+    })
+    assert resp.status_code == 200, resp.text
+
+    row = await conn.fetchrow(
+        "SELECT start_time, end_time, anchor_id, plan_date FROM tasks WHERE uuid = $1::uuid",
+        task_id,
+    )
+    assert row["start_time"] is None, "demote must clear start_time"
+    assert row["end_time"] is None, "demote must clear end_time"
+    assert row["anchor_id"] is not None, "demote must set anchor_id"
+    assert str(row["anchor_id"]) == anchor_id, f"anchor_id should be {anchor_id}"
+    assert str(row["plan_date"]) == "2026-06-15", (
+        f"plan_date should be 2026-06-15 after demote, got {row['plan_date']!r}"
+    )

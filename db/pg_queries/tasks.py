@@ -979,6 +979,11 @@ async def promote_task_to_event(
 ) -> dict | None:
     """Stamp an existing task with start/end time, making it a calendar event.
 
+    Enforces the tri-state data model:
+      - Sets plan_date to the UTC date of start_time (required for /api/plan/range visibility)
+      - Clears anchor_id (calendar events do not belong to a plan anchor)
+      - Sets start_time, end_time, source
+
     Returns CalendarEvent-shaped dict, or None if the task doesn't exist.
     """
     row = await conn.fetchrow(
@@ -986,6 +991,8 @@ async def promote_task_to_event(
         UPDATE tasks
         SET start_time = $1,
             end_time   = $2,
+            plan_date  = ($1::timestamptz AT TIME ZONE 'UTC')::date,
+            anchor_id  = NULL,
             source     = COALESCE(source, 'tether'),
             version    = version + 1
         WHERE uuid = $3
@@ -1349,6 +1356,7 @@ async def update_event_time(
         UPDATE tasks
         SET start_time = $1,
             end_time   = $2,
+            plan_date  = ($1::timestamptz AT TIME ZONE 'UTC')::date,
             version    = version + 1
         WHERE uuid = $3
           AND start_time IS NOT NULL
@@ -1614,6 +1622,7 @@ async def _update_event_time_all(
         SET start_time = $1,
             end_time   = $2,
             rrule      = $3,
+            plan_date  = ($1 AT TIME ZONE 'UTC')::date,
             version    = version + 1
         WHERE uuid = $4
           AND start_time IS NOT NULL
