@@ -84,6 +84,23 @@ const STATUS_PILL: Record<TaskStatus, { bg: string; text: string; label: string 
   blocked:     { bg: 'bg-[--status-block-bg]', text: 'text-[--status-block-fg]', label: 'blocked' },
 }
 
+// Compact plan-mode status glyphs — rendered via CSS custom properties and ::before
+// pseudo-elements so theme switching (terminal ASCII vs default Unicode) is handled
+// by the cascade in themes.css without any JS dependency.
+const STATUS_GLYPH_CLASS: Record<TaskStatus, string> = {
+  pending:     'status-glyph-pending',
+  in_progress: 'status-glyph-in_progress',
+  done:        'status-glyph-done',
+  skipped:     'status-glyph-skipped',
+  blocked:     'status-glyph-blocked',
+}
+
+function cycleStatus() {
+  const idx = ALL_STATUSES.indexOf(props.task.status)
+  const next = ALL_STATUSES[(idx + 1) % ALL_STATUSES.length]
+  emit('update', { ...props.task, status: next })
+}
+
 // Tasks are transparent — the parent AnchorBlock's --m-band provides the surface.
 const STATUS_ROW_STYLE: Record<TaskStatus, Record<string, string>> = {
   pending:     {},
@@ -219,12 +236,84 @@ const calendarEventStyle = computed(() => {
     @click="navigable && task.id && pushPanel({ kind: 'task', entityId: task.id })"
   >
     <div v-if="task.motif || task.color"
-         class="absolute left-0 top-1 bottom-1 w-0.5 rounded-full pointer-events-none"
+         class="absolute left-0 top-0 bottom-0 w-0.5 rounded-full pointer-events-none"
          :style="{ background: task.motif ? `var(--motif-${task.motif})` : task.color! }" />
+
+    <!-- ── Plan mode: compact inline row (glyph · text · tags) ──────────────── -->
+    <template v-if="mode === 'plan'">
+      <div class="flex items-start gap-1.5 py-0.5 pl-3 pr-2">
+        <!-- Status glyph — clickable, cycles status in order.
+             Glyph character is injected via CSS ::before / --glyph-* custom property
+             so terminal/dracula themes get ASCII brackets without any JS. -->
+        <button
+          data-testid="plan-status-glyph"
+          @click.stop="editable && cycleStatus()"
+          :class="STATUS_GLYPH_CLASS[task.status]"
+          class="flex-shrink-0 w-4 font-mono text-xs leading-5 text-[--fg-3] hover:text-[--fg-1] cursor-pointer transition-colors"
+          :title="task.status" />
+
+        <!-- Task text — wraps, fills available width -->
+        <div class="flex-1 min-w-0">
+          <input
+            v-if="editable"
+            :value="task.text"
+            :class="task.status === 'done' ? 'line-through opacity-40' : ''"
+            @click.stop
+            @change="updateText"
+            class="w-full bg-transparent border-b border-[--border-1] focus:border-[--border-2] outline-none text-sm py-0.5" />
+          <span
+            v-else
+            class="text-sm break-words"
+            :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
+        </div>
+
+        <!-- Tags — right-justified, shrink-safe, no overlap with text -->
+        <div
+          v-if="(task as any).plan_date || isOverdue || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))"
+          class="flex-shrink-0 flex flex-wrap gap-1 justify-end max-w-[40%]">
+          <span
+            v-if="(task as any).plan_date"
+            @click.stop
+            class="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300">
+            {{ (task as any).plan_date }}
+          </span>
+          <span v-if="isOverdue" @click.stop
+                class="text-[10px] px-1 py-0.5 rounded bg-[--status-block-bg] text-[--status-block-fg] font-medium">
+            overdue
+          </span>
+          <template v-if="!hideTags">
+            <span
+              v-if="task.context_subject"
+              @click.stop
+              class="text-[10px] px-1 py-0.5 rounded bg-[--bg-elev-3] text-[--fg-4]">
+              {{ task.context_subject }}
+            </span>
+            <span
+              v-for="m in (milestoneStore.taskMilestones[task.id] ?? [])" :key="m.id"
+              @click.stop="pushPanel({ kind: 'milestone', entityId: m.id })"
+              :style="m.color ? { backgroundColor: m.color + '33', color: m.color, borderColor: m.color + '66' } : {}"
+              class="text-[10px] px-1 py-0.5 rounded border cursor-pointer"
+              :class="m.color ? '' : 'bg-[--bg-elev-3] text-[--fg-3] border-transparent hover:bg-[--bg-elev-4]'">
+              {{ m.name }}
+            </span>
+          </template>
+        </div>
+
+        <!-- Remove button (hover-only) -->
+        <button
+          v-if="showRemove"
+          @click.stop="emit('remove')"
+          class="flex-shrink-0 text-[--fg-5] hover:text-[--fg-2] text-xs opacity-0 group-hover:opacity-100 transition-opacity leading-5">✕</button>
+      </div>
+    </template>
+
+    <!-- ── Kanban / calendar-sidebar modes: original card layout ────────────── -->
+    <template v-else>
     <div class="flex flex-col gap-1 p-2 pl-3">
-    <!-- Status pill (top-right) — dropdown only in editable mode (plan view) -->
+    <!-- Status pill (top-right) — dropdown only in editable mode -->
     <div class="absolute top-1.5 right-1.5">
       <button
+        data-testid="task-card-status-pill"
         @click.stop="editable && openStatusDropdown($event)"
         :class="[STATUS_PILL[task.status].bg, STATUS_PILL[task.status].text]"
         class="text-[10px] px-1.5 py-0.5 rounded-full font-medium uppercase tracking-wider leading-none"
@@ -261,7 +350,7 @@ const calendarEventStyle = computed(() => {
         :class="task.status === 'done' ? 'line-through opacity-40' : ''">{{ task.text }}</span>
     </div>
 
-    <!-- Tags row — date/anchor always visible; context/milestone hidden when hideTags (shown by GroupContainer) -->
+    <!-- Tags row — date/anchor always visible; context/milestone hidden when hideTags -->
     <div v-if="(task as any).plan_date || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))" class="flex flex-wrap gap-1">
       <span
         v-if="(task as any).plan_date"
@@ -342,5 +431,18 @@ const calendarEventStyle = computed(() => {
       </Teleport>
     </div>
   </div>
+  </template>
   </div>
 </template>
+
+<style scoped>
+/* ── Plan-mode compact status glyphs ──────────────────────────────────────────
+   Characters are defined as CSS custom properties in themes.css so terminal
+   and dracula themes get ASCII bracket notation ([ ] [~] [x] [-] [!]) while
+   all other themes use Unicode circles (○ ◑ ● ⊘ ⊗). No JS required. */
+.status-glyph-pending::before    { content: var(--glyph-pending); }
+.status-glyph-in_progress::before { content: var(--glyph-in-progress); }
+.status-glyph-done::before       { content: var(--glyph-done); }
+.status-glyph-skipped::before    { content: var(--glyph-skipped); }
+.status-glyph-blocked::before    { content: var(--glyph-blocked); }
+</style>
