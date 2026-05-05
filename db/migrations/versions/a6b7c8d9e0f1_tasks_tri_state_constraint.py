@@ -30,16 +30,39 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Clean up pre-PR-#277 promoted tasks that violate the constraint:
-    # Calendar events that still have anchor_id set (promote didn't clear it)
+    # ── Data cleanup: fix all rows that would violate the constraint ──────────
+    #
+    # After each UPDATE, the targeted shape is resolved into a valid case.
+    # Order matters: start_time-bearing rows are fixed first so subsequent
+    # checks on start_time=NULL rows are clean.
+
+    # Case A fix: calendar events that still have anchor_id set
+    # (pre-#277 promote didn't clear it) → clear anchor_id → valid Case 3
     op.execute("""
         UPDATE tasks SET anchor_id = NULL
         WHERE start_time IS NOT NULL AND anchor_id IS NOT NULL
     """)
-    # Calendar events with no plan_date (promote didn't set it)
+
+    # Case B fix: calendar events with no plan_date
+    # (pre-#277 promote didn't set it) → derive plan_date → valid Case 3
     op.execute("""
         UPDATE tasks SET plan_date = (start_time AT TIME ZONE 'UTC')::date
         WHERE start_time IS NOT NULL AND plan_date IS NULL
+    """)
+
+    # Case C fix: old plan tasks with plan_date but no anchor_id and no
+    # start_time — created before anchor_id was required. Demote to backlog.
+    op.execute("""
+        UPDATE tasks SET plan_date = NULL
+        WHERE plan_date IS NOT NULL AND anchor_id IS NULL AND start_time IS NULL
+    """)
+
+    # Case D fix: orphaned anchor assignments — anchor_id set but no plan_date,
+    # no start_time, and no rrule. Cannot be any valid state; demote to backlog.
+    op.execute("""
+        UPDATE tasks SET anchor_id = NULL
+        WHERE plan_date IS NULL AND anchor_id IS NOT NULL
+          AND start_time IS NULL AND rrule IS NULL
     """)
     op.execute("""
         ALTER TABLE tasks ADD CONSTRAINT tasks_tri_state CHECK (
