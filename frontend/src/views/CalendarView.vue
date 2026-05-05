@@ -616,7 +616,26 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
     const endDate = new Date(startDate.getTime() + 60 * 60_000)
     const title = (payload.title as string) ?? 'Task'
     await eventStore.promoteTask(taskId, startDate.toISOString(), endDate.toISOString(), title)
+    // Refresh plan range so promoted task is removed from sidebar anchor blocks
+    await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
   }
+}
+
+// ─── Sidebar anchor drop — demote calendar event back to task ─
+async function onSidebarAnchorDrop(e: DragEvent, anchorId: string) {
+  const raw = e.dataTransfer?.getData('application/json') || e.dataTransfer?.getData('text/plain')
+  if (!raw) return
+  try {
+    const data = JSON.parse(raw)
+    if (data.type === 'task' && data.taskId && data.fromStartTime) {
+      const taskId = data.taskId as string
+      const ev = eventStore.events.find(e => e.task_id === taskId)
+        ?? eventStore.events.find(e => e.id === taskId)
+      if (!ev) return
+      await eventStore.demoteEvent(ev.id, anchorId, focusedDay.value)
+      await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+    }
+  } catch { /* ignore malformed */ }
 }
 
 // ─── Synthetic Task from CalendarEvent ────────────────────────
@@ -719,11 +738,13 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
           {{ new Date(focusedDay + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) }}
         </div>
 
-        <!-- Anchor blocks with task lists -->
+        <!-- Anchor blocks with task lists — also act as drop targets to demote calendar events -->
         <div
           v-for="{ anchor, tasks } in (activeFilterCount > 0 ? filteredAnchorsWithTasks : anchorsWithTasks)"
           :key="anchor.id"
           class="rounded-lg border border-[--border-soft] overflow-hidden"
+          @dragover.prevent
+          @drop="(e) => onSidebarAnchorDrop(e, anchor.id)"
         >
           <!-- Anchor header -->
           <div class="flex items-center gap-1.5 px-2 py-1.5" :style="{ borderLeft: `3px solid ${anchor.color}` }">
