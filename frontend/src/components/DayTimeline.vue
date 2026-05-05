@@ -227,6 +227,49 @@ async function onSlotDrop(e: DragEvent, i: number) {
   } catch { /* ignore malformed payload */ }
 }
 
+// --- Container-level DnD handlers (Bug B fix) ---
+// TaskCards are rendered after slot divs in the DOM and sit above them in z-order.
+// When a drag passes over a TaskCard block, dragover fires on the card but the card
+// doesn't call preventDefault, so the browser marks that position as no-drop.
+// The container-level handlers catch those events (dragover bubbles up from TaskCard)
+// and compute the target slot from clientY, enabling drops anywhere in the timed area.
+
+/** Map clientY to the nearest 15-min slot index, accounting for scroll offset. */
+function slotIndexFromClientY(clientY: number): number {
+  if (!timedAreaEl.value) return 0
+  const rect = timedAreaEl.value.getBoundingClientRect()
+  const relY = Math.max(0, clientY - rect.top + timedAreaEl.value.scrollTop)
+  return Math.max(0, Math.min(SLOT_COUNT - 1, Math.floor(relY / (15 * PX_PER_MINUTE))))
+}
+
+function onTimedAreaDragOver(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  // Slot divs handle their own highlight via onSlotDragOver — skip when the event
+  // originates from a slot div (it bubbles up here but overSlotIndex is already correct).
+  if ((e.target as HTMLElement).hasAttribute('data-time-slot')) return
+  overSlotIndex.value = slotIndexFromClientY(e.clientY)
+}
+
+function onTimedAreaDragLeave(e: DragEvent) {
+  const related = e.relatedTarget as Node | null
+  if (related && (e.currentTarget as HTMLElement).contains(related)) return
+  overSlotIndex.value = null
+}
+
+async function onTimedAreaDrop(e: DragEvent) {
+  e.preventDefault()
+  overSlotIndex.value = null
+  const rawJson = e.dataTransfer?.getData('application/json')
+  const rawText = e.dataTransfer?.getData('text/plain')
+  const raw = rawJson || rawText
+  if (!raw) return
+  const i = slotIndexFromClientY(e.clientY)
+  try {
+    await handleSlotDrop(JSON.parse(raw), slotTime(i))
+  } catch { /* ignore malformed payload */ }
+}
+
 // Array used purely for v-for slot grid rendering
 const slotIndices = Array.from({ length: SLOT_COUNT }, (_, i) => i)
 
@@ -294,12 +337,20 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
     </div>
 
     <!-- Timed area -->
+    <!-- Container-level DnD: catches drops over TaskCard blocks (Bug B fix).
+         TaskCards render after slot divs in DOM order, sitting above them in z-order.
+         When a drag passes over a TaskCard, dragover fires on it but the card doesn't
+         call preventDefault, so the browser marks that zone as no-drop. Since dragover
+         bubbles, the outer container catches it and enables drops anywhere in the area. -->
     <div
       ref="timedAreaEl"
       data-testid="timed-area"
       class="relative flex overflow-y-auto"
       :style="{ height: 'calc(100vh - 200px)' }"
       @click="onTimedAreaClick"
+      @dragover="onTimedAreaDragOver"
+      @dragleave="onTimedAreaDragLeave"
+      @drop="onTimedAreaDrop"
     >
       <!-- Hour grid + labels -->
       <div class="relative flex-shrink-0 w-10" :style="{ height: `${AXIS_TOTAL_PX}px` }">
@@ -344,6 +395,8 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
         />
 
         <!-- 15-min slot drop targets -- transparent absolute divs at each 15-min interval -->
+        <!-- @drop.stop: prevents the drop from bubbling to the container-level handler -->
+        <!-- (container handles drops that land on TaskCard blocks, which sit above these divs) -->
         <div
           v-for="i in slotIndices"
           :key="'slot-' + i"
@@ -358,7 +411,7 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
           }"
           @dragover="(e) => onSlotDragOver(e, i)"
           @dragleave="(e) => onSlotDragLeave(e, i)"
-          @drop="(e) => onSlotDrop(e, i)"
+          @drop.stop="(e) => onSlotDrop(e, i)"
         />
 
         <!-- Timed event blocks -- TaskCard in calendar-event mode -->

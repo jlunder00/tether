@@ -621,19 +621,27 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
   }
 }
 
-// ─── Sidebar anchor drop — demote calendar event back to task ─
+// ─── Sidebar anchor drop — demote event OR move task between anchors ──────────
 async function onSidebarAnchorDrop(e: DragEvent, anchorId: string) {
   const raw = e.dataTransfer?.getData('application/json') || e.dataTransfer?.getData('text/plain')
   if (!raw) return
   try {
     const data = JSON.parse(raw)
-    if (data.type === 'task' && data.taskId && data.fromStartTime) {
+    if (data.type === 'task' && data.taskId) {
       const taskId = data.taskId as string
-      const ev = eventStore.events.find(e => e.task_id === taskId)
-        ?? eventStore.events.find(e => e.id === taskId)
-      if (!ev) return
-      await eventStore.demoteEvent(ev.id, anchorId, focusedDay.value)
-      await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+      if (data.fromStartTime) {
+        // Demotion path: calendar event dragged back to the sidebar (Bug C/E fix)
+        // focusedDay.value is intentional — user intent is "put this on today's plan"
+        const ev = eventStore.events.find(e => e.task_id === taskId)
+          ?? eventStore.events.find(e => e.id === taskId)
+        if (!ev) return
+        await eventStore.demoteEvent(ev.id, anchorId, focusedDay.value)
+        await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+      } else if (data.fromAnchorId && data.fromDate) {
+        // Task→task move: dragging a sidebar task to a different anchor (Bug A/D fix)
+        await planStore.moveTask(taskId, data.fromDate as string, data.fromAnchorId as string, focusedDay.value, anchorId)
+        await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+      }
     }
   } catch { /* ignore malformed */ }
 }
@@ -763,7 +771,13 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
               @dragstart="(e: DragEvent) => {
                 if (e.dataTransfer) {
                   e.dataTransfer.effectAllowed = 'move'
-                  e.dataTransfer.setData('text/plain', JSON.stringify({ type: 'task', taskId: task.id, title: task.text }))
+                  e.dataTransfer.setData('text/plain', JSON.stringify({
+                    type: 'task',
+                    taskId: task.id,
+                    title: task.text,
+                    fromAnchorId: anchor.id,
+                    fromDate: focusedDay,
+                  }))
                 }
               }"
             >

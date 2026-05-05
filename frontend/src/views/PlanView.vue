@@ -119,8 +119,12 @@ function onOpenEvent(event: CalendarEvent) {
   }
 }
 
-/** Handle drop of a calendar event onto the anchor column — demotes it back to a plain task. */
-async function onAnchorColumnDrop(e: DragEvent) {
+/**
+ * Handle drop of a calendar event onto a specific anchor — demotes it back to a plain task.
+ * Bug C fix: each AnchorBlock wrapper gets its own drop zone so the targeted anchor id is
+ * always known exactly, rather than falling back to ev.anchor_id ?? anchors[0].
+ */
+async function onAnchorDrop(e: DragEvent, anchorId: string) {
   const rawJson = e.dataTransfer?.getData('application/json')
   const rawText = e.dataTransfer?.getData('text/plain')
   const raw = rawJson || rawText
@@ -134,7 +138,6 @@ async function onAnchorColumnDrop(e: DragEvent) {
       const ev = eventStore.events.find(e => e.task_id === taskId)
         ?? eventStore.events.find(e => e.id === taskId)
       if (!ev) return
-      const anchorId = ev.anchor_id ?? anchorStore.anchors[0]?.id ?? ''
       await eventStore.demoteEvent(ev.id, anchorId, activeDate.value)
       await planStore.fetchPlan(activeDate.value)
     }
@@ -217,23 +220,27 @@ async function onAnchorColumnDrop(e: DragEvent) {
       <div v-if="planStore.loading" class="text-[--fg-4]">Loading...</div>
       <!-- Two-column: anchor blocks left, day timeline right -->
       <div v-else class="grid grid-cols-[1fr_320px] gap-4 items-start">
-        <!-- Left: anchor blocks -->
-        <div
-          class="flex flex-col"
-          @dragover.prevent
-          @drop="onAnchorColumnDrop"
-        >
-          <AnchorBlock
+        <!-- Left: anchor blocks — each wrapped in its own drop zone (Bug C fix) -->
+        <!-- Per-anchor @drop means the exact targeted anchor id is always known,
+             preventing demotion from always landing on the first anchor. -->
+        <div class="flex flex-col">
+          <div
             v-for="(anchor, i) in anchorStore.anchors"
             :key="anchor.id"
-            :anchor-id="anchor.id"
-            :anchor-name="anchor.name"
-            :time="anchor.time"
-            :color="anchor.color"
-            :motif="anchor.motif"
-            :is-now="anchorStates.get(anchor.id) === 'now'"
-            :is-past="anchorStates.get(anchor.id) === 'past'"
-            :is-last="i === anchorStore.anchors.length - 1" />
+            data-anchor-drop-zone
+            @dragover.prevent
+            @drop="(e) => onAnchorDrop(e, anchor.id)"
+          >
+            <AnchorBlock
+              :anchor-id="anchor.id"
+              :anchor-name="anchor.name"
+              :time="anchor.time"
+              :color="anchor.color"
+              :motif="anchor.motif"
+              :is-now="anchorStates.get(anchor.id) === 'now'"
+              :is-past="anchorStates.get(anchor.id) === 'past'"
+              :is-last="i === anchorStore.anchors.length - 1" />
+          </div>
         </div>
         <!-- Right: day timeline -->
         <DayTimeline
