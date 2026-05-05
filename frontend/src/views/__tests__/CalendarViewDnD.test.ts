@@ -84,12 +84,15 @@ vi.mock('../../stores/anchors', () => ({
   }),
 }))
 
+const mockMoveTask = vi.fn()
+
 vi.mock('../../stores/plan', () => ({
   usePlanStore: () => ({
     plan: null,
     plans: {},
     fetchPlan: vi.fn(),
     fetchPlanRange: mockFetchPlanRange,
+    moveTask: mockMoveTask,
   }),
 }))
 
@@ -141,6 +144,7 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     mockPushPanel.mockReset()
     mockCreateTaskAndPromote.mockReset()
     mockCreateTaskAndPromote.mockResolvedValue('new-task-id')
+    mockMoveTask.mockReset()
   })
 
   // ── KEY FAILING TEST #1 ────────────────────────────────────────────────────
@@ -310,6 +314,44 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     })
     await flushPromises()
     expect(mockDemoteEvent).toHaveBeenCalled()
+    expect(mockFetchPlanRange).toHaveBeenCalled()
+  })
+
+  // ── Bug A/D: sidebar task→task move between anchors ───────────────────────
+  it('onSidebarAnchorDrop with task payload (no fromStartTime) calls planStore.moveTask', async () => {
+    // Bug A/D: dropping a sidebar task onto another anchor should move the task,
+    // not silently do nothing. Requires fromAnchorId + fromDate in the payload.
+    const { default: CalendarView } = await import('../CalendarView.vue')
+    const wrapper = mount(CalendarView)
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as Record<string, unknown>
+    expect(typeof vm.onSidebarAnchorDrop).toBe('function')
+
+    const payload = {
+      type: 'task',
+      taskId: 'task-99',
+      fromAnchorId: 'anchor-morning',
+      fromDate: todayStr,
+    }
+    const fakeEvent = {
+      dataTransfer: {
+        getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '',
+      },
+    }
+    await (vm.onSidebarAnchorDrop as (e: unknown, id: string) => Promise<void>)(
+      fakeEvent,
+      'anchor-afternoon',
+    )
+    await flushPromises()
+
+    expect(mockMoveTask).toHaveBeenCalledWith(
+      'task-99',
+      todayStr,
+      'anchor-morning',
+      todayStr,
+      'anchor-afternoon',
+    )
     expect(mockFetchPlanRange).toHaveBeenCalled()
   })
 

@@ -237,4 +237,25 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     expect(mockMoveEvent).toHaveBeenCalled()
     expect(mockPromoteTask).not.toHaveBeenCalled()
   })
+
+  // ── Bug B: drops that land on a TaskCard (above slot divs in z-order) must still work ──
+  it('dropping a task payload onto the timed-area container (over an event block) promotes it correctly', async () => {
+    // Bug B: TaskCards sit above slot divs in DOM/z-order. Drops over them bubble up
+    // to the timed-area container. The container must handle them via clientY computation.
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    expect(timedArea.exists()).toBe(true)
+    const payload = { type: 'task', taskId: 'task-99', title: 'Dropped over event block' }
+    await timedArea.trigger('drop', {
+      dataTransfer: { getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '' },
+    })
+    // task-99 has no existing event → promoteTask
+    expect(mockPromoteTask).toHaveBeenCalledWith(
+      'task-99',
+      expect.any(String),
+      expect.any(String),
+      'Dropped over event block',
+    )
+  })
 })
