@@ -126,12 +126,13 @@ async def event_task_uuid(conn, anchor_id):
     # Insert directly so we can set start_time/end_time
     row = await conn.fetchrow(
         """
-        INSERT INTO tasks (uuid, user_id, text, status, start_time, end_time)
+        INSERT INTO tasks (uuid, user_id, text, status, plan_date, start_time, end_time)
         VALUES (
             gen_random_uuid(),
             current_setting('app.current_user_id', true)::uuid,
             'Promoted event task',
             'pending',
+            '2026-05-01',
             '2026-05-01T09:00:00Z',
             '2026-05-01T10:00:00Z'
         )
@@ -182,3 +183,98 @@ async def test_patch_task_fields_omitting_start_time_does_not_clear_it(conn, eve
         event_task_uuid,
     )
     assert row["start_time"] is not None, "start_time must not be cleared when not in patch dict"
+
+
+# ─── tri-state constraint ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tasks_tri_state_constraint_rejects_start_time_without_plan_date(conn):
+    """A task with start_time but no plan_date violates tasks_tri_state — must raise CheckViolationError."""
+    import asyncpg
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        await conn.execute(
+            """
+            INSERT INTO tasks (uuid, user_id, text, status, start_time, end_time)
+            VALUES (
+                gen_random_uuid(),
+                current_setting('app.current_user_id', true)::uuid,
+                'invalid: start_time with no plan_date',
+                'pending',
+                '2026-05-01T09:00:00Z',
+                '2026-05-01T10:00:00Z'
+            )
+            """
+        )
+
+
+@pytest.mark.asyncio
+async def test_tasks_tri_state_constraint_rejects_plan_date_without_anchor_or_start_time(conn):
+    """plan_date set but anchor_id and start_time both NULL violates tasks_tri_state."""
+    import asyncpg
+    with pytest.raises(asyncpg.exceptions.CheckViolationError):
+        await conn.execute(
+            """
+            INSERT INTO tasks (uuid, user_id, text, status, plan_date)
+            VALUES (
+                gen_random_uuid(),
+                current_setting('app.current_user_id', true)::uuid,
+                'invalid: plan_date with neither anchor_id nor start_time',
+                'pending',
+                '2026-05-01'
+            )
+            """
+        )
+
+
+@pytest.mark.asyncio
+async def test_tasks_tri_state_constraint_accepts_backlog(conn):
+    """Backlog state: all three fields NULL — must succeed."""
+    await conn.execute(
+        """
+        INSERT INTO tasks (uuid, user_id, text, status)
+        VALUES (
+            gen_random_uuid(),
+            current_setting('app.current_user_id', true)::uuid,
+            'valid backlog task',
+            'pending'
+        )
+        """
+    )
+
+
+@pytest.mark.asyncio
+async def test_tasks_tri_state_constraint_accepts_plan_task(conn, anchor_id):
+    """Plan task state: plan_date + anchor_id set, start_time NULL — must succeed."""
+    await conn.execute(
+        """
+        INSERT INTO tasks (uuid, user_id, text, status, plan_date, anchor_id)
+        VALUES (
+            gen_random_uuid(),
+            current_setting('app.current_user_id', true)::uuid,
+            'valid plan task',
+            'pending',
+            '2026-05-01',
+            $1
+        )
+        """,
+        anchor_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tasks_tri_state_constraint_accepts_calendar_event(conn):
+    """Calendar event state: plan_date + start_time set, anchor_id NULL — must succeed."""
+    await conn.execute(
+        """
+        INSERT INTO tasks (uuid, user_id, text, status, plan_date, start_time, end_time)
+        VALUES (
+            gen_random_uuid(),
+            current_setting('app.current_user_id', true)::uuid,
+            'valid calendar event',
+            'pending',
+            '2026-05-01',
+            '2026-05-01T09:00:00Z',
+            '2026-05-01T10:00:00Z'
+        )
+        """
+    )
