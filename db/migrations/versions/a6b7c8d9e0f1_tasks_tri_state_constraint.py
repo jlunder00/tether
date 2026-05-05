@@ -30,6 +30,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # Clean up pre-PR-#277 promoted tasks that violate the constraint:
+    # Calendar events that still have anchor_id set (promote didn't clear it)
+    op.execute("""
+        UPDATE tasks SET anchor_id = NULL
+        WHERE start_time IS NOT NULL AND anchor_id IS NOT NULL
+    """)
+    # Calendar events with no plan_date (promote didn't set it)
+    op.execute("""
+        UPDATE tasks SET plan_date = (start_time AT TIME ZONE 'UTC')::date
+        WHERE start_time IS NOT NULL AND plan_date IS NULL
+    """)
     op.execute("""
         ALTER TABLE tasks ADD CONSTRAINT tasks_tri_state CHECK (
             -- Case 1: backlog
