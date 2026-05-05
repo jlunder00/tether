@@ -27,6 +27,26 @@ vi.mock('../../lib/api', () => ({
   api: vi.fn(() => Promise.resolve({ ok: true, json: async () => [] })),
 }))
 
+vi.mock('../../stores/plan', () => ({
+  usePlanStore: () => ({
+    plan: null,
+    plans: {},
+    fetchPlan: vi.fn(),
+    today: '2024-06-10',
+    activeDate: { value: '2024-06-10' },
+  }),
+}))
+
+vi.mock('../../composables/useSlideOver', () => ({
+  useSlideOver: () => ({
+    stack: { value: [] },
+    push: vi.fn(),
+    pop: vi.fn(),
+    close: vi.fn(),
+    restoreFromUrl: vi.fn(),
+  }),
+}))
+
 // Mock stores so we can control their output
 const mockAnchors: Anchor[] = [
   {
@@ -317,17 +337,16 @@ describe('DayTimeline component', () => {
     await expect(timedArea.trigger('drop')).resolves.not.toThrow()
   })
 
-  it('event wrapper div is the drag source and contains the event title', async () => {
-    // New HTML5 DnD design: the wrapper div (data-event-id) is draggable="true"
-    // and contains the event title inline — no separate "grip strip".
+  it('timed events render as TaskCard in calendar-event mode (draggable)', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
-    // Event wrapper divs should be draggable
-    const eventWrapper = wrapper.find('[data-event-id="ev-timed"]')
-    expect(eventWrapper.exists()).toBe(true)
-    expect(eventWrapper.attributes('draggable')).toBe('true')
-    // The wrapper IS the visual element so it contains the title
-    expect(eventWrapper.text()).toContain('Team standup')
+    // After migration: TaskCard renders [data-testid="task-card-calendar-event"] for each timed event
+    const card = wrapper.find('[data-testid="task-card-calendar-event"]')
+    expect(card.exists()).toBe(true)
+    expect(card.attributes('draggable')).toBe('true')
+    expect(card.text()).toContain('Team standup')
+    // Old data-event-id selector must NOT exist
+    expect(wrapper.find('[data-event-id="ev-timed"]').exists()).toBe(false)
     // Time-slot drop targets should NOT be draggable
     const slots = wrapper.findAll('[data-time-slot]')
     for (const slot of slots) {

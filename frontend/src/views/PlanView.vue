@@ -128,11 +128,10 @@ async function onAnchorColumnDrop(e: DragEvent) {
   if (!raw) return
   try {
     const data = JSON.parse(raw)
-    if (data.type === 'calendar-event' && data.eventId) {
-      // Use the event's original anchor if available; fall back to first anchor
+    // type: 'task' with fromStartTime = calendar event being demoted back to plan
+    if (data.type === 'task' && data.fromStartTime && data.id) {
       const anchorId = data.anchorId ?? anchorStore.anchors[0]?.id ?? ''
-      await eventStore.demoteEvent(data.eventId, anchorId, activeDate.value)
-      // Refresh plan so the demoted task appears in anchor blocks
+      await eventStore.demoteEvent(data.id, anchorId, activeDate.value)
       await planStore.fetchPlan(activeDate.value)
     }
   } catch {

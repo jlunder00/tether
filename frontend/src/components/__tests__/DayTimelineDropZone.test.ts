@@ -85,6 +85,26 @@ vi.mock('../../stores/context', () => ({
   }),
 }))
 
+vi.mock('../../stores/plan', () => ({
+  usePlanStore: () => ({
+    plan: null,
+    plans: {},
+    fetchPlan: vi.fn(),
+    today: '2024-06-10',
+    activeDate: { value: '2024-06-10' },
+  }),
+}))
+
+vi.mock('../../composables/useSlideOver', () => ({
+  useSlideOver: () => ({
+    stack: { value: [] },
+    push: vi.fn(),
+    pop: vi.fn(),
+    close: vi.fn(),
+    restoreFromUrl: vi.fn(),
+  }),
+}))
+
 // Expected total 15-min slots
 const TOTAL_SLOTS = (AXIS_END_HOUR - AXIS_START_HOUR) * 4  // 72
 
@@ -128,15 +148,16 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     )
   })
 
-  it('dropping a calendar-event payload moves the event preserving duration (PATCH /api/events/:id)', async () => {
+  it('dropping a task payload with fromStartTime moves the event preserving duration (PATCH /api/events/:id)', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
     const slot = wrapper.find('[data-time="10:00"]')
     expect(slot.exists()).toBe(true)
     const durationMs = 30 * 60_000  // 30 min
+    // After migration: TaskCard writes type:'task' not type:'calendar-event'
     const payload = {
-      type: 'calendar-event',
-      eventId: 'ev-timed',
+      type: 'task',
+      taskId: 'task-1',  // mockTimedEvent.task_id = 'task-1'
       title: 'Team standup',
       fromStartTime: '2024-06-10T09:00:00',
       durationMs,
@@ -151,30 +172,32 @@ describe('DayTimeline – 15-min slot drop targets', () => {
 
   it('source event block is hidden (v-show=false) while its drag is active', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
-    // attachTo: document.body required for v-show to propagate in jsdom
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' }, attachTo: document.body })
-    // Find the event wrapper (has data-event-id)
-    const eventWrapper = wrapper.find(`[data-event-id="${mockTimedEvent.id}"]`)
-    expect(eventWrapper.exists()).toBe(true)
-    // Initially visible
-    expect(eventWrapper.isVisible()).toBe(true)
-    // Trigger dragstart on the event element
-    await eventWrapper.trigger('dragstart')
+    const card = wrapper.find('[data-testid="task-card-calendar-event"]')
+    expect(card.exists()).toBe(true)
+    expect(card.isVisible()).toBe(true)
+    await card.trigger('dragstart', {
+      dataTransfer: { setData: vi.fn(), effectAllowed: '' },
+    })
+    // useDraggableTask defers isDragging=true to rAF for ghost-image capture
+    await new Promise(r => requestAnimationFrame(r))
     await wrapper.vm.$nextTick()
-    expect(eventWrapper.isVisible()).toBe(false)
+    expect(card.isVisible()).toBe(false)
     wrapper.unmount()
   })
 
   it('source event block is restored (v-show=true) on dragend with no valid drop', async () => {
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' }, attachTo: document.body })
-    const eventWrapper = wrapper.find(`[data-event-id="${mockTimedEvent.id}"]`)
-    await eventWrapper.trigger('dragstart')
+    const card = wrapper.find('[data-testid="task-card-calendar-event"]')
+    await card.trigger('dragstart', {
+      dataTransfer: { setData: vi.fn(), effectAllowed: '' },
+    })
+    await new Promise(r => requestAnimationFrame(r))
     await wrapper.vm.$nextTick()
-    // Now fire dragend
-    await eventWrapper.trigger('dragend')
+    await card.trigger('dragend')
     await wrapper.vm.$nextTick()
-    expect(eventWrapper.isVisible()).toBe(true)
+    expect(card.isVisible()).toBe(true)
     wrapper.unmount()
   })
 
