@@ -195,6 +195,8 @@ async function handleSlotDrop(payload: DropPayload, time: string) {
   } else {
     const endISO = toLocalIso(new Date(slotStartMs + 30 * 60_000))
     await eventStore.promoteTask(taskId, slotStart, endISO, title)
+    // Refresh plan cache so the promoted task is removed from anchor blocks
+    await planStore.fetchPlan(props.date)
   }
 }
 

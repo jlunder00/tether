@@ -33,6 +33,7 @@ vi.mock('../../lib/api', () => ({
 
 const mockPromoteTask = vi.fn()
 const mockMoveEvent = vi.fn()
+const mockFetchPlan = vi.fn()
 
 const mockTimedEvent: CalendarEvent = {
   id: 'ev-timed',
@@ -72,24 +73,11 @@ vi.mock('../../stores/events', () => ({
   }),
 }))
 
-vi.mock('../../stores/milestones', () => ({
-  useMilestoneStore: () => ({
-    all: [],
-    fetchAll: vi.fn(),
-  }),
-}))
-
-vi.mock('../../stores/context', () => ({
-  useContextStore: () => ({
-    nodes: {},
-  }),
-}))
-
 vi.mock('../../stores/plan', () => ({
   usePlanStore: () => ({
     plan: null,
     plans: {},
-    fetchPlan: vi.fn(),
+    fetchPlan: mockFetchPlan,
     today: '2024-06-10',
     activeDate: { value: '2024-06-10' },
   }),
@@ -105,6 +93,19 @@ vi.mock('../../composables/useSlideOver', () => ({
   }),
 }))
 
+vi.mock('../../stores/milestones', () => ({
+  useMilestoneStore: () => ({
+    all: [],
+    fetchAll: vi.fn(),
+  }),
+}))
+
+vi.mock('../../stores/context', () => ({
+  useContextStore: () => ({
+    nodes: {},
+  }),
+}))
+
 // Expected total 15-min slots
 const TOTAL_SLOTS = (AXIS_END_HOUR - AXIS_START_HOUR) * 4  // 72
 
@@ -115,6 +116,7 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     setActivePinia(createPinia())
     mockPromoteTask.mockReset()
     mockMoveEvent.mockReset()
+    mockFetchPlan.mockReset()
   })
 
   it('each 15-min slot has data-date and data-time attributes', async () => {
@@ -146,6 +148,17 @@ describe('DayTimeline – 15-min slot drop targets', () => {
       expect.stringContaining('09:30'),
       'Do the thing',
     )
+  })
+
+  it('after promoting a task to calendar, planStore.fetchPlan is called to refresh the plan cache', async () => {
+    // Bug 1: promoteTask runs but plan cache is never refreshed, so the task stays visible in the anchor block
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const slot = wrapper.find('[data-time="09:00"]')
+    const payload = { type: 'task', taskId: 'task-99', title: 'Do the thing' }
+    await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
+    expect(mockPromoteTask).toHaveBeenCalled()
+    expect(mockFetchPlan).toHaveBeenCalledWith('2024-06-10')
   })
 
   it('dropping a task payload with fromStartTime moves the event preserving duration (PATCH /api/events/:id)', async () => {
