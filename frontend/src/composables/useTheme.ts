@@ -80,7 +80,7 @@ export function useTheme() {
     document.documentElement.dataset.mode = mode
   }
 
-  function autoMode() {
+  function autoMode() { // This duplicates the login in main.ts and is not used, but it should probably be used in place of that for reusability
     const h = new Date().getHours()
     return h >= 7 && h < 19 ? 'light' : 'dark'
   }
