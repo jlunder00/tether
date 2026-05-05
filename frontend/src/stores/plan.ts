@@ -54,7 +54,7 @@ export const usePlanStore = defineStore('plan', () => {
   const loading = ref(false)
   const today = localDateString(new Date())
   const activeDate = ref(today)
-  const savedDates = ref<string[]>([])
+  const savedDates = ref<string[]>([]) // Never used, but is this useful?
   const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
@@ -77,9 +77,10 @@ export const usePlanStore = defineStore('plan', () => {
     savedDates.value = await resp.json()
   }
 
-  function goToPrevDay() { fetchPlan(offsetDate(activeDate.value, -1)) }
-  function goToNextDay() { fetchPlan(offsetDate(activeDate.value, +1)) }
-  function goToToday()   { fetchPlan(today) }
+  // Deprecated: superceeded by routing via router.push()
+  // function goToPrevDay() { fetchPlan(offsetDate(activeDate.value, -1)) }
+  // function goToNextDay() { fetchPlan(offsetDate(activeDate.value, +1)) }
+  // function goToToday()   { fetchPlan(today) }
 
   async function fetchPlanRange(startDate: string, endDate: string) {
     const resp = await api(`/api/plan/range?start=${startDate}&end=${endDate}`)
@@ -258,22 +259,22 @@ export const usePlanStore = defineStore('plan', () => {
     return resp.ok
   }
 
-  function connectWebSocket() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${location.host}/ws`)
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data)
-      if (msg.type === 'plan_updated') fetchPlan()
-    }
-    ws.onclose = () => setTimeout(connectWebSocket, 3000)
-    return ws
-  }
+  // Deprecated: superceeded by auth store manage ws transport in /api/bot/chat
+  // function connectWebSocket() {
+  //   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  //   const ws = new WebSocket(`${proto}://${location.host}/ws`)
+  //   ws.onmessage = (e) => {
+  //     const msg = JSON.parse(e.data)
+  //     if (msg.type === 'plan_updated') fetchPlan()
+  //   }
+  //   ws.onclose = () => setTimeout(connectWebSocket, 3000)
+  //   return ws
+  // }
 
   return {
     plan, loading, today, activeDate, savedDates, plans,
     fetchPlan, fetchSavedDates,
-    goToPrevDay, goToNextDay, goToToday,
     fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
-    updateAnchorTasks, updateTaskStatus, patchTaskFields, connectWebSocket,
+    updateAnchorTasks, updateTaskStatus, patchTaskFields,
   }
 })
