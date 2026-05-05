@@ -1,15 +1,17 @@
 """tasks tri-state constraint
 
-Enforces the three valid task states at the DB level:
-  1. Backlog:        start_time IS NULL  AND plan_date IS NULL  AND anchor_id IS NULL
-  2. Plan task:      start_time IS NULL  AND plan_date IS NOT NULL AND anchor_id IS NOT NULL
-  3. Calendar event: start_time IS NOT NULL AND plan_date IS NOT NULL AND anchor_id IS NULL
+Enforces the four valid task states at the DB level:
+  1. Backlog:                 plan_date IS NULL  AND anchor_id IS NULL  AND start_time IS NULL
+  2. Plan task:               plan_date IS NOT NULL AND anchor_id IS NOT NULL AND start_time IS NULL
+  3. Calendar event:          plan_date IS NOT NULL AND anchor_id IS NULL  AND start_time IS NOT NULL
+  4. Anchor-recurring master: plan_date IS NULL  AND anchor_id IS NOT NULL AND start_time IS NULL AND rrule IS NOT NULL
 
 Precondition: run the following to verify no existing rows would be rejected:
     SELECT count(*) FROM tasks WHERE NOT (
-        (start_time IS NULL AND plan_date IS NULL AND anchor_id IS NULL)
-        OR (start_time IS NULL AND plan_date IS NOT NULL AND anchor_id IS NOT NULL)
-        OR (start_time IS NOT NULL AND plan_date IS NOT NULL AND anchor_id IS NULL)
+        (plan_date IS NULL AND anchor_id IS NULL AND start_time IS NULL)
+        OR (plan_date IS NOT NULL AND anchor_id IS NOT NULL AND start_time IS NULL)
+        OR (plan_date IS NOT NULL AND anchor_id IS NULL AND start_time IS NOT NULL)
+        OR (plan_date IS NULL AND anchor_id IS NOT NULL AND start_time IS NULL AND rrule IS NOT NULL)
     );
 Expected result: 0
 
@@ -30,9 +32,14 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute("""
         ALTER TABLE tasks ADD CONSTRAINT tasks_tri_state CHECK (
-            (start_time IS NULL AND plan_date IS NULL AND anchor_id IS NULL)
-            OR (start_time IS NULL AND plan_date IS NOT NULL AND anchor_id IS NOT NULL)
-            OR (start_time IS NOT NULL AND plan_date IS NOT NULL AND anchor_id IS NULL)
+            -- Case 1: backlog
+            (plan_date IS NULL AND anchor_id IS NULL AND start_time IS NULL)
+            -- Case 2: plan task
+            OR (plan_date IS NOT NULL AND anchor_id IS NOT NULL AND start_time IS NULL)
+            -- Case 3: calendar event
+            OR (plan_date IS NOT NULL AND anchor_id IS NULL AND start_time IS NOT NULL)
+            -- Case 4: anchor-recurring master (template, no specific date)
+            OR (plan_date IS NULL AND anchor_id IS NOT NULL AND start_time IS NULL AND rrule IS NOT NULL)
         )
     """)
 

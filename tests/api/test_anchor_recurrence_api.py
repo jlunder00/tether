@@ -35,11 +35,13 @@ async def task_id(conn, anchor_id):
 
 @pytest.fixture
 async def non_anchor_task_id(conn):
-    """Task with no anchor_id."""
+    """Task with no anchor_id (calendar event so constraint is satisfied)."""
     from tests.api.conftest import TEST_USER_ID
     row = await conn.fetchrow(
-        """INSERT INTO tasks (uuid, user_id, plan_date, text, status, position)
-           VALUES (gen_random_uuid(), $1::uuid, '2026-05-05', 'Standalone', 'pending', 0)
+        """INSERT INTO tasks (uuid, user_id, plan_date, start_time, end_time, text, status, position)
+           VALUES (gen_random_uuid(), $1::uuid, '2026-05-05',
+                   '2026-05-05T09:00:00Z', '2026-05-05T10:00:00Z',
+                   'Standalone', 'pending', 0)
            RETURNING uuid""",
         TEST_USER_ID,
     )

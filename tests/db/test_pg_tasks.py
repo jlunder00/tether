@@ -159,18 +159,20 @@ async def test_patch_task_fields_sets_start_end_time(conn, event_task_uuid):
 
 
 @pytest.mark.asyncio
-async def test_patch_task_fields_clears_start_end_time_with_null(conn, event_task_uuid):
-    """patch_task_fields with start_time=None and end_time=None demotes event back to task."""
+async def test_patch_task_fields_clears_start_end_time_with_null(conn, event_task_uuid, anchor_id):
+    """patch_task_fields demotes a calendar event to a plan task by clearing start/end_time and setting anchor_id."""
     result = await patch_task_fields(conn, event_task_uuid, {
         "start_time": None,
         "end_time": None,
+        "anchor_id": str(anchor_id),
     })
     row = await conn.fetchrow(
-        "SELECT start_time, end_time FROM tasks WHERE uuid = $1::uuid",
+        "SELECT start_time, end_time, anchor_id FROM tasks WHERE uuid = $1::uuid",
         event_task_uuid,
     )
     assert row["start_time"] is None, "start_time should be cleared to NULL"
     assert row["end_time"] is None, "end_time should be cleared to NULL"
+    assert row["anchor_id"] is not None, "anchor_id must be set for a valid plan task"
 
 
 @pytest.mark.asyncio
