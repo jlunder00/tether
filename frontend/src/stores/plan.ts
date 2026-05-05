@@ -43,11 +43,6 @@ function localDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function offsetDate(base: string, days: number): string {
-  const d = new Date(base + 'T12:00:00') // noon to avoid DST edge cases
-  d.setDate(d.getDate() + days)
-  return localDateString(d)
-}
 
 export const usePlanStore = defineStore('plan', () => {
   const plan = ref<DayPlan | null>(null)
