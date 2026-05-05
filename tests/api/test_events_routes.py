@@ -316,7 +316,7 @@ async def _insert_recurring_master(conn, rrule: str = "RRULE:FREQ=WEEKLY") -> st
         """
         INSERT INTO tasks (
             uuid, user_id, text, status,
-            start_time, end_time,
+            plan_date, start_time, end_time,
             source, external_id, rrule
         )
         VALUES (
@@ -324,6 +324,7 @@ async def _insert_recurring_master(conn, rrule: str = "RRULE:FREQ=WEEKLY") -> st
             current_setting('app.current_user_id', true)::uuid,
             'Weekly recurring event',
             'pending',
+            '2026-05-04',
             '2026-05-04T09:00:00Z',
             '2026-05-04T09:30:00Z',
             'google_calendar',
@@ -365,11 +366,11 @@ async def test_delete_event_scope_all_removes_recurring_master_and_exceptions(ap
     await conn.execute(
         """
         INSERT INTO tasks (uuid, user_id, text, status, source, external_id, recurrence_id,
-                           start_time, end_time, original_start_time)
+                           plan_date, start_time, end_time, original_start_time)
         VALUES (
             $1, current_setting('app.current_user_id', true)::uuid,
             'Moved exception', 'pending', 'google_calendar', 'gcal-exc-1',
-            $2, '2026-05-11T14:00:00Z', '2026-05-11T14:30:00Z', '2026-05-11T09:00:00Z'
+            $2, '2026-05-11', '2026-05-11T14:00:00Z', '2026-05-11T14:30:00Z', '2026-05-11T09:00:00Z'
         )
         """,
         uuid.uuid4(), master_external_id,
