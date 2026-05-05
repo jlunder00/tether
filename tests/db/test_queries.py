@@ -1,30 +1,31 @@
 import pytest
 from pathlib import Path
 
-pytestmark = pytest.mark.skip(reason="SQLite reference tests — retained for Phase 4 data migration; skip until cutover complete")
-
-from db.schema import init_db
-from db.queries import (
-    upsert_anchor, get_anchors,
-    upsert_plan, get_plan,
-    upsert_tasks,
-    upsert_context_entry, get_context_entries, delete_context_entry,
-    rename_context_subject,
-    ensure_node_path, get_all_node_paths, get_node_by_path, create_node,
-    insert_conversation_turn, get_recent_history,
-    clear_session_state,
-    insert_orchestrator_turn, get_orchestrator_conversation,
-    upsert_staging_mutation, get_staging_mutations,
-    log_stage, get_invocation_log,
-    create_milestone, get_milestones, patch_milestone, delete_milestone,
-    link_milestone_task, unlink_milestone_task,
-    add_dependency, remove_dependency, get_dependencies_for,
-    get_full_task_dependencies,
-    get_task_by_uuid,
-    get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
-    get_links, create_link, delete_link,
-    patch_task_fields,
-)
+try:
+    from db.schema import init_db
+    from db.queries import (
+        upsert_anchor, get_anchors,
+        upsert_plan, get_plan,
+        upsert_tasks,
+        upsert_context_entry, get_context_entries, delete_context_entry,
+        rename_context_subject,
+        ensure_node_path, get_all_node_paths, get_node_by_path, create_node,
+        insert_conversation_turn, get_recent_history,
+        clear_session_state,
+        insert_orchestrator_turn, get_orchestrator_conversation,
+        upsert_staging_mutation, get_staging_mutations,
+        log_stage, get_invocation_log,
+        create_milestone, get_milestones, patch_milestone, delete_milestone,
+        link_milestone_task, unlink_milestone_task,
+        add_dependency, remove_dependency, get_dependencies_for,
+        get_full_task_dependencies,
+        get_task_by_uuid,
+        get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
+        get_links, create_link, delete_link,
+        patch_task_fields,
+    )
+except ImportError:
+    pytestmark = pytest.mark.skip(reason="Skipping as Sqlite DB is deprecated and the required imports have been removed. Ensure Postgres equivalents are tested prior to removing these tests")
 
 
 @pytest.fixture
