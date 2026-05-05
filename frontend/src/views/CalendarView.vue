@@ -590,25 +590,6 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
     startDate = new Date(dayKey + 'T12:00:00')
   }
 
-  if (payload.type === 'calendar-event' && payload.eventId) {
-    // Move event preserving duration (fromStartTime + durationMs from payload)
-    const durationMs = (payload.durationMs as number) || 30 * 60_000
-    const endDate = new Date(startDate.getTime() + durationMs)
-    const existing = eventStore.events.find(ev => ev.id === payload.eventId)
-    if (existing?.is_occurrence) {
-      pendingRecurrence.value = {
-        kind: 'event-move',
-        eventId: payload.eventId as string,
-        startTime: startDate.toISOString(),
-        endTime: endDate.toISOString(),
-        originalStartTime: payload.fromStartTime as string,
-      }
-      return
-    }
-    await eventStore.moveEvent(payload.eventId as string, startDate.toISOString(), endDate.toISOString())
-    return
-  }
-
   if (payload.type === 'task' && payload.taskId) {
     const taskId = payload.taskId as string
     // Look up by task_id first; fall back to event.id for standalone/synced events

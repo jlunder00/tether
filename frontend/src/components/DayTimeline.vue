@@ -4,7 +4,10 @@ import { useEventStore } from '../stores/events'
 import { useAnchorStore } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
 import { useContextStore } from '../stores/context'
+import { usePlanStore } from '../stores/plan'
+import type { Task } from '../stores/plan'
 import RecurrenceEditDialog from './RecurrenceEditDialog.vue'
+import TaskCard from './TaskCard.vue'
 import {
   eventTopPx,
   eventHeightPx,
@@ -35,9 +38,36 @@ const eventStore = useEventStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
 const contextStore = useContextStore()
+const planStore = usePlanStore()
 
 function resolveColor(ev: CalendarEvent): string {
   return resolveEventColor(ev, milestoneStore.all, contextStore.nodes)
+}
+
+function taskFromEvent(ev: CalendarEvent): Task {
+  // For task-linked events, return live Task from planStore for reactive motif/status
+  if (ev.task_id && planStore.plan?.anchors) {
+    for (const anchor of Object.values(planStore.plan.anchors)) {
+      const t = anchor.tasks.find(t => t.id === ev.task_id)
+      if (t) return t
+    }
+  }
+  // Standalone event or task not in today's plan — synthesise minimal Task
+  return {
+    id: ev.task_id ?? ev.id,
+    text: ev.title,
+    description: null,
+    status: 'pending',
+    position: 0,
+    followup_config: null,
+    blocks: [],
+    blocked_by: [],
+    context_subject: ev.context_subject,
+    context_node_id: null,
+    anchor_id: ev.anchor_id,
+    color: null,
+    motif: null,
+  }
 }
 
 // --- Date parsing ---
@@ -136,7 +166,7 @@ function onRecurrenceCancel() {
 
 // --- 15-min slot drop zones ---
 
-const SLOT_COUNT = (AXIS_END_HOUR - AXIS_START_HOUR) * 4  // e.g. 18h × 4 = 72
+const SLOT_COUNT = (AXIS_END_HOUR - AXIS_START_HOUR) * 4  // e.g. 18h x 4 = 72
 
 /** Format slot index as 'HH:MM'. Slot 0 = AXIS_START_HOUR:00. */
 function slotTime(i: number): string {
@@ -150,29 +180,21 @@ async function handleSlotDrop(payload: DropPayload, time: string) {
   const slotStart = `${props.date}T${time}:00`
   const slotStartMs = new Date(slotStart).getTime()
 
-  if (payload.type === 'calendar-event') {
-    // Reposition existing event, preserving its duration.
-    const p = payload as { eventId?: string; durationMs?: number }
-    const dur = p.durationMs ?? 30 * 60_000
-    const newEnd = toLocalIso(new Date(slotStartMs + dur))
-    const ev = eventStore.events.find(e => e.id === p.eventId)
-    if (!ev) return
-    await handleEventMove(ev, slotStart, newEnd)
+  // type === 'task' handles both plan-view promotions AND calendar-event repositions
+  // (useDraggableTask always writes type:'task'; fromStartTime present <-> calendar event)
+  const taskId = (payload as { taskId?: string }).taskId
+  if (!taskId) return
+  const title = (payload as { title?: string }).title ?? taskId
+  // Dual lookup: task_id for task-linked events; id for standalone events
+  const existing = eventStore.events.find(e => e.task_id === taskId)
+    ?? eventStore.events.find(e => e.id === taskId)
+  if (existing) {
+    const dur = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
+    const newEnd = toLocalIso(new Date(slotStartMs + (dur || 30 * 60_000)))
+    await handleEventMove(existing, slotStart, newEnd)
   } else {
-    // type === 'task' (or legacy AnchorBlock format with taskId field)
-    const taskId = (payload as { taskId?: string }).taskId
-    if (!taskId) return
-    const title = (payload as { title?: string }).title ?? taskId
-    // Check if this task is already promoted to avoid creating a duplicate event.
-    const existing = eventStore.events.find(e => e.task_id === taskId)
-    if (existing) {
-      const dur = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
-      const newEnd = toLocalIso(new Date(slotStartMs + (dur || 30 * 60_000)))
-      await eventStore.moveEvent(existing.id, slotStart, newEnd)
-    } else {
-      const endISO = toLocalIso(new Date(slotStartMs + 30 * 60_000))
-      await eventStore.promoteTask(taskId, slotStart, endISO, title)
-    }
+    const endISO = toLocalIso(new Date(slotStartMs + 30 * 60_000))
+    await eventStore.promoteTask(taskId, slotStart, endISO, title)
   }
 }
 
@@ -203,35 +225,6 @@ async function onSlotDrop(e: DragEvent, i: number) {
   } catch { /* ignore malformed payload */ }
 }
 
-// --- Calendar-event drag source ---
-
-/** ID of the event being dragged (used to hide the source element via v-show). */
-const draggingEventId = ref<string | null>(null)
-
-function onEventDragStart(evt: DragEvent, ev: CalendarEvent) {
-  if (evt.dataTransfer) {
-    const durationMs = new Date(ev.end_time).getTime() - new Date(ev.start_time).getTime()
-    const payload = JSON.stringify({
-      type: 'calendar-event',
-      eventId: ev.id,
-      taskId: ev.task_id,
-      title: ev.title,
-      anchorId: ev.anchor_id,
-      fromStartTime: ev.start_time,
-      durationMs,
-    })
-    evt.dataTransfer.effectAllowed = 'move'
-    evt.dataTransfer.setData('application/json', payload)
-    evt.dataTransfer.setData('text/plain', payload)
-  }
-  // Set synchronously (consistent with useDraggableTask pattern).
-  draggingEventId.value = ev.id
-}
-
-function onEventDragEnd() {
-  draggingEventId.value = null
-}
-
 // Array used purely for v-for slot grid rendering
 const slotIndices = Array.from({ length: SLOT_COUNT }, (_, i) => i)
 
@@ -255,7 +248,7 @@ function onTimedAreaClick(e: MouseEvent) {
 
 // --- Time formatting helpers ---
 
-/** Format a Date as local-naive ISO (YYYY-MM-DDTHH:MM) — no timezone offset. */
+/** Format a Date as local-naive ISO (YYYY-MM-DDTHH:MM) -- no timezone offset. */
 function toLocalIso(d: Date): string {
   const year = d.getFullYear()
   const mo = String(d.getMonth() + 1).padStart(2, '0')
@@ -264,9 +257,6 @@ function toLocalIso(d: Date): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   return `${year}-${mo}-${day}T${hh}:${mm}`
 }
-
-// Note: drag of calendar-event blocks is now handled by TaskCard mode="calendar-event".
-// onDrop for task promotion is now handled by slot-level useDropZone instances.
 
 // --- Anchor color helper ---
 
@@ -279,18 +269,6 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
     height: `${anchorBandHeightPx(anchor as Parameters<typeof anchorBandHeightPx>[0], dateObj.value)}px`,
     left: `${layout.leftPercent}%`,
     width: `${layout.widthPercent}%`,
-  }
-}
-
-// --- Event block helpers ---
-
-function timedEventStyle(event: CalendarEvent) {
-  const layout = overlapLayout.value[event.id]
-  const leftPct = layout?.leftPercent ?? 0
-  const widthPct = layout?.widthPercent ?? 100
-  return {
-    left: `${leftPct}%`,
-    width: `calc(${widthPct}% - 4px)`,
   }
 }
 </script>
@@ -346,7 +324,7 @@ function timedEventStyle(event: CalendarEvent) {
           :style="anchorBandStyle(anchor)"
         />
 
-        <!-- Overlap background bands — light tint indicating simultaneous events -->
+        <!-- Overlap background bands -- light tint indicating simultaneous events -->
         <div
           v-for="(band, bi) in overlapBands"
           :key="'overlap-' + bi"
@@ -363,7 +341,7 @@ function timedEventStyle(event: CalendarEvent) {
           :style="{ top: `${(hour - AXIS_START_HOUR) * 60 * PX_PER_MINUTE}px` }"
         />
 
-        <!-- 15-min slot drop targets — transparent absolute divs at each 15-min interval -->
+        <!-- 15-min slot drop targets -- transparent absolute divs at each 15-min interval -->
         <div
           v-for="i in slotIndices"
           :key="'slot-' + i"
@@ -381,55 +359,21 @@ function timedEventStyle(event: CalendarEvent) {
           @drop="(e) => onSlotDrop(e, i)"
         />
 
-        <!--
-          Timed event blocks — inline CalendarEventBlock-equivalent (CalendarEventBlock absorbed).
-          The wrapper div owns: absolute positioning, HTML5 drag source, click-to-open, v-show.
-          This avoids needing TaskCard here and lets us write the 'calendar-event' payload
-          (with eventId + durationMs) instead of the 'task' payload that useDraggableTask writes.
-        -->
-        <div
+        <!-- Timed event blocks -- TaskCard in calendar-event mode -->
+        <TaskCard
           v-for="ev in timedEvents"
           :key="ev.id"
-          :data-event-id="ev.id"
-          v-show="draggingEventId !== ev.id"
-          draggable="true"
-          class="absolute z-10 cursor-grab"
-          :style="{
-            top: `${eventTopPx(ev.start_time)}px`,
-            left: timedEventStyle(ev).left,
-            width: timedEventStyle(ev).width,
-            height: `${eventHeightPx(ev.start_time, ev.end_time)}px`,
-          }"
-          @dragstart="(e) => onEventDragStart(e, ev)"
-          @dragend="onEventDragEnd"
+          :task="taskFromEvent(ev)"
+          mode="calendar-event"
+          :event="ev"
+          :top-px="eventTopPx(ev.start_time)"
+          :height-px="eventHeightPx(ev.start_time, ev.end_time)"
+          :left-percent="overlapLayout[ev.id]?.leftPercent ?? 0"
+          :width-percent="overlapLayout[ev.id]?.widthPercent ?? 100"
+          :resolved-color="resolveColor(ev)"
+          data-event-block
           @click.stop="emit('open-event', ev)"
-        >
-          <!-- Event visual: absorbs CalendarEventBlock.vue template -->
-          <div
-            class="absolute inset-0 rounded overflow-hidden text-xs px-1.5 py-0.5 shadow-md hover:brightness-110 transition-all"
-            :style="{
-              backgroundColor: resolveColor(ev),
-              borderLeft: '3px solid ' + resolveColor(ev),
-              opacity: ev.source !== 'tether' ? 0.75 : 0.92,
-            }"
-          >
-            <div class="flex items-center gap-1 truncate pointer-events-none">
-              <span
-                v-if="ev.source !== 'tether'"
-                data-testid="gcal-badge"
-                class="text-[9px] bg-black/20 rounded px-0.5 flex-shrink-0"
-                :title="ev.source === 'google_calendar' ? 'Synced from Google Calendar' : 'Synced from external source'"
-              >{{ ev.source === 'google_calendar' ? 'G' : '↗' }}</span>
-              <span
-                v-if="ev.is_recurring || ev.is_occurrence"
-                data-testid="recurring-indicator"
-                class="text-[9px] flex-shrink-0 opacity-80"
-                title="Recurring event"
-              >↻</span>
-              <span class="truncate font-medium text-[--accent-fg]">{{ ev.title }}</span>
-            </div>
-          </div>
-        </div>
+        />
       </div>
     </div>
 

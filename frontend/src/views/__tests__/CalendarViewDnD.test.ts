@@ -151,11 +151,9 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     expect(wrapper.find('[data-testid="task-card-calendar-event"]').exists()).toBe(true)
   })
 
-  // ── KEY FAILING TEST #2 ────────────────────────────────────────────────────
-  // Current CalendarView only handles task promotions in onDrop; calendar-event
-  // payloads (type:'calendar-event') are ignored. After refactor, handleColumnDrop
-  // routes these to eventStore.moveEvent with preserved duration.
-  it('dropping a calendar-event payload onto a day column calls eventStore.moveEvent with preserved duration', async () => {
+  // After migration: type:'task' with fromStartTime handles calendar-event repositions
+  // (useDraggableTask always writes type:'task'; fromStartTime present signals it's a calendar event)
+  it('dropping a task payload with fromStartTime onto a day column calls eventStore.moveEvent with preserved duration', async () => {
     const { default: CalendarView } = await import('../CalendarView.vue')
     const wrapper = mount(CalendarView)
     await flushPromises()
@@ -164,9 +162,11 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     expect(todayCol.exists()).toBe(true)
 
     const durationMs = 30 * 60_000  // 30 min
+    // After migration: TaskCard writes type:'task' not type:'calendar-event'
+    // mockTimedEvent.task_id = 'task-1', so lookup via task_id finds ev-today
     const payload = {
-      type: 'calendar-event',
-      eventId: 'ev-today',
+      type: 'task',
+      taskId: 'task-1',
       title: 'Team meeting',
       fromStartTime: `${todayStr}T10:00:00`,
       durationMs,
