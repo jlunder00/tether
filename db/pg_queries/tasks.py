@@ -652,9 +652,9 @@ async def upsert_task_from_draft(
     # Derive plan_date in Python — satisfies tasks_tri_state Case 3 (calendar event:
     # plan_date IS NOT NULL when start_time IS NOT NULL). Computing here avoids
     # asyncpg type-inference issues with reusing the same parameter in a CASE expression.
-    from datetime import timezone as _tz, date as _date
-    plan_date: _date | None = (
-        draft.start_time.astimezone(_tz.utc).date()
+    from datetime import timezone as _tz
+    plan_date: str | None = (
+        draft.start_time.astimezone(_tz.utc).date().isoformat()
         if draft.start_time is not None else None
     )
     row = await conn.fetchrow(

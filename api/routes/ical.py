@@ -188,8 +188,7 @@ async def import_ical(
                 n_imported += 1
         except Exception as exc:
             logger.warning("upsert failed for event %s: %s", draft.external_id, exc, exc_info=True)
-            # Include exception class name only — no message to avoid leaking DB internals.
-            upsert_errors.append({"uid": draft.external_id, "error": f"Failed to save event ({type(exc).__name__})"})
+            upsert_errors.append({"uid": draft.external_id, "error": "Failed to save event"})
 
     result: dict = {
         "imported": n_imported,
