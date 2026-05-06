@@ -294,12 +294,12 @@ const { isOver: isContainerOver, dropHandlers: containerDropHandlers } = useDrop
               :label="mg.milestone.name"
               :color="mg.milestone.color ?? undefined"
               :level="1"
-              class="mb-1"
+              class="mb-1 group/milestone"
               @header-click="pushPanel({ kind: 'milestone', entityId: mg.milestone.id })">
               <template #header-right>
                 <div
                   data-testid="milestone-motif-picker"
-                  class="opacity-0 group-hover/ctx:opacity-100 transition-opacity ml-1"
+                  class="opacity-0 group-hover/milestone:opacity-100 transition-opacity ml-1"
                   @click.stop>
                   <MotifPicker
                     :model-value="(mg.milestone.motif as MotifSlot | null | undefined) ?? null"
