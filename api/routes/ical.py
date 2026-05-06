@@ -75,7 +75,8 @@ async def _fetch_url(url: str) -> bytes:
     except httpx.TimeoutException:
         raise HTTPException(status_code=502, detail="Timed out fetching URL")
     except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {exc}")
+        logger.warning("URL fetch failed for %s: %s", url, exc)
+        raise HTTPException(status_code=502, detail="Failed to fetch URL — check the address and try again")
 
     if not resp.is_success:
         raise HTTPException(
@@ -184,8 +185,8 @@ async def import_ical(
             else:
                 n_imported += 1
         except Exception as exc:
-            logger.warning("upsert failed for event %s: %s", draft.external_id, exc)
-            upsert_errors.append({"uid": draft.external_id, "error": str(exc)})
+            logger.warning("upsert failed for event %s: %s", draft.external_id, exc, exc_info=True)
+            upsert_errors.append({"uid": draft.external_id, "error": "Failed to save event"})
 
     result: dict = {
         "imported": n_imported,
