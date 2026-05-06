@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useMeetingsStore } from '../stores/meetings'
 
 const props = defineProps<{
@@ -15,6 +15,7 @@ const emit = defineEmits<{
 
 const store = useMeetingsStore()
 
+const wrapperRef = ref<HTMLDivElement | null>(null)
 const durationMinutes = ref(30)
 const context = ref('')
 /** Set of ISO strings the user has toggled on */
@@ -58,14 +59,16 @@ function buildDefaultSlots(): Array<{ iso: string; label: string }> {
 
 const defaultSlots = ref(buildDefaultSlots())
 
-// Re-generate and pre-select all slots whenever the modal opens
-watch(() => props.visible, (open) => {
+// Re-generate and pre-select all slots whenever the modal opens; also auto-focus for keyboard use
+watch(() => props.visible, async (open) => {
   if (open) {
     durationMinutes.value = 30
     context.value = ''
     store.error = null
     defaultSlots.value = buildDefaultSlots()
     selectedSlots.value = new Set(defaultSlots.value.map(s => s.iso))
+    await nextTick()
+    wrapperRef.value?.focus()
   }
 })
 
@@ -109,6 +112,7 @@ function onKeydown(e: KeyboardEvent) {
   <Teleport to="body">
     <div
       v-if="visible"
+      ref="wrapperRef"
       class="fixed inset-0 z-[200] flex items-center justify-center bg-black/60"
       data-testid="schedule-meeting-modal"
       @click.self="onCancel"

@@ -15,7 +15,7 @@ const scheduleModalConnectionId = ref<number | null>(null)
 const scheduleModalTarget = computed(() => {
   if (scheduleModalConnectionId.value === null) return ''
   const conn = store.accepted.find(c => c.id === scheduleModalConnectionId.value)
-  return conn?.other_user_id ?? ''
+  return conn?.other_username ?? ''
 })
 
 /** Set of other_user_ids that have an open meeting request */
@@ -35,6 +35,11 @@ onMounted(() => {
 
 function dismissError() {
   store.error = null
+}
+
+async function handleMeetingSent() {
+  // Refresh open meetings so the pending indicator reflects the new request immediately
+  await meetingsStore.fetchMeetings('open')
 }
 
 async function handleSendRequest() {
@@ -136,8 +141,8 @@ function closeScheduleModal() {
           :data-testid="`accepted-${conn.id}`"
         >
           <div class="flex items-center gap-2">
-            <span class="text-sm text-[--fg-1] font-mono" :title="conn.other_user_id">
-              {{ truncateUuid(conn.other_user_id) }}
+            <span class="text-sm text-[--fg-1]" :title="conn.other_user_id">
+              {{ conn.other_username || truncateUuid(conn.other_user_id) }}
             </span>
             <span class="text-[10px] bg-[--status-done-bg] text-[--status-done-fg] rounded px-1.5 py-0.5 font-medium tracking-wide">
               connected
@@ -233,7 +238,7 @@ function closeScheduleModal() {
       :visible="scheduleModalConnectionId !== null"
       :target-username="scheduleModalTarget"
       @close="closeScheduleModal"
-      @sent="closeScheduleModal"
+      @sent="handleMeetingSent"
     />
   </section>
 </template>
