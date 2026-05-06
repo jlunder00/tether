@@ -644,8 +644,9 @@ async def upsert_task_from_draft(
     Does NOT overwrite user-owned fields (plan_date, anchor_id, position,
     status, notes) on conflict — those belong to the user.
 
-    On insert: task lands as unscheduled (plan_date=NULL, anchor_id=NULL,
-    position=0, status='pending').
+    On insert: plan_date is derived from start_time (UTC date) when start_time
+    is set, satisfying the tasks_tri_state constraint (Case 3: calendar event).
+    anchor_id is NULL, position=0, status='pending'.
     """
     new_uuid = _uuid.uuid4()
     row = await conn.fetchrow(
@@ -654,8 +655,10 @@ async def upsert_task_from_draft(
             (uuid, user_id, text, source, external_id,
              start_time, end_time, description, external_url, source_status,
              rrule, recurrence_id, exdates, original_start_time,
-             status, position)
-        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', 0)
+             plan_date, status, position)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                CASE WHEN $6 IS NOT NULL THEN ($6 AT TIME ZONE 'UTC')::date ELSE NULL END,
+                'pending', 0)
         ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
         DO UPDATE SET
             text               = EXCLUDED.text,
