@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request
-from datetime import date as date_type, timedelta
 import asyncpg
 from db.pg_queries import get_plan, upsert_plan, upsert_tasks, list_plan_dates
+from db.pg_queries.plans import get_plans_for_range
 from db.pool_middleware import get_db_conn
 from api.ws import manager
 from api.auth import auth_dependency
@@ -18,14 +18,7 @@ async def list_plans(_auth=Depends(auth_dependency),
 @router.get("/plan/range")
 async def get_plan_range(start: str, end: str, _auth=Depends(auth_dependency),
                          conn: asyncpg.Connection = Depends(get_db_conn)):
-    start_d = date_type.fromisoformat(start)
-    end_d = date_type.fromisoformat(end)
-    result = {}
-    d = start_d
-    while d <= end_d:
-        result[str(d)] = await get_plan(conn, str(d))
-        d += timedelta(days=1)
-    return result
+    return await get_plans_for_range(conn, start, end)
 
 
 @router.get("/plan/{date}")
