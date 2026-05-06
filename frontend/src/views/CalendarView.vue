@@ -76,14 +76,12 @@ async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
   if (pending.kind === 'event-move') {
     await eventStore.moveEvent(pending.eventId, pending.startTime, pending.endTime, scope, pending.originalStartTime)
   } else if (pending.kind === 'event-edit') {
-    // Apply patch with scope — PATCH /api/events/:id
-    try {
-      await fetch(`/api/events/${pending.eventId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...pending.patch, scope, original_start_time: pending.patch.original_start_time }),
-      })
-    } catch { /* ignore */ }
+    await eventStore.patchEvent(
+      pending.eventId,
+      pending.patch,
+      scope,
+      pending.patch.original_start_time as string | undefined,
+    )
   } else if (pending.kind === 'event-delete') {
     await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
   } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {

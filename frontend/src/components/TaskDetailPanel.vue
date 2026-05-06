@@ -173,22 +173,14 @@ function patchFollowup(fields: Partial<FollowupConfig>) {
 // Schedule / Unschedule
 async function scheduleTask() {
   if (!scheduleDate.value || !scheduleAnchor.value) return
-  await api(`/api/tasks/${props.taskId}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date: scheduleDate.value, anchor_id: scheduleAnchor.value }),
-  })
+  await planStore.scheduleTask(props.taskId, scheduleDate.value, scheduleAnchor.value)
   await planStore.fetchPlan(scheduleDate.value)
   await backlogStore.fetchTasks()
   // Panel stays open — the task has moved, stores refreshed above
 }
 
 async function moveToBacklog() {
-  await api(`/api/tasks/${props.taskId}/move`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ date: null, anchor_id: null }),
-  })
+  await planStore.moveToBacklog(props.taskId)
   await planStore.fetchPlan()
   await backlogStore.fetchTasks()
 }
@@ -210,7 +202,7 @@ async function onRescheduleDate(e: Event) {
 // Delete
 async function deleteTask() {
   if (!confirm('Delete this task?')) return
-  await api(`/api/tasks/${props.taskId}`, { method: 'DELETE' })
+  await tasksStore.deleteTask(props.taskId)
   // Remove any associated calendar event from local state immediately so the
   // grid updates without waiting for a re-fetch.
   eventStore.removeEventsForTask(props.taskId)
@@ -248,11 +240,7 @@ async function addDependencyFromSearch(item: SearchResult) {
 }
 
 async function linkMilestoneFromSearch(item: SearchResult) {
-  await api(`/api/milestones/${item.id}/tasks`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_id: props.taskId }),
-  })
+  await milestoneStore.linkTask(item.id, props.taskId)
   await milestoneStore.fetchAll()
 }
 
