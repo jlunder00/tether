@@ -65,6 +65,9 @@ def _is_private_address(hostname: str) -> bool:
 
 async def _fetch_url(url: str) -> bytes:
     """Fetch ICS content from a URL with SSRF protection and size limit."""
+    # webcal:// and webcals:// are ICS subscription schemes — map to https://
+    import re as _re
+    url = _re.sub(r"^webcals?://", "https://", url, flags=_re.IGNORECASE)
     parsed = httpx.URL(url)
     if _is_private_address(parsed.host):
         raise HTTPException(status_code=422, detail="URL targets a private address")
