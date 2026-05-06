@@ -644,18 +644,28 @@ async def upsert_task_from_draft(
     Does NOT overwrite user-owned fields (plan_date, anchor_id, position,
     status, notes) on conflict — those belong to the user.
 
-    On insert: task lands as unscheduled (plan_date=NULL, anchor_id=NULL,
-    position=0, status='pending').
+    On insert: plan_date is derived from start_time (UTC date) when start_time
+    is set, satisfying the tasks_tri_state constraint (Case 3: calendar event).
+    anchor_id is NULL, position=0, status='pending'.
     """
     new_uuid = _uuid.uuid4()
+    # Derive plan_date in Python — satisfies tasks_tri_state Case 3 (calendar event:
+    # plan_date IS NOT NULL when start_time IS NOT NULL). Computing here avoids
+    # asyncpg type-inference issues with reusing the same parameter in a CASE expression.
+    from datetime import timezone as _tz
+    plan_date: str | None = (
+        draft.start_time.astimezone(_tz.utc).date().isoformat()
+        if draft.start_time is not None else None
+    )
     row = await conn.fetchrow(
         """
         INSERT INTO tasks
             (uuid, user_id, text, source, external_id,
              start_time, end_time, description, external_url, source_status,
              rrule, recurrence_id, exdates, original_start_time,
-             status, position)
-        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending', 0)
+             plan_date, status, position)
+        VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                $15, 'pending', 0)
         ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
         DO UPDATE SET
             text               = EXCLUDED.text,
@@ -687,6 +697,7 @@ async def upsert_task_from_draft(
         draft.recurrence_id,
         draft.exdates or [],
         draft.original_start_time,
+        plan_date,
     )
     return _row_to_task(row)
 
