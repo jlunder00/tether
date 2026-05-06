@@ -5,7 +5,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import asyncpg
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -44,12 +43,12 @@ class MeetingRequestBody(BaseModel):
     target_usernames: list[str]
     duration_minutes: int = 30
     slots: list[str]
-    context: Optional[str] = None
+    context: str | None = None
 
 
 class ProposeBody(BaseModel):
     slots: list[str]
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class AcceptSlotBody(BaseModel):
@@ -226,7 +225,7 @@ async def cancel_meeting_route(
 
 @router.get("/meetings")
 async def list_meetings(
-    status: Optional[str] = None,
+    status: str | None = None,
     auth=Depends(auth_dependency),
     conn: asyncpg.Connection = Depends(get_db_conn),
 ):
