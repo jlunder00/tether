@@ -112,29 +112,6 @@ jobs:
             POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
             TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
 
-      - name: Run DB migrations
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          cd /home/toast/tether
-          migration_failed=0
-          for db in /home/toast/.tether-config/users/*.db; do
-            if [ -f "$db" ]; then
-              if TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
-                   TETHER_DATA_DIR=/home/toast/.tether-config \
-                   docker compose run --rm --no-deps api \
-                     python db/migrate_data_model.py /data/users/$(basename "$db"); then
-                echo "Migrated $db"
-              else
-                echo "ERROR: Migration failed for $db" >&2
-                migration_failed=1
-              fi
-            fi
-          done
-          if [ "$migration_failed" -ne 0 ]; then
-            echo "One or more migrations failed — aborting deploy" >&2
-            exit 1
-          fi
 
       - name: Restart all services
         env:
