@@ -40,6 +40,9 @@ vi.mock('../../components/AnthropicAccountSection.vue', () => ({
 vi.mock('../../components/ConnectionsSection.vue', () => ({
   default: { template: '<div />' },
 }))
+vi.mock('../../components/ICalSection.vue', () => ({
+  default: { template: '<div data-testid="ical-section-stub" />' },
+}))
 
 describe('SettingsView - Appearance theme picker', () => {
   beforeEach(() => {
@@ -125,5 +128,22 @@ describe('SettingsView - Appearance theme picker', () => {
 
     await wrapper.find('button[title="Solstice"]').trigger('mouseenter')
     expect(document.documentElement.dataset.theme).toBe('solstice')
+  })
+})
+
+describe('SettingsView - ICalSection integration', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    vi.clearAllMocks()
+  })
+
+  it('renders ICalSection in the settings page', async () => {
+    const { default: SettingsView } = await import('../SettingsView.vue')
+    const wrapper = mount(SettingsView, {
+      global: { stubs: { 'router-link': { template: '<a><slot /></a>' } } },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="ical-section-stub"]').exists()).toBe(true)
   })
 })
