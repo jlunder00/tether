@@ -77,9 +77,9 @@ class TestICalImportEndpoint:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["imported"] + data["updated"] == 2
+        assert data["imported"] + data["updated"] == 2, f"full response: {data}"
         assert data["skipped"] == 0
-        assert data["errors"] == []
+        assert data["errors"] == [], f"errors: {data.get('errors')}"
         assert data["total_events"] == 2
 
     async def test_deduplication_reimport_same_file(self, api_client, conn):
