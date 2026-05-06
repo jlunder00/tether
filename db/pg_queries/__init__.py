@@ -48,6 +48,7 @@ from db.pg_queries.followup import (
 from db.pg_queries.sessions import (
     create_session, get_active_session, update_session_state,
     update_session_activity, close_session, get_stale_sessions,
+    get_active_sessions,
 )
 from db.pg_queries.conversation import (
     insert_conversation_turn, get_recent_history, clear_session_state,
