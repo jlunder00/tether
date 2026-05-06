@@ -203,6 +203,15 @@ async function handleSlotDrop(payload: DropPayload, time: string) {
 /** Index of the currently hovered slot (for drop-zone highlight), or null. */
 const overSlotIndex = ref<number | null>(null)
 
+/**
+ * True while an HTML5 DnD drag is active over the timed area.
+ * Used to apply `pointer-events-none` to TaskCard blocks so drops over
+ * event-block areas pass through to the underlying slot divs directly,
+ * bypassing the clientY→slot computation and the z-order race where the
+ * highlighted slot 0 div would otherwise intercept all drops.
+ */
+const dragActive = ref(false)
+
 function onSlotDragOver(e: DragEvent, i: number) {
   e.preventDefault()
   overSlotIndex.value = i
@@ -217,6 +226,7 @@ function onSlotDragLeave(e: DragEvent, i: number) {
 
 async function onSlotDrop(e: DragEvent, i: number) {
   e.preventDefault()
+  dragActive.value = false
   overSlotIndex.value = null
   const rawJson = e.dataTransfer?.getData('application/json')
   const rawText = e.dataTransfer?.getData('text/plain')
@@ -227,12 +237,17 @@ async function onSlotDrop(e: DragEvent, i: number) {
   } catch { /* ignore malformed payload */ }
 }
 
-// --- Container-level DnD handlers (Bug B fix) ---
-// TaskCards are rendered after slot divs in the DOM and sit above them in z-order.
-// When a drag passes over a TaskCard block, dragover fires on the card but the card
-// doesn't call preventDefault, so the browser marks that position as no-drop.
-// The container-level handlers catch those events (dragover bubbles up from TaskCard)
-// and compute the target slot from clientY, enabling drops anywhere in the timed area.
+// --- Container-level DnD handlers ---
+// dragActive makes TaskCard blocks transparent to pointer events (pointer-events-none)
+// while a drag is in progress over the timed area. This ensures drops over event-block
+// areas pass through to the underlying slot divs, bypassing slotIndexFromClientY and
+// the z-order race where the highlighted slot div could intercept the wrong drop.
+// The container handlers remain as a safety net for the hour-labels gutter column.
+
+function onTimedAreaDragEnter(e: DragEvent) {
+  e.preventDefault()
+  dragActive.value = true
+}
 
 /** Map clientY to the nearest 15-min slot index, accounting for scroll offset. */
 function slotIndexFromClientY(clientY: number): number {
@@ -255,10 +270,12 @@ function onTimedAreaDragLeave(e: DragEvent) {
   const related = e.relatedTarget as Node | null
   if (related && (e.currentTarget as HTMLElement).contains(related)) return
   overSlotIndex.value = null
+  dragActive.value = false
 }
 
 async function onTimedAreaDrop(e: DragEvent) {
   e.preventDefault()
+  dragActive.value = false
   overSlotIndex.value = null
   const rawJson = e.dataTransfer?.getData('application/json')
   const rawText = e.dataTransfer?.getData('text/plain')
@@ -348,6 +365,7 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
       class="relative flex overflow-y-auto"
       :style="{ height: 'calc(100vh - 200px)' }"
       @click="onTimedAreaClick"
+      @dragenter="onTimedAreaDragEnter"
       @dragover="onTimedAreaDragOver"
       @dragleave="onTimedAreaDragLeave"
       @drop="onTimedAreaDrop"
@@ -415,6 +433,7 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
         />
 
         <!-- Timed event blocks -- TaskCard in calendar-event mode -->
+        <!-- pointer-events-none while dragActive so drops pass through to slot divs -->
         <TaskCard
           v-for="ev in timedEvents"
           :key="ev.id"
@@ -426,6 +445,7 @@ function anchorBandStyle(anchor: { color: string; id: string }) {
           :left-percent="overlapLayout[ev.id]?.leftPercent ?? 0"
           :width-percent="overlapLayout[ev.id]?.widthPercent ?? 100"
           :resolved-color="resolveColor(ev)"
+          :class="{ 'pointer-events-none': dragActive }"
           data-event-block
           @click.stop="emit('open-event', ev)"
         />

@@ -258,4 +258,64 @@ describe('DayTimeline – 15-min slot drop targets', () => {
       'Dropped over event block',
     )
   })
+
+  // ── Slot position accuracy: regression test for slotIndexFromClientY math ──
+  it('onTimedAreaDrop maps clientY to the correct 15-min slot using rect.top + scrollTop', async () => {
+    // Mocks getBoundingClientRect so the formula can be exercised with known values.
+    // clientY=190, rect.top=100, scrollTop=0 → relY=90 → slot4 (90/22.5=4) → 07:00
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' }, attachTo: document.body })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    const el = timedArea.element as HTMLElement
+
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+      top: 100, left: 0, right: 320, bottom: 800, width: 320, height: 700,
+      x: 0, y: 100, toJSON: () => ({}),
+    } as DOMRect)
+    Object.defineProperty(el, 'scrollTop', { value: 0, configurable: true, writable: true })
+
+    const payload = { type: 'task', taskId: 'task-99', title: 'X' }
+    await timedArea.trigger('drop', {
+      clientY: 190,
+      dataTransfer: { getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '' },
+    })
+    expect(mockPromoteTask).toHaveBeenCalledWith(
+      'task-99',
+      expect.stringContaining('T07:00'),
+      expect.stringContaining('T07:30'),
+      'X',
+    )
+    wrapper.unmount()
+  })
+
+  // ── Structural fix: TaskCards must be transparent to pointer events during drag ──
+  it('TaskCard event blocks receive pointer-events-none class while a drag is active', async () => {
+    // The structural fix: when dragActive=true, TaskCards have pointer-events-none so
+    // drops over event block areas land on the underlying slot div directly, bypassing
+    // slotIndexFromClientY and the z-order race that caused slot 0 to always win.
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' }, attachTo: document.body })
+    const eventBlock = wrapper.find('[data-event-block]')
+    expect(eventBlock.exists()).toBe(true)
+
+    // Before drag: no pointer-events-none
+    expect(eventBlock.classes()).not.toContain('pointer-events-none')
+
+    // Simulate drag entering the timed area
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+    await timedArea.trigger('dragenter', {
+      dataTransfer: { types: ['text/plain'] },
+    })
+    await wrapper.vm.$nextTick()
+
+    // Should have pointer-events-none during drag
+    expect(eventBlock.classes()).toContain('pointer-events-none')
+
+    // After dragleave (leaving the container — relatedTarget null = outside)
+    await timedArea.trigger('dragleave', { relatedTarget: null })
+    await wrapper.vm.$nextTick()
+    expect(eventBlock.classes()).not.toContain('pointer-events-none')
+
+    wrapper.unmount()
+  })
 })
