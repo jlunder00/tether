@@ -81,6 +81,15 @@ describe('useDropZone', () => {
     expect(onDrop).toHaveBeenCalledWith(payload, undefined)
   })
 
+  it('onDrop calls stopPropagation to prevent event bubbling to outer wrappers', () => {
+    const onDrop = vi.fn()
+    const { dropHandlers } = useDropZone({ onDrop })
+    const payload = { type: 'task', taskId: 'task-1' }
+    const evt = makeDragEvent(JSON.stringify(payload))
+    dropHandlers.onDrop(evt)
+    expect(evt.stopPropagation).toHaveBeenCalled()
+  })
+
   it('passes targetContext through to onDrop callback', () => {
     const onDrop = vi.fn()
     const targetContext = { anchorId: 'morning', date: '2026-05-02' }
