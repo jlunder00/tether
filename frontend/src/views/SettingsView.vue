@@ -7,6 +7,7 @@ import GoogleCalendarSection from '../components/GoogleCalendarSection.vue'
 import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
 import ApiKeysSection from '../components/ApiKeysSection.vue'
+import ICalSection from '../components/ICalSection.vue'
 
 const auth = useAuthStore()
 
@@ -356,6 +357,9 @@ async function linkTelegram() {
 
       <!-- Google Calendar Integration -->
       <GoogleCalendarSection />
+
+      <!-- iCal / ICS Import -->
+      <ICalSection />
 
       <!-- Anthropic Account Integration -->
       <AnthropicAccountSection />
