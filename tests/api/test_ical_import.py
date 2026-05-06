@@ -187,3 +187,18 @@ class TestICalImportEndpoint:
         )
         assert resp.status_code == 422
         assert "private" in resp.json()["detail"].lower()
+
+
+class TestWebcalSchemeNormalization:
+    """webcal:// and webcals:// should be rewritten to https:// before fetching."""
+
+    def test_webcal_rewritten_to_https(self):
+        import re
+        def normalize(url):
+            return re.sub(r"^webcals?://", "https://", url, flags=re.IGNORECASE)
+
+        assert normalize("webcal://example.com/feed.ics") == "https://example.com/feed.ics"
+        assert normalize("webcals://example.com/feed.ics") == "https://example.com/feed.ics"
+        assert normalize("WEBCAL://example.com/feed.ics") == "https://example.com/feed.ics"
+        assert normalize("https://example.com/feed.ics") == "https://example.com/feed.ics"
+        assert normalize("http://example.com/feed.ics") == "http://example.com/feed.ics"
