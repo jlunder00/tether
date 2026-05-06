@@ -82,14 +82,15 @@ def test_bot_ws_invalid_token_rejected_1008():
 def test_bot_ws_valid_cookie_accepted():
     """A valid JWT allows connection; a user message produces chunk + done.
 
-    The redesigned handler uses handle_message's *return value* as the chunk
-    content — send_fn is a no-op on WebSocket.  The mock must return a string.
+    handle_message delivers the response via send_fn (not its return value).
+    The mock mirrors real behaviour: call send_fn, return None.
     """
     app = _make_app()
     token = _valid_token()
 
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
-        return "pong"
+        send_fn("pong")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -106,12 +107,12 @@ def test_bot_ws_valid_cookie_accepted():
 
 
 def test_bot_ws_none_response_skips_chunk():
-    """When handle_message returns None, no chunk frame is sent — just done."""
+    """When handle_message never calls send_fn, no chunk frame is sent — just done."""
     app = _make_app()
     token = _valid_token()
 
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
-        return None
+        return None  # send_fn not called — empty response
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -143,7 +144,8 @@ def test_status_messages_pushed_immediately():
     async def fake_handle_with_status(content, send_fn, pool, user_id, vault=None, status_fn=None):
         if status_fn is not None:
             await status_fn("Working on it...")
-        return "final answer"
+        send_fn("final answer")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_with_status):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -174,7 +176,8 @@ def test_multiple_status_messages_in_order():
         if status_fn is not None:
             await status_fn("Step 1: Reading tasks")
             await status_fn("Step 2: Rescheduling blocks")
-        return "done planning"
+        send_fn("done planning")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_multi_status):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -249,7 +252,8 @@ def test_idle_stop_ignored():
     token = _valid_token()
 
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
-        return "ok"
+        send_fn("ok")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -278,7 +282,8 @@ def test_missing_content_sends_error_keeps_connection():
     token = _valid_token()
 
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
-        return "ok"
+        send_fn("ok")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -319,7 +324,8 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
         call_count += 1
         if call_count == 1:
             raise TimeoutError("session timed out")
-        return "recovered response"
+        send_fn("recovered response")
+        return None
 
     with patch("api.routes.bot.handle_message", new=handle_first_timeouts_second_ok):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -360,7 +366,8 @@ def test_session_error_sends_error_keeps_connection():
         call_count += 1
         if call_count == 1:
             raise RuntimeError("simulated session failure")
-        return "recovered"
+        send_fn("recovered")
+        return None
 
     with patch("api.routes.bot.handle_message", new=fake_handle_that_raises):
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -421,3 +428,54 @@ def test_disconnect_cancels_session_task():
 
     session_cancelled.wait(timeout=3)
     assert session_cancelled.is_set(), "session_task was not cancelled on disconnect"
+
+
+# ---------------------------------------------------------------------------
+# send_fn capture — response delivered via callback, not return value
+# ---------------------------------------------------------------------------
+
+def test_send_fn_response_delivered_as_chunk():
+    """Response delivered via send_fn (not return value) must reach the browser.
+
+    The real handle_message always calls send_fn(final) and returns None.
+    The WebSocket handler must capture send_fn calls and forward them as
+    {"type": "chunk"} frames — not rely on the return value being non-None.
+    """
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        send_fn("hello from send_fn")
+        return None  # real handle_message always returns None
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "ping"})
+                chunk = ws.receive_json()
+                assert chunk["type"] == "chunk"
+                assert chunk["content"] == "hello from send_fn"
+                done = ws.receive_json()
+                assert done["type"] == "done"
+
+
+def test_no_send_fn_call_skips_chunk():
+    """When send_fn is never called (empty response), only done is sent."""
+    app = _make_app()
+    token = _valid_token()
+
+    async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
+        return None  # never calls send_fn
+
+    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with client.websocket_connect(
+                "/api/bot/chat",
+                cookies={"tether_token": token},
+            ) as ws:
+                ws.send_json({"type": "user", "content": "hello"})
+                done = ws.receive_json()
+                assert done["type"] == "done"

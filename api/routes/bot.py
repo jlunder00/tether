@@ -110,17 +110,21 @@ async def bot_chat(websocket: WebSocket,
                     )
                     raise  # Let the session task propagate disconnect to the outer handler
 
+            # Capture responses delivered via send_fn. handle_message always
+            # calls send_fn(final) and returns None — the return value is not
+            # used for response delivery. This list is local to each message
+            # so it resets automatically on the next loop iteration.
+            response_parts: list[str] = []
+
+            def capture_send_fn(msg: str) -> None:
+                response_parts.append(msg)
+
             # Run the session as a task so we can race it against an incoming
             # stop message without blocking the event loop.
             session_task = asyncio.create_task(
                 handle_message(
                     content,
-                    # send_fn is unused on WebSocket; log at debug so any unexpected
-                    # calls from handle_message are visible rather than silently dropped.
-                    send_fn=lambda msg: logger.debug(
-                        "bot_chat: send_fn called (no-op on WebSocket), user_id=%s, msg=%r",
-                        user_id, msg,
-                    ),
+                    send_fn=capture_send_fn,
                     pool=pool,
                     user_id=user_id,
                     vault=getattr(websocket.app.state, "vault", None),
@@ -190,10 +194,10 @@ async def bot_chat(websocket: WebSocket,
             if session_task is None or session_task.cancelled():
                 continue
 
-            # Deliver the session result. Errors from handle_message keep the
-            # connection alive so the user can try another message.
+            # Re-raise any exception from handle_message so error handlers below
+            # can send a user-facing error frame and keep the connection alive.
             try:
-                response = session_task.result()
+                session_task.result()  # returns None; raises if handle_message raised
             except TimeoutError:
                 # Session exceeded its per-intent timeout. The session manager has
                 # already closed the session on its end; state is preserved and the
@@ -223,6 +227,7 @@ async def bot_chat(websocket: WebSocket,
                 continue
 
             session_task = None
+            response = "\n\n".join(response_parts) if response_parts else None
             if response:
                 await websocket.send_json({"type": "chunk", "content": response})
             await websocket.send_json({"type": "done"})
