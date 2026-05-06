@@ -26,7 +26,7 @@ async def init_followup_state(
             (user_id, date, anchor_id, task_id, sequence_started_at)
         VALUES
             (current_setting('app.current_user_id', true)::uuid, $1, $2, $3, $4)
-        ON CONFLICT (user_id, date, anchor_id, task_id) DO NOTHING
+        ON CONFLICT (user_id, date, task_id) DO NOTHING
         """,
         date,
         anchor_id,

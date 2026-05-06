@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import subprocess
 from pathlib import Path
 
@@ -9,10 +10,26 @@ MARKER_START = "# TETHER_START"
 MARKER_END = "# TETHER_END"
 _VENV_PYTHON = Path.home() / "tether" / ".venv" / "bin" / "python"
 
+# Path to the env file sourced before each anchor trigger cron job.
+# Must contain at minimum: DATABASE_URL, TETHER_USER_ID
+# Uses the same file as systemd EnvironmentFile= (bare KEY=VALUE lines, no `export`).
+# Override with TETHER_CRON_ENV_FILE env var or set bot.cron_env_file in config yaml.
+_ENV_FILE: str = os.environ.get(
+    "TETHER_CRON_ENV_FILE",
+    str(Path.home() / ".tether-config" / "env"),
+)
+
 
 def _anchor_to_cron(anchor: dict) -> str:
     h, m = map(int, anchor["time"].split(":"))
-    return f"{m} {h} * * * {_VENV_PYTHON} -m bot.anchor_trigger {anchor['id']}"
+    # Use `set -a; . /env/file; set +a` so bare KEY=VALUE lines are auto-exported
+    # to child processes.  Plain `. file` does not export vars; systemd's
+    # EnvironmentFile= injects them directly and doesn't require this workaround.
+    return (
+        f"{m} {h} * * * "
+        f"set -a; . {_ENV_FILE}; set +a; "
+        f"{_VENV_PYTHON} -m bot.anchor_trigger {anchor['id']}"
+    )
 
 
 async def sync_crontab(pool, user_id: str) -> None:
