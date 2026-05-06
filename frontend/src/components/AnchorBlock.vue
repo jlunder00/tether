@@ -80,10 +80,8 @@ function contextTaskCount(ctx: { milestoneGroups: { tasks: TaskWithIndex[] }[]; 
 }
 
 // Local cache of motif selections per context subject.
-// TODO(motif-db-api): backend read path not yet wired. When the parallel
-// `feature/motif-db-api` stream ships a `motif` field on context-entry responses,
-// seed this map from there (e.g. via a context store) so picks survive remount.
-// Until then, selections are lost on reload — acceptable per spec.
+// Motif selections are not yet persisted to the context store — picks are lost on reload.
+// When the context store exposes a motif field, seed this map on mount.
 const contextMotifs = ref<Record<string, MotifSlot>>({})
 
 async function setContextMotif(subject: string | null, slot: MotifSlot) {

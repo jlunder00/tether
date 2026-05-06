@@ -17,7 +17,7 @@ function toggleMode() {
 }
 
 // Load premium theme CSS once the user is known to be authenticated.
-// isPaid is always false today; this fires when backend adds the field.
+// Loads premium CSS if the user is a paid subscriber (is_paid field on User).
 watch(
   () => authStore.user,
   (user) => {
