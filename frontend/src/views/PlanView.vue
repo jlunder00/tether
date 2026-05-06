@@ -251,7 +251,5 @@ async function onAnchorDrop(e: DragEvent, anchorId: string) {
       </div>
     </template>
 
-    <!-- Child route detail panels -->
-    <router-view />
   </div>
 </template>

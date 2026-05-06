@@ -136,13 +136,6 @@ const dayStats = computed(() => {
         </ul>
       </div>
 
-      <!-- This Week Box -->
-      <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
-        <h2 class="font-semibold text-lg mb-3">This Week</h2>
-        <p class="text-[--fg-5] text-sm">Coming soon</p>
-      </div>
     </div>
-
-    <router-view />
   </div>
 </template>
