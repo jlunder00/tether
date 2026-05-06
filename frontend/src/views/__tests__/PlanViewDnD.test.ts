@@ -36,6 +36,7 @@ vi.mock('../../lib/api', () => ({
 
 const mockDemoteEvent = vi.fn()
 const mockFetchPlan = vi.fn()
+const mockMoveTask = vi.fn()
 
 vi.mock('../../stores/events', () => ({
   useEventStore: () => ({
@@ -84,6 +85,7 @@ vi.mock('../../stores/plan', () => ({
     loading: false,
     today: '2024-06-10',
     fetchPlan: mockFetchPlan,
+    moveTask: mockMoveTask,
     plans: {},
     activeDate: '2024-06-10',
   }),
@@ -104,23 +106,27 @@ vi.mock('../../composables/useSlideOver', () => ({
 }))
 
 /**
- * Bug B: PlanView outer anchor wrapper must not swallow task→task drops.
+ * Bug B: PlanView outer anchor wrapper acts as backstop for plain task drops that
+ * land on the .anchor-rail gutter or CSS grid gap (areas with no AnchorBlock
+ * drop zone). The fix has two parts:
+ *   1. useDropZone.onDrop calls stopPropagation — drops on AnchorBlock content
+ *      area stop there and never reach this outer handler.
+ *   2. onAnchorDrop handles plain tasks via moveTask — drops that miss the
+ *      AnchorBlock content area (rail/gap) are caught here as a backstop.
  *
- * The outer `data-anchor-drop-zone` div carries @drop="onAnchorDrop". That handler
- * only acts when the payload has `fromStartTime` (calendar event demotion). When a
- * plain task is dropped (no fromStartTime), the outer handler must return early so
- * AnchorBlock's internal useDropZone can process the move. Regression: if
- * onAnchorDrop were ever changed to call preventDefault/stopPropagation
- * unconditionally, task→task inter-anchor moves would be silently swallowed.
+ * Regression guard: demoteEvent must NOT be called for plain-task moves (no
+ * fromStartTime); fetchPlan must NOT be triggered (moveTask handles its own
+ * optimistic update without needing a full plan refresh).
  */
-describe('PlanView — Bug B: outer wrapper ignores plain task drops (no fromStartTime)', () => {
+describe('PlanView — Bug B: outer wrapper is backstop for plain task drops (rail/gap area)', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockDemoteEvent.mockReset()
     mockFetchPlan.mockReset()
+    mockMoveTask.mockReset()
   })
 
-  it('dropping a plain task (no fromStartTime) onto anchor zone does NOT call demoteEvent', async () => {
+  it('dropping a plain task (no fromStartTime) onto the outer anchor zone calls moveTask with correct anchor', async () => {
     const { default: PlanView } = await import('../PlanView.vue')
     const wrapper = mount(PlanView, { props: { view: 'day', date: '2024-06-10' } })
     await flushPromises()
@@ -128,11 +134,12 @@ describe('PlanView — Bug B: outer wrapper ignores plain task drops (no fromSta
     // only assert on what the drop handler itself triggers.
     mockFetchPlan.mockReset()
     mockDemoteEvent.mockReset()
+    mockMoveTask.mockReset()
 
     const dropZones = wrapper.findAll('[data-anchor-drop-zone]')
     expect(dropZones.length).toBe(2)
 
-    // Plain task payload — NO fromStartTime
+    // Plain task payload — NO fromStartTime (rail/gap backstop scenario)
     const payload = {
       type: 'task',
       taskId: 'task-99',
@@ -149,8 +156,12 @@ describe('PlanView — Bug B: outer wrapper ignores plain task drops (no fromSta
 
     // demoteEvent must NOT be called for regular task moves
     expect(mockDemoteEvent).not.toHaveBeenCalled()
-    // fetchPlan must NOT be triggered by the outer handler for non-demotion drops
+    // fetchPlan must NOT be triggered (moveTask has optimistic update)
     expect(mockFetchPlan).not.toHaveBeenCalled()
+    // moveTask MUST be called with the correct anchor id (the targeted anchor, not silently dropped)
+    expect(mockMoveTask).toHaveBeenCalledWith(
+      'task-99', '2024-06-10', 'anchor-morning', '2024-06-10', 'anchor-afternoon',
+    )
   })
 })
 
@@ -159,6 +170,7 @@ describe('PlanView — Bug C: per-anchor demotion drop', () => {
     setActivePinia(createPinia())
     mockDemoteEvent.mockReset()
     mockFetchPlan.mockReset()
+    mockMoveTask.mockReset()
   })
 
   it('renders one drop zone per anchor (not a single column drop zone)', async () => {

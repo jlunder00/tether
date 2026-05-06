@@ -48,6 +48,9 @@ export function useDropZone<TContext = unknown>(options: UseDropZoneOptions<TCon
 
   function onDrop(evt: DragEvent) {
     evt.preventDefault()
+    // Stop propagation so drops handled here don't bubble to outer wrappers
+    // (e.g. PlanView's per-anchor [data-anchor-drop-zone] div).
+    evt.stopPropagation()
     enterCount = 0
     isOver.value = false
 

@@ -131,8 +131,8 @@ async function onAnchorDrop(e: DragEvent, anchorId: string) {
   if (!raw) return
   try {
     const data = JSON.parse(raw)
-    // type:'task' with fromStartTime = calendar event being demoted back to anchor
     if (data.type === 'task' && data.taskId && data.fromStartTime) {
+      // Calendar event demotion — remove from timeline and land in the targeted anchor
       const taskId = data.taskId as string
       // Dual lookup: task_id for task-linked events; id for standalone events
       const ev = eventStore.events.find(e => e.task_id === taskId)
@@ -140,6 +140,14 @@ async function onAnchorDrop(e: DragEvent, anchorId: string) {
       if (!ev) return
       await eventStore.demoteEvent(ev.id, anchorId, activeDate.value)
       await planStore.fetchPlan(activeDate.value)
+    } else if (data.type === 'task' && data.taskId && !data.fromStartTime) {
+      // Plain task backstop — fires when drop lands on the .anchor-rail gutter or
+      // CSS grid gap (areas with no AnchorBlock drop zone). AnchorBlock content-area
+      // drops are handled by useDropZone (which now stopPropagates) and never reach here.
+      const taskId = data.taskId as string
+      const fromDate = (data.fromDate as string) ?? activeDate.value
+      const fromAnchorId = (data.fromAnchorId as string) ?? anchorId
+      await planStore.moveTask(taskId, fromDate, fromAnchorId, activeDate.value, anchorId)
     }
   } catch {
     // ignore malformed drag data
