@@ -306,3 +306,22 @@ def test_format_history_renders_turns():
     assert "User: Move my tasks" in result
     assert "Bot: Done." in result
     assert "2026-03-28 14:00" in result
+
+
+# ---------------------------------------------------------------------------
+# Stale SQLite-era Beacon block removal
+# ---------------------------------------------------------------------------
+
+def test_stale_beacon_block_removed():
+    """Confirm the SQLite-era Beacon invocation is no longer present in message_handler source.
+
+    After the Postgres migration, should_trigger_beacon and run_beacon take
+    asyncpg.Connection, not a db_path string. The old block always silently
+    hit the except-handler. This test acts as a regression guard.
+    """
+    import inspect
+    from bot import message_handler
+    src = inspect.getsource(message_handler)
+    assert "Beacon anchor transition check failed" not in src, (
+        "Stale SQLite-era Beacon block still present in message_handler.py — remove it."
+    )
