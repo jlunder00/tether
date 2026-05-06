@@ -65,10 +65,16 @@ jobs:
         id: version
         env:
           GIT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
           TAG_SUFFIX: ${{ steps.target.outputs.tag_suffix }}
         run: |
           SHA_TAG="sha-$(echo "$GIT_SHA" | cut -c1-7)${TAG_SUFFIX}"
-          echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+          if [[ "$GIT_REF" == refs/tags/v* ]] && [ "$TARGET" = "main" ]; then
+            SEMVER="${GIT_REF#refs/tags/}"
+            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Resolve premium ref
         id: premium

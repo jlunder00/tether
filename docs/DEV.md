@@ -15,7 +15,7 @@ regression testing and validating PRs before they merge to `main`.
 | API port         | `8000`                  | `8001`                         |
 | MCP port         | `5001`                  | `5002`                         |
 | Postgres port    | `5432` (host-exposed)   | internal only (no host binding)|
-| Bot              | `tether-bot-staging` → | separate docker service        |
+| Bot image        | `tether-premium`        | `tether-premium-dev`           |
 
 ## GitHub Actions Workflows
 
@@ -48,6 +48,22 @@ will work. Most share the same OAuth app as production — only callback URLs di
 | `TETHER_VAULT_KEY_DEV`               | Vault key for dev config encryption            |
 | `TELEGRAM_BOT_TOKEN_DEV`             | Telegram bot token for the dev bot             |
 | `TELEGRAM_CHAT_ID_DEV`               | Telegram chat ID for the dev bot               |
+
+## Prerequisites (one-time branch setup)
+
+Before the first dev deploy can trigger, the `dev` branch must exist in both repos:
+
+```bash
+# In tether repo
+git checkout -b dev main
+git push origin dev
+
+# In tether-premium repo
+git checkout -b dev main
+git push origin dev
+```
+
+This only needs to be done once. After that, PRs can target `dev` and CI will handle deploys automatically.
 
 ## One-time Pi Setup
 
