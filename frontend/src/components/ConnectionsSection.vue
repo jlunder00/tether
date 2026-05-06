@@ -1,16 +1,45 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useConnectionsStore } from '../stores/connections'
+import { useMeetingsStore } from '../stores/meetings'
+import ScheduleMeetingModal from './ScheduleMeetingModal.vue'
 
 const store = useConnectionsStore()
+const meetingsStore = useMeetingsStore()
 const requestUsername = ref('')
+
+/** Which connection's "Schedule meeting" modal is open (by connection id) */
+const scheduleModalConnectionId = ref<number | null>(null)
+
+/** The username of the connection whose modal is open */
+const scheduleModalTarget = computed(() => {
+  if (scheduleModalConnectionId.value === null) return ''
+  const conn = store.accepted.find(c => c.id === scheduleModalConnectionId.value)
+  return conn?.other_username ?? ''
+})
+
+/** Set of other_user_ids that have an open meeting request */
+const openMeetingUserIds = computed(() => {
+  const ids = new Set<string>()
+  for (const m of meetingsStore.openMeetings) {
+    for (const tid of m.target_ids) ids.add(tid)
+    if (m.initiator_id) ids.add(m.initiator_id)
+  }
+  return ids
+})
 
 onMounted(() => {
   store.fetchConnections()
+  meetingsStore.fetchMeetings('open')
 })
 
 function dismissError() {
   store.error = null
+}
+
+async function handleMeetingSent() {
+  // Refresh open meetings so the pending indicator reflects the new request immediately
+  await meetingsStore.fetchMeetings('open')
 }
 
 async function handleSendRequest() {
@@ -22,6 +51,14 @@ async function handleSendRequest() {
 
 function truncateUuid(uuid: string): string {
   return uuid.length > 8 ? `${uuid.slice(0, 8)}…` : uuid
+}
+
+function openScheduleModal(connectionId: number) {
+  scheduleModalConnectionId.value = connectionId
+}
+
+function closeScheduleModal() {
+  scheduleModalConnectionId.value = null
 }
 </script>
 
@@ -104,30 +141,53 @@ function truncateUuid(uuid: string): string {
           :data-testid="`accepted-${conn.id}`"
         >
           <div class="flex items-center gap-2">
-            <span class="text-sm text-[--fg-1] font-mono" :title="conn.other_user_id">
-              {{ truncateUuid(conn.other_user_id) }}
+            <span class="text-sm text-[--fg-1]" :title="conn.other_user_id">
+              {{ conn.other_username || truncateUuid(conn.other_user_id) }}
             </span>
             <span class="text-[10px] bg-[--status-done-bg] text-[--status-done-fg] rounded px-1.5 py-0.5 font-medium tracking-wide">
               connected
             </span>
-          </div>
-          <!-- Auto-schedule toggle -->
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-[--fg-4]">Auto-schedule</span>
-            <button
-              :disabled="store.loading"
-              @click="store.toggleAutoSchedule(conn.id, !conn.auto_schedule)"
-              :class="conn.auto_schedule ? 'bg-[--accent]' : 'bg-[--bg-elev-3]'"
-              class="relative w-9 h-5 rounded-full transition-colors disabled:opacity-50"
-              :data-testid="`auto-schedule-${conn.id}`"
-              :aria-pressed="conn.auto_schedule"
-              :aria-label="`Auto-schedule for ${conn.other_user_id}`"
+            <!-- Pending meeting indicator -->
+            <span
+              v-if="openMeetingUserIds.has(conn.other_user_id)"
+              class="text-[10px] bg-[--status-pending-bg] text-[--status-pending-fg] rounded px-1.5 py-0.5 font-medium tracking-wide"
+              style="background-color: var(--status-pending-bg, #fef9c3); color: var(--status-pending-fg, #713f12)"
+              :data-testid="`meeting-pending-${conn.id}`"
+              title="A meeting request is open with this person"
             >
-              <span
-                :class="conn.auto_schedule ? 'translate-x-4' : 'translate-x-0.5'"
-                class="inline-block w-4 h-4 bg-white rounded-full transition-transform transform mt-0.5"
-              />
+              meeting pending
+            </span>
+          </div>
+          <!-- Right side: schedule button + auto-schedule toggle -->
+          <div class="flex items-center gap-3">
+            <!-- Schedule meeting button -->
+            <button
+              :disabled="store.loading || meetingsStore.loading"
+              @click="openScheduleModal(conn.id)"
+              class="text-xs text-[--accent] hover:opacity-80 disabled:opacity-40 transition-opacity"
+              :data-testid="`schedule-meeting-${conn.id}`"
+              :aria-label="`Schedule meeting with ${conn.other_user_id}`"
+            >
+              {{ openMeetingUserIds.has(conn.other_user_id) ? 'Schedule again' : 'Schedule meeting' }}
             </button>
+            <!-- Auto-schedule toggle -->
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-[--fg-4]">Auto-schedule</span>
+              <button
+                :disabled="store.loading"
+                @click="store.toggleAutoSchedule(conn.id, !conn.auto_schedule)"
+                :class="conn.auto_schedule ? 'bg-[--accent]' : 'bg-[--bg-elev-3]'"
+                class="relative w-9 h-5 rounded-full transition-colors disabled:opacity-50"
+                :data-testid="`auto-schedule-${conn.id}`"
+                :aria-pressed="conn.auto_schedule"
+                :aria-label="`Auto-schedule for ${conn.other_user_id}`"
+              >
+                <span
+                  :class="conn.auto_schedule ? 'translate-x-4' : 'translate-x-0.5'"
+                  class="inline-block w-4 h-4 bg-white rounded-full transition-transform transform mt-0.5"
+                />
+              </button>
+            </div>
           </div>
         </li>
       </ul>
@@ -173,5 +233,12 @@ function truncateUuid(uuid: string): string {
         </ul>
       </div>
     </div>
+    <!-- Schedule meeting modal -->
+    <ScheduleMeetingModal
+      :visible="scheduleModalConnectionId !== null"
+      :target-username="scheduleModalTarget"
+      @close="closeScheduleModal"
+      @sent="handleMeetingSent"
+    />
   </section>
 </template>

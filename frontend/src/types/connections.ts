@@ -13,6 +13,8 @@ export interface Connection {
   updated_at: string
   /** Backend-computed: always the other party's UUID regardless of user_a/user_b ordering */
   other_user_id: string
+  /** Backend-computed: the other party's username (for display and API calls that require usernames) */
+  other_username: string
 }
 
 /** Partial shape returned by POST /connections/{id}/accept */

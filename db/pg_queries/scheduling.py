@@ -119,11 +119,14 @@ async def list_connections_for_user(
 ) -> list[dict]:
     rows = await conn.fetch(
         """
-        SELECT *,
-               CASE WHEN user_a = $1::uuid THEN user_b ELSE user_a END AS other_user_id
-        FROM connections
-        WHERE user_a = $1::uuid OR user_b = $1::uuid
-        ORDER BY created_at DESC
+        SELECT c.*,
+               CASE WHEN c.user_a = $1::uuid THEN c.user_b ELSE c.user_a END AS other_user_id,
+               CASE WHEN c.user_a = $1::uuid THEN u_b.username ELSE u_a.username END AS other_username
+        FROM connections c
+        LEFT JOIN users u_a ON u_a.id = c.user_a
+        LEFT JOIN users u_b ON u_b.id = c.user_b
+        WHERE c.user_a = $1::uuid OR c.user_b = $1::uuid
+        ORDER BY c.created_at DESC
         """,
         user_id,
     )
