@@ -296,6 +296,17 @@ const { isOver: isContainerOver, dropHandlers: containerDropHandlers } = useDrop
               :level="1"
               class="mb-1"
               @header-click="pushPanel({ kind: 'milestone', entityId: mg.milestone.id })">
+              <template #header-right>
+                <div
+                  data-testid="milestone-motif-picker"
+                  class="opacity-0 group-hover/ctx:opacity-100 transition-opacity ml-1"
+                  @click.stop>
+                  <MotifPicker
+                    :model-value="(mg.milestone.motif as MotifSlot | null | undefined) ?? null"
+                    @update:model-value="(slot) => milestoneStore.patchMilestone(mg.milestone.id, { motif: slot })"
+                  />
+                </div>
+              </template>
               <div v-for="{ task, index: i } in mg.tasks" :key="task.id || i"
                    :data-task-id="task.id"
                    draggable="true"

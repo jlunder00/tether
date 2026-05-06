@@ -103,6 +103,57 @@ vi.mock('../../composables/useSlideOver', () => ({
   }),
 }))
 
+/**
+ * Bug B: PlanView outer anchor wrapper must not swallow task→task drops.
+ *
+ * The outer `data-anchor-drop-zone` div carries @drop="onAnchorDrop". That handler
+ * only acts when the payload has `fromStartTime` (calendar event demotion). When a
+ * plain task is dropped (no fromStartTime), the outer handler must return early so
+ * AnchorBlock's internal useDropZone can process the move. Regression: if
+ * onAnchorDrop were ever changed to call preventDefault/stopPropagation
+ * unconditionally, task→task inter-anchor moves would be silently swallowed.
+ */
+describe('PlanView — Bug B: outer wrapper ignores plain task drops (no fromStartTime)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockDemoteEvent.mockReset()
+    mockFetchPlan.mockReset()
+  })
+
+  it('dropping a plain task (no fromStartTime) onto anchor zone does NOT call demoteEvent', async () => {
+    const { default: PlanView } = await import('../PlanView.vue')
+    const wrapper = mount(PlanView, { props: { view: 'day', date: '2024-06-10' } })
+    await flushPromises()
+    // fetchPlan is called once on mount (watch immediate) — reset before drop so we
+    // only assert on what the drop handler itself triggers.
+    mockFetchPlan.mockReset()
+    mockDemoteEvent.mockReset()
+
+    const dropZones = wrapper.findAll('[data-anchor-drop-zone]')
+    expect(dropZones.length).toBe(2)
+
+    // Plain task payload — NO fromStartTime
+    const payload = {
+      type: 'task',
+      taskId: 'task-99',
+      title: 'Regular task',
+      fromAnchorId: 'anchor-morning',
+      fromDate: '2024-06-10',
+    }
+    await dropZones[1].trigger('drop', {
+      dataTransfer: {
+        getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '',
+      },
+    })
+    await flushPromises()
+
+    // demoteEvent must NOT be called for regular task moves
+    expect(mockDemoteEvent).not.toHaveBeenCalled()
+    // fetchPlan must NOT be triggered by the outer handler for non-demotion drops
+    expect(mockFetchPlan).not.toHaveBeenCalled()
+  })
+})
+
 describe('PlanView — Bug C: per-anchor demotion drop', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
