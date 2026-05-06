@@ -111,7 +111,7 @@ const STATUS_ROW_STYLE: Record<TaskStatus, Record<string, string>> = {
 }
 
 const isOverdue = computed(() => {
-  const pd = (props.task as any).plan_date as string | null | undefined
+  const pd = props.task.plan_date
   if (!pd) return false
   if (props.task.status === 'done' || props.task.status === 'skipped') return false
   const d = new Date()
@@ -277,13 +277,13 @@ const calendarEventStyle = computed(() => {
 
         <!-- Tags — right-justified, shrink-safe, no overlap with text -->
         <div
-          v-if="(task as any).plan_date || isOverdue || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))"
+          v-if="task.plan_date || isOverdue || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))"
           class="flex-shrink-0 flex flex-wrap gap-1 justify-end max-w-[40%]">
           <span
-            v-if="(task as any).plan_date"
+            v-if="task.plan_date"
             @click.stop
             class="text-[10px] px-1 py-0.5 rounded bg-purple-500/20 text-purple-300">
-            {{ (task as any).plan_date }}
+            {{ task.plan_date }}
           </span>
           <span v-if="isOverdue" @click.stop
                 class="text-[10px] px-1 py-0.5 rounded bg-[--status-block-bg] text-[--status-block-fg] font-medium">
@@ -359,12 +359,12 @@ const calendarEventStyle = computed(() => {
     </div>
 
     <!-- Tags row — date/anchor always visible; context/milestone hidden when hideTags -->
-    <div v-if="(task as any).plan_date || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))" class="flex flex-wrap gap-1">
+    <div v-if="task.plan_date || (!hideTags && (milestoneStore.taskMilestones[task.id]?.length || task.context_subject))" class="flex flex-wrap gap-1">
       <span
-        v-if="(task as any).plan_date"
+        v-if="task.plan_date"
         @click.stop
         class="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300">
-        {{ (task as any).plan_date }}{{ (task as any).anchor_id ? ' · ' + (task as any).anchor_id : '' }}
+        {{ task.plan_date }}{{ task.anchor_id ? ' · ' + task.anchor_id : '' }}
       </span>
       <span v-if="isOverdue" @click.stop
             class="text-[10px] px-1.5 py-0.5 rounded bg-[--status-block-bg] text-[--status-block-fg] font-medium">

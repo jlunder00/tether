@@ -5,8 +5,6 @@ import { api } from '../lib/api'
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
 
-export type { FollowupConfig }
-
 export interface Task {
   id: string
   text: string
@@ -23,6 +21,8 @@ export interface Task {
   end_time?: string | null
   // Anchor association — set for plan tasks; null for backlog
   anchor_id?: string | null
+  // Plan date — present on backlog/kanban tasks (null when unscheduled)
+  plan_date?: string | null
   // Recurrence fields — anchor-recurring tasks only
   rrule?: string | null
   is_recurring_master?: boolean
