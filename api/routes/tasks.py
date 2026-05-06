@@ -1,6 +1,12 @@
 from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
+
+
+class MoveTaskBody(BaseModel):
+    date: str
+    anchor_id: str
+    position: int | None = None
 import asyncpg
 from db.pg_queries import (
     patch_task_fields, move_task_atomic,
@@ -153,12 +159,11 @@ async def delete_task(
 
 
 @router.put("/tasks/{task_uuid}/move")
-async def move_task(task_uuid: str, body: dict,
+async def move_task(task_uuid: str, body: MoveTaskBody,
                     _auth=Depends(auth_dependency),
                     conn: asyncpg.Connection = Depends(get_db_conn)):
     try:
-        await move_task_atomic(conn, task_uuid,
-                               body.get("date"), body.get("anchor_id"), body.get("position"))
+        await move_task_atomic(conn, task_uuid, body.date, body.anchor_id, body.position)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"ok": True}
