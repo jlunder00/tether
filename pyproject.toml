@@ -29,6 +29,7 @@ dependencies = [
     "python-dateutil>=2.8",
     "claude-agent-sdk>=0.1.55",
     "cryptography>=42.0",
+    "icalendar>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +45,7 @@ dev = [
 [tool.setuptools]
 packages = [
     "bot", "db", "api", "api.routes", "tether_mcp", "shared",
-    "sync", "integrations", "integrations.google_calendar",
+    "sync", "integrations", "integrations.google_calendar", "integrations.ical",
 ]
 
 [tool.pytest.ini_options]
