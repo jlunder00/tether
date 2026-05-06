@@ -288,6 +288,46 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     wrapper.unmount()
   })
 
+  // ── overSlotIndex path: slot div dragover sets exact index, container drop uses it ──
+  it('drop on timed-area container uses overSlotIndex set by slot dragover (no clientY math)', async () => {
+    // When pointer-events-none makes TaskCards transparent, drops land on the underlying
+    // slot div — but the drop event bubbles up to the container. The container must use
+    // overSlotIndex (set by that slot's @dragover handler) rather than slotIndexFromClientY
+    // which depends on getBoundingClientRect/scrollTop and can give wrong results when scrolled.
+    //
+    // Flow: dragenter → dragover on [data-time="09:00"] → drop on timed-area (no clientY)
+    // Expected: promoteTask called with 09:00/09:30 (slot 12), not 06:00 (slot 0 fallback).
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' }, attachTo: document.body })
+    const timedArea = wrapper.find('[data-testid="timed-area"]')
+
+    // Step 1: drag enters the timed area (sets dragActive=true)
+    await timedArea.trigger('dragenter', { dataTransfer: { types: ['text/plain'] } })
+    await wrapper.vm.$nextTick()
+
+    // Step 2: drag moves over the 09:00 slot div (sets overSlotIndex via onSlotDragOver)
+    const slot = wrapper.find('[data-time="09:00"]')
+    expect(slot.exists()).toBe(true)
+    await slot.trigger('dragover')
+    await wrapper.vm.$nextTick()
+
+    // Step 3: drop on the container (no clientY — would give slot 0 via slotIndexFromClientY)
+    const payload = { type: 'task', taskId: 'task-99', title: 'overSlotIndex test' }
+    await timedArea.trigger('drop', {
+      clientY: 0,  // would map to slot 0 (06:00) via slotIndexFromClientY — wrong answer
+      dataTransfer: { getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '' },
+    })
+
+    // Should have used overSlotIndex=12 (09:00), not slotIndexFromClientY(0)=0 (06:00)
+    expect(mockPromoteTask).toHaveBeenCalledWith(
+      'task-99',
+      expect.stringContaining('T09:00'),
+      expect.stringContaining('T09:30'),
+      'overSlotIndex test',
+    )
+    wrapper.unmount()
+  })
+
   // ── Structural fix: TaskCards must be transparent to pointer events during drag ──
   it('TaskCard event blocks receive pointer-events-none class while a drag is active', async () => {
     // The structural fix: when dragActive=true, TaskCards have pointer-events-none so

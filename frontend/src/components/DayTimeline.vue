@@ -276,12 +276,15 @@ function onTimedAreaDragLeave(e: DragEvent) {
 async function onTimedAreaDrop(e: DragEvent) {
   e.preventDefault()
   dragActive.value = false
+  // Prefer the slot tracked by onSlotDragOver (closure-captured i — exact, no math).
+  // Fall back to clientY computation only for drops in the hour-label gutter column,
+  // where no slot div exists and overSlotIndex was never set by a slot's dragover.
+  const i = overSlotIndex.value ?? slotIndexFromClientY(e.clientY)
   overSlotIndex.value = null
   const rawJson = e.dataTransfer?.getData('application/json')
   const rawText = e.dataTransfer?.getData('text/plain')
   const raw = rawJson || rawText
   if (!raw) return
-  const i = slotIndexFromClientY(e.clientY)
   try {
     await handleSlotDrop(JSON.parse(raw), slotTime(i))
   } catch { /* ignore malformed payload */ }
