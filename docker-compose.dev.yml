@@ -1,0 +1,37 @@
+# docker-compose.dev.yml
+# Overlay for the dev stack running on the same Pi as production.
+#
+# Port mapping (dev vs prod):
+#   API:      8001  (prod: 8000)
+#   MCP:      5002  (prod: 5001)
+#   Postgres: not exposed on host (internal only; prod exposes 5432)
+#
+# Data:
+#   ~/.tether-config-dev    (prod: ~/.tether-config)
+#   pgdata-dev volume       (prod: pgdata)
+#
+# Usage via CI (see docs/DEV.md for full setup):
+#   COMPOSE_PROJECT_NAME=tether-dev \
+#   TETHER_IMAGE=tether-premium-dev IMAGE_TAG=<tag> \
+#   TETHER_DATA_DIR=~/.tether-config-dev \
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+#     -p tether-dev up -d
+
+services:
+  postgres:
+    # Don't expose postgres on the host — dev postgres is internal only.
+    # Production exposes 5432 for tooling access; dev avoids the port conflict.
+    ports: []
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+
+  api:
+    ports:
+      - "8001:8000"
+
+  mcp:
+    ports:
+      - "5002:5001"
+
+volumes:
+  pgdata-dev:

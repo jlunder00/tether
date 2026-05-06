@@ -3,6 +3,12 @@ name: "[Pi] Force deploy all services"
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Target environment to redeploy"
+        required: false
+        default: "main"
+        type: choice
+        options: ["main", "dev"]
       no_cache:
         description: "Force --no-cache build"
         required: false
@@ -21,36 +27,66 @@ jobs:
   deploy-all:
     name: Rebuild and redeploy all services
     runs-on: self-hosted
+    env:
+      TARGET: ${{ github.event.inputs.target }}
+      NO_CACHE: ${{ github.event.inputs.no_cache }}
     steps:
-      - name: Pull latest code
+      - name: Resolve target paths and image name
+        id: target
         run: |
-          cd /home/toast/tether
-          git pull origin main
+          if [ "$TARGET" = "dev" ]; then
+            echo "deploy_dir=/home/toast/tether-dev" >> $GITHUB_OUTPUT
+            echo "image=tether-premium-dev" >> $GITHUB_OUTPUT
+            echo "branch=dev" >> $GITHUB_OUTPUT
+            echo "tag_suffix=-dev" >> $GITHUB_OUTPUT
+          else
+            echo "deploy_dir=/home/toast/tether" >> $GITHUB_OUTPUT
+            echo "image=tether-premium" >> $GITHUB_OUTPUT
+            echo "branch=main" >> $GITHUB_OUTPUT
+            echo "tag_suffix=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pull latest code
+        env:
+          DEPLOY_DIR: ${{ steps.target.outputs.deploy_dir }}
+          BRANCH: ${{ steps.target.outputs.branch }}
+        run: |
+          if [ ! -d "$DEPLOY_DIR" ]; then
+            git clone git@github.com:jlunder00/tether.git \
+              "$DEPLOY_DIR" --branch "$BRANCH" --single-branch
+          else
+            cd "$DEPLOY_DIR"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git pull origin "$BRANCH"
+          fi
 
       - name: Resolve version tag
         id: version
         env:
           GIT_SHA: ${{ github.sha }}
-          GIT_REF: ${{ github.ref }}
+          TAG_SUFFIX: ${{ steps.target.outputs.tag_suffix }}
         run: |
-          SHA_TAG="sha-$(echo "$GIT_SHA" | cut -c1-7)"
-          if [[ "$GIT_REF" == refs/tags/v* ]]; then
-            SEMVER="${GIT_REF#refs/tags/}"
-            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
-          fi
+          SHA_TAG="sha-$(echo "$GIT_SHA" | cut -c1-7)${TAG_SUFFIX}"
+          echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
 
       - name: Resolve premium ref
         id: premium
         env:
           TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          BRANCH: ${{ steps.target.outputs.branch }}
         run: |
+          # Try target branch first, fall back to HEAD
           REF=$(git ls-remote \
             "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
-            HEAD | cut -f1 | cut -c1-7)
+            "refs/heads/${BRANCH}" 2>/dev/null | cut -f1 | cut -c1-7)
           if [ -z "$REF" ]; then
-            echo "ERROR: Failed to resolve tether-premium HEAD ref" >&2
+            REF=$(git ls-remote \
+              "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+              HEAD | cut -f1 | cut -c1-7)
+          fi
+          if [ -z "$REF" ]; then
+            echo "ERROR: Failed to resolve tether-premium ref" >&2
             exit 1
           fi
           echo "ref=${REF}" >> $GITHUB_OUTPUT
@@ -58,24 +94,27 @@ jobs:
       - name: Build all images
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          IMAGE: ${{ steps.target.outputs.image }}
+          DEPLOY_DIR: ${{ steps.target.outputs.deploy_dir }}
           PREMIUM_REF: ${{ steps.premium.outputs.ref }}
-          NO_CACHE: ${{ github.event.inputs.no_cache }}
           TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
         run: |
-          cd /home/toast/tether
+          cd "$DEPLOY_DIR"
           BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
           make ${BUILD_TARGET} \
-            IMAGE=tether-premium \
+            IMAGE=${IMAGE} \
             TAG=${TAG} \
             PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
             PREMIUM_REF=${PREMIUM_REF}
-          docker tag tether-premium:${TAG} tether-premium:latest
-          grep -q "^IMAGE_TAG=" /home/toast/tether/.env \
-            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
-            || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
+          docker tag ${IMAGE}:${TAG} ${IMAGE}:latest
+          grep -q "^IMAGE_TAG=" "$DEPLOY_DIR/.env" 2>/dev/null \
+            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" "$DEPLOY_DIR/.env" \
+            || echo "IMAGE_TAG=${TAG}" >> "$DEPLOY_DIR/.env"
 
-      - name: Write production config
+      - name: Write config (production target)
+        if: env.TARGET == 'main'
         env:
+          DEPLOY_DIR: ${{ steps.target.outputs.deploy_dir }}
           TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
           TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
           TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
@@ -91,7 +130,7 @@ jobs:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
           TETHER_APP_PASSWORD: ${{ secrets.TETHER_APP_PASSWORD }}
         run: |
-          cd /home/toast/tether
+          cd "$DEPLOY_DIR"
           make configure-auth \
             TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
             TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
@@ -112,14 +151,70 @@ jobs:
             POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
             TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
 
+      - name: Write config (dev target)
+        if: env.TARGET == 'dev'
+        env:
+          DEPLOY_DIR: ${{ steps.target.outputs.deploy_dir }}
+          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
+          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS_DEV }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL_DEV }}
+          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL_DEV }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL_DEV }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_DEV }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_DEV }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TETHER_APP_PASSWORD: ${{ secrets.TETHER_APP_PASSWORD }}
+          TETHER_VAULT_KEY: ${{ secrets.TETHER_VAULT_KEY_DEV }}
+        run: |
+          cd "$DEPLOY_DIR"
+          make configure-auth \
+            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
+            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
+            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
+          make configure-google \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
+            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
+          make configure-github \
+            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
+            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
+            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
+          make configure-telegram \
+            TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+          make configure-db \
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
+          make configure-vault \
+            TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
 
-      - name: Restart all services
+      - name: Restart all services (production)
+        if: env.TARGET == 'main'
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           cd /home/toast/tether
           TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
             docker compose up -d --no-deps api bot mcp
+
+      - name: Restart all services (dev)
+        if: env.TARGET == 'dev'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          cd /home/toast/tether-dev
+          TETHER_IMAGE=tether-premium-dev IMAGE_TAG=${TAG} \
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.dev.yml \
+              -p tether-dev \
+              up -d --no-deps api bot mcp
 
   prune:
     name: Prune old images

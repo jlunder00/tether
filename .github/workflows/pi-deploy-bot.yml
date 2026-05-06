@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy-bot
+  group: pi-deploy
   cancel-in-progress: false
 
 jobs:

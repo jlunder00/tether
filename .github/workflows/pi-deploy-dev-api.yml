@@ -1,0 +1,155 @@
+name: "[Pi] Deploy Dev API"
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'api/**'
+      - 'db/**'
+      - 'config/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Force --no-cache build"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+
+# Dev and production deploys share the single self-hosted Pi runner.
+# Using the same concurrency group (pi-deploy) ensures only one deploy
+# runs at a time across all services and environments.
+concurrency:
+  group: pi-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-dev-api:
+    name: Build and deploy dev API service
+    runs-on: self-hosted
+    env:
+      DEV_DIR: /home/toast/tether-dev
+      # TETHER_CONFIG_DIR is read by scripts/configure.py to know the host-side config path.
+      # TETHER_DATA_DIR is the bind-mount source in docker-compose.dev.yml.
+      # Both point to the same directory.
+      TETHER_CONFIG_DIR: /home/toast/.tether-config-dev
+      TETHER_DATA_DIR: /home/toast/.tether-config-dev
+    steps:
+      - name: Ensure dev repo is present
+        run: |
+          if [ ! -d "$DEV_DIR" ]; then
+            git clone git@github.com:jlunder00/tether.git \
+              "$DEV_DIR" --branch dev --single-branch
+          else
+            cd "$DEV_DIR"
+            git fetch origin dev
+            git checkout dev
+            git pull origin dev
+          fi
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)-dev"
+          echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Resolve premium ref
+        id: premium
+        env:
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          # Try dev branch first, fall back to HEAD
+          REF=$(git ls-remote \
+            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+            refs/heads/dev 2>/dev/null | cut -f1 | cut -c1-7)
+          if [ -z "$REF" ]; then
+            REF=$(git ls-remote \
+              "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+              HEAD | cut -f1 | cut -c1-7)
+          fi
+          if [ -z "$REF" ]; then
+            echo "ERROR: Failed to resolve tether-premium ref" >&2
+            exit 1
+          fi
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+
+      - name: Build dev API image
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREMIUM_REF: ${{ steps.premium.outputs.ref }}
+          NO_CACHE: ${{ github.event.inputs.no_cache }}
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          cd "$DEV_DIR"
+          BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
+          make ${BUILD_TARGET} \
+            IMAGE=tether-premium-dev \
+            TAG=${TAG} \
+            PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
+            PREMIUM_REF=${PREMIUM_REF}
+          docker tag tether-premium-dev:${TAG} tether-premium-dev:latest
+          grep -q "^IMAGE_TAG=" "$DEV_DIR/.env" 2>/dev/null \
+            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" "$DEV_DIR/.env" \
+            || echo "IMAGE_TAG=${TAG}" >> "$DEV_DIR/.env"
+
+      - name: Write dev config
+        env:
+          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
+          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS_DEV }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL_DEV }}
+          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL_DEV }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL_DEV }}
+          TETHER_VAULT_KEY: ${{ secrets.TETHER_VAULT_KEY_DEV }}
+        run: |
+          cd "$DEV_DIR"
+          make configure-auth \
+            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
+            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
+            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
+          make configure-google \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
+            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
+          make configure-github \
+            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
+            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
+            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
+          make configure-vault \
+            TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
+
+      - name: Restart dev API service
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          cd "$DEV_DIR"
+          TETHER_IMAGE=tether-premium-dev IMAGE_TAG=${TAG} \
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.dev.yml \
+              -p tether-dev \
+              up -d --no-deps api
+
+  prune:
+    name: Prune old dev images
+    needs: deploy-dev-api
+    runs-on: self-hosted
+    steps:
+      - name: Remove old dev images
+        run: |
+          docker images tether-premium-dev --format "{{.ID}}" \
+            | awk '!seen[$0]++' \
+            | tail -n +4 \
+            | xargs -r docker rmi --force 2>/dev/null || true
+          docker image prune -f
