@@ -177,9 +177,11 @@ async def import_ical(
                 continue
 
         try:
-            row = await upsert_task_from_draft(conn, user_id, draft)
-            # Detect update vs insert: upsert returns a row with version.
-            # Version > 0 means it was already in the DB (updated); version == 0 means fresh insert.
+            # Use a savepoint per event so a single failure doesn't abort the
+            # outer connection-level transaction — other events can still succeed.
+            async with conn.transaction():
+                row = await upsert_task_from_draft(conn, user_id, draft)
+            # Version > 0 means the row already existed (updated); 0 means fresh insert.
             if row.get("version", 0) > 0:
                 n_updated += 1
             else:

@@ -649,6 +649,14 @@ async def upsert_task_from_draft(
     anchor_id is NULL, position=0, status='pending'.
     """
     new_uuid = _uuid.uuid4()
+    # Derive plan_date in Python — satisfies tasks_tri_state Case 3 (calendar event:
+    # plan_date IS NOT NULL when start_time IS NOT NULL). Computing here avoids
+    # asyncpg type-inference issues with reusing the same parameter in a CASE expression.
+    from datetime import timezone as _tz, date as _date
+    plan_date: _date | None = (
+        draft.start_time.astimezone(_tz.utc).date()
+        if draft.start_time is not None else None
+    )
     row = await conn.fetchrow(
         """
         INSERT INTO tasks
@@ -657,8 +665,7 @@ async def upsert_task_from_draft(
              rrule, recurrence_id, exdates, original_start_time,
              plan_date, status, position)
         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                CASE WHEN $6 IS NOT NULL THEN ($6 AT TIME ZONE 'UTC')::date ELSE NULL END,
-                'pending', 0)
+                $15, 'pending', 0)
         ON CONFLICT (user_id, source, external_id) WHERE source IS NOT NULL
         DO UPDATE SET
             text               = EXCLUDED.text,
@@ -690,6 +697,7 @@ async def upsert_task_from_draft(
         draft.recurrence_id,
         draft.exdates or [],
         draft.original_start_time,
+        plan_date,
     )
     return _row_to_task(row)
 
