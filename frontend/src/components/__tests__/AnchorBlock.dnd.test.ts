@@ -65,6 +65,32 @@ describe('AnchorBlock — container drop zone (Track 3)', () => {
     expect(capturedContainerOnDrop).not.toBeNull()
   })
 
+  it('drop with fromStartTime calls eventStore.demoteEvent (calendar event → anchor demotion)', async () => {
+    // Regression: stopPropagation() in useDropZone.onDrop blocks bubbling to
+    // PlanView.onAnchorDrop, so AnchorBlock must handle demotion itself.
+    const { useEventStore } = await import('../../stores/events')
+    const { usePlanStore } = await import('../../stores/plan')
+    const eventStore = useEventStore()
+    const planStore = usePlanStore()
+    // Seed one calendar event for task-1
+    ;(eventStore as any).events = [
+      { id: 'ev-1', task_id: 'task-1', start_time: '2026-05-01T09:00:00', end_time: '2026-05-01T09:30:00' },
+    ]
+    const demoteSpy = vi.spyOn(eventStore, 'demoteEvent').mockResolvedValue(undefined)
+    vi.spyOn(planStore, 'fetchPlan').mockResolvedValue(undefined)
+
+    await mountBlock({ anchorId: 'a1' })
+
+    capturedContainerOnDrop!({
+      type: 'task',
+      taskId: 'task-1',
+      fromStartTime: '2026-05-01T09:00:00',
+      durationMs: 1800000,
+    }, undefined)
+
+    expect(demoteSpy).toHaveBeenCalledWith('ev-1', 'a1', expect.any(String))
+  })
+
   it('drop on empty anchor calls store.moveTask when task is from different anchor', async () => {
     const { usePlanStore } = await import('../../stores/plan')
     const store = usePlanStore()

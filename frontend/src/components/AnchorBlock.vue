@@ -10,6 +10,7 @@ import type { Milestone } from '../stores/milestones'
 import { api } from '../lib/api'
 import { useDropZone } from '../composables/useDropZone'
 import { useSlideOver } from '../composables/useSlideOver'
+import { useEventStore } from '../stores/events'
 
 const { push: pushPanel } = useSlideOver()
 
@@ -26,6 +27,7 @@ const props = defineProps<{
 }>()
 
 const store = usePlanStore()
+const eventStore = useEventStore()
 const tasksRef = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
 const dayPlan = computed(() => props.date ? store.plans[props.date] : store.plan)
@@ -179,10 +181,24 @@ function onDrop(evt: DragEvent, toIndex: number) {
 // ── Container-level drop zone (fixes empty-anchor drop bug) ──────────────────
 // When anchor has no tasks, there are no per-task wrapper drop zones. The
 // container drop zone catches those drops and appends the task.
+//
+// Also handles calendar event demotion (fromStartTime present) for drops that
+// land on the card content area. useDropZone.onDrop calls stopPropagation(), so
+// these drops no longer bubble to PlanView.onAnchorDrop; we own the demotion here.
+// Rail/gap drops that miss the card content still bubble to PlanView.onAnchorDrop.
 const { isOver: isContainerOver, dropHandlers: containerDropHandlers } = useDropZone({
   onDrop(payload) {
-    const p = payload as { taskId?: string; fromAnchorId?: string; fromDate?: string }
+    const p = payload as { taskId?: string; fromAnchorId?: string; fromDate?: string; fromStartTime?: string }
     if (!p.taskId) return
+    if (p.fromStartTime) {
+      // Calendar event → anchor demotion (dropped on card content area)
+      const ev = eventStore.events.find(e => e.task_id === p.taskId)
+        ?? eventStore.events.find(e => e.id === p.taskId)
+      if (!ev) return
+      eventStore.demoteEvent(ev.id, props.anchorId, effectiveDate.value)
+        .then(() => store.fetchPlan(effectiveDate.value))
+      return
+    }
     const toIndex = anchorPlan.value.tasks.length
     if (p.fromAnchorId === props.anchorId && p.fromDate === effectiveDate.value) {
       store.reorderTask(p.taskId, effectiveDate.value, props.anchorId, toIndex)
