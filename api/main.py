@@ -186,15 +186,36 @@ def create_app(lifespan_override=None) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
+        import db.pg_queries.api_keys as _api_keys_queries
+
         token = websocket.cookies.get("tether_token")
         if token:
             try:
                 payload = decode_jwt(token)
                 user_id = payload["user_id"]
                 is_admin = payload.get("is_admin", False)
+                is_bot_service = payload.get("is_bot_service", False)
             except Exception:
                 await websocket.close(code=1008)
                 return
+
+            # Bot service path: register with per-user delegation filtering.
+            # Backward-compat: is_admin path (__bot__ channel) retained until PR 7.
+            if is_bot_service:
+                delegated = await _api_keys_queries.get_delegated_user_ids(
+                    websocket.app.state.pool, user_id
+                )
+                await websocket.accept()
+                manager.register_bot(websocket, user_id, delegated)
+                try:
+                    while True:
+                        await websocket.receive_text()
+                except (WebSocketDisconnect, RuntimeError):
+                    pass
+                finally:
+                    manager.disconnect_bot(user_id)
+                return
+
             await manager.connect(websocket, user_id)
             if is_admin:
                 manager.register_only(websocket, "__bot__")
@@ -222,9 +243,26 @@ def create_app(lifespan_override=None) -> FastAPI:
                 payload = decode_jwt(msg["token"])
                 user_id = payload["user_id"]
                 is_admin = payload.get("is_admin", False)
+                is_bot_service = payload.get("is_bot_service", False)
             except Exception:
                 await websocket.close(code=1008)
                 return
+
+            # Bot service path via message auth.
+            if is_bot_service:
+                delegated = await _api_keys_queries.get_delegated_user_ids(
+                    websocket.app.state.pool, user_id
+                )
+                manager.register_bot(websocket, user_id, delegated)
+                try:
+                    while True:
+                        await websocket.receive_text()
+                except (WebSocketDisconnect, RuntimeError):
+                    pass
+                finally:
+                    manager.disconnect_bot(user_id)
+                return
+
             manager.register_only(websocket, user_id)
             if is_admin:
                 manager.register_only(websocket, "__bot__")
