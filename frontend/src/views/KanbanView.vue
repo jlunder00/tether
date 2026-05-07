@@ -101,7 +101,5 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         @add-task="(opts) => onAddTask(col.id, opts)"
         @task-drop="onTaskDrop" />
     </div>
-
-    <router-view />
   </div>
 </template>

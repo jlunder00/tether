@@ -80,10 +80,5 @@ export function useTheme() {
     document.documentElement.dataset.mode = mode
   }
 
-  function autoMode() { // This duplicates the login in main.ts and is not used, but it should probably be used in place of that for reusability
-    const h = new Date().getHours()
-    return h >= 7 && h < 19 ? 'light' : 'dark'
-  }
-
-  return { THEMES, activeTheme, activeMode, isPaid, isThemeUnlocked, applyTheme, previewTheme, setMode, autoMode, isCommunityEdition }
+  return { THEMES, activeTheme, activeMode, isPaid, isThemeUnlocked, applyTheme, previewTheme, setMode, isCommunityEdition }
 }

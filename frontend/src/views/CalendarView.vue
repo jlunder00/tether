@@ -1061,8 +1061,6 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
       </template>
     </div>
 
-    <router-view />
-
     <RecurrenceEditDialog
       :visible="pendingRecurrence !== null"
       :mode="recurrenceDialogMode"
