@@ -77,6 +77,7 @@ async def auth_dependency(request: Request):
         request.state.user_id = payload["user_id"]
         request.state.username = payload["username"]
         request.state.is_admin = payload.get("is_admin", False)
+        request.state.auth_method = "cookie"
         return payload
 
     # --- Bearer API key path ---
@@ -90,6 +91,7 @@ async def auth_dependency(request: Request):
         request.state.user_id = user_id
         request.state.username = None
         request.state.is_admin = False
+        request.state.auth_method = "bearer"
         return {"user_id": user_id, "is_admin": False}
 
     raise HTTPException(status_code=401, detail="Not authenticated")
