@@ -18,7 +18,7 @@ import { useLinks } from '../composables/useLinks'
 import { useDependencies } from '../composables/useDependencies'
 import { useTaskContexts } from '../composables/useTaskContexts'
 import { useSlideOver } from '../composables/useSlideOver'
-import type { TaskStatus } from '../stores/plan'
+import type { Task, TaskStatus } from '../stores/plan'
 import type { FollowupConfig } from '../stores/anchors'
 import type { RecurrenceEditScope } from '../types/recurrence'
 
@@ -61,7 +61,7 @@ const anchorId = computed(() => taskAndAnchor.value?.anchorId ?? '')
 const isBacklog = computed(() => taskAndAnchor.value?.isBacklog ?? false)
 
 // Standalone task fetch for when task isn't in plan or backlog store yet
-const standaloneTask = ref<any>(null)
+const standaloneTask = ref<Task | null>(null)
 
 // Schedule controls (backlog → plan)
 const scheduleDate = ref(planStore.today)
@@ -507,7 +507,7 @@ onMounted(async () => {
 
 <template>
   <!-- dp-shell: motif data-attr drives the left-rail colour via --m token -->
-  <div class="dp-shell" :data-motif="task?.motif ?? (taskEvent ? 'anchor' : 'anchor')">
+  <div class="dp-shell" :data-motif="task?.motif ?? 'anchor'">
 
     <!-- ── Header ─────────────────────────────────────────────────────────── -->
     <header class="dp-header">
@@ -584,7 +584,7 @@ onMounted(async () => {
       </template>
 
       <!-- ── Full task ─────────────────────────────────────────────────────── -->
-      <template v-else>
+      <template v-else-if="task">
 
         <!-- Motif -->
         <section class="dp-section">
