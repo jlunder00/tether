@@ -308,12 +308,11 @@ async def finalize_meeting(
     # Never read request["context"]. Task body comes only from:
     #   agreed_slot, duration_minutes, participant user_ids (→ usernames), meeting id.
     other_participant_ids = [uid for uid in participants if uid != caller_id]
-    other_users = await get_users_by_ids(conn, other_participant_ids)
-    other_usernames = [
-        other_users[uid]["username"]
-        for uid in other_participant_ids
-        if uid in other_users
-    ]
+    other_usernames = []
+    for uid in other_participant_ids:
+        user = await get_user_by_id(conn, uid)
+        if user:
+            other_usernames.append(user["username"])
     mentions = " ".join(f"@{u}" for u in other_usernames)
     duration = request["duration_minutes"]
     task_text = f"Meeting with {mentions} ({duration}min) [meeting:{meeting_id}]"
