@@ -11,7 +11,7 @@ from db.pg_queries.plans import (
 from db.pg_queries.tasks import (
     upsert_tasks, patch_task_fields, get_task_by_uuid, get_all_tasks,
     get_unscheduled_tasks, create_unscheduled_task, delete_task_by_uuid, move_task_atomic,
-    search_tasks, search_entities,
+    search_entities,
     add_dependency, remove_dependency, get_dependencies_for, get_full_task_dependencies,
     add_task_dependency, remove_task_dependency,
     get_subtasks, create_subtask, update_subtask, delete_subtask, reorder_subtasks,
@@ -69,12 +69,6 @@ from db.pg_queries.state_monitor import (
 )
 from db.pg_queries.beacon import (
     record_beacon_invocation, get_last_invocation,
-)
-from db.pg_queries.journal import (
-    append_journal_entry, get_journal, rollback_journal_entry,
-)
-from db.pg_queries.activity import (
-    acquire_lease, release_lease, heartbeat_lease, get_active_writers,
 )
 from db.pg_queries.subscriptions import (
     get_user_is_paid,
