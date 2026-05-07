@@ -12,6 +12,7 @@ The 403 test below uses this fact directly.
 """
 from __future__ import annotations
 
+import re
 import pytest
 from datetime import datetime, timezone, timedelta
 
@@ -264,6 +265,9 @@ async def test_finalize_task_mentions_other_participants(api_client, conn):
         resp.json()["task_id"],
     )
     text = task_row["text"]
-    assert f"@{TEST_USER_B_NAME}" in text
-    # Caller's own username should NOT appear in @mentions
-    assert f"@{TEST_USERNAME}" not in text
+    # Extract all @mention tokens — avoids substring false-positives.
+    # e.g. "testuser" is a prefix of "testuser2", so `in` would wrongly match;
+    # token-based comparison is exact.
+    mention_tokens = re.findall(r"@\w+", text)
+    assert f"@{TEST_USER_B_NAME}" in mention_tokens   # other participant mentioned
+    assert f"@{TEST_USERNAME}" not in mention_tokens   # caller NOT self-mentioned
