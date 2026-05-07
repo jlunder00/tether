@@ -377,3 +377,80 @@ def get_participants(request: dict) -> list[str]:
     for t in request.get("target_ids", []):
         result.append(str(t))
     return result
+
+
+# ─── Meeting finalize queries ──────────────────────────────────────────────────
+
+async def get_task_by_meeting_tag(
+    conn: asyncpg.Connection,
+    user_id: str,
+    meeting_id: int,
+) -> dict | None:
+    """Return the task row (if any) that was created for this meeting by this user.
+
+    Idempotency tag: tasks contain `[meeting:{id}]` in their text.
+    The closing bracket prevents prefix collisions (e.g. meeting:4 vs meeting:42).
+    RLS already scopes to user_id; the explicit user_id filter is defense-in-depth.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT uuid, text, plan_date, start_time
+        FROM tasks
+        WHERE user_id = $1::uuid
+          AND text LIKE $2
+        LIMIT 1
+        """,
+        user_id,
+        f"%[meeting:{meeting_id}]%",
+    )
+    return _row(row)
+
+
+async def create_meeting_task(
+    conn: asyncpg.Connection,
+    user_id: str,
+    task_text: str,
+    agreed_slot: str,
+    duration_minutes: int,
+) -> dict:
+    """Insert exactly one calendar-event task for a finalized meeting.
+
+    Task type: plan_date NOT NULL, anchor_id IS NULL, start_time NOT NULL, end_time NOT NULL.
+    This satisfies the tri-state CHECK constraint (calendar event variant).
+    Task body is assembled from structured fields only — context is never read.
+
+    agreed_slot is ISO 8601 text (e.g. "2027-06-15T09:00:00Z").
+    start_time and end_time are stored as TIMESTAMPTZ.
+    plan_date is the UTC date portion of agreed_slot (TEXT "YYYY-MM-DD").
+    """
+    start_dt = datetime.fromisoformat(agreed_slot.replace("Z", "+00:00"))
+    end_dt = start_dt + timedelta(minutes=duration_minutes)
+    plan_date = start_dt.strftime("%Y-%m-%d")
+
+    new_uuid = _uuid.uuid4()
+    user_uuid = _uuid.UUID(user_id)
+
+    # Ensure a plan row exists for this date (required FK / consistency)
+    await conn.execute(
+        """
+        INSERT INTO plans (date, user_id)
+        VALUES ($1, $2::uuid)
+        ON CONFLICT (date, user_id) DO NOTHING
+        """,
+        plan_date, user_uuid,
+    )
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO tasks
+            (uuid, user_id, plan_date, anchor_id, position,
+             text, status, start_time, end_time)
+        VALUES
+            ($1, $2::uuid, $3, NULL, 0,
+             $4, 'pending', $5, $6)
+        RETURNING uuid, text, plan_date, start_time, end_time
+        """,
+        new_uuid, user_uuid, plan_date,
+        task_text, start_dt, end_dt,
+    )
+    return _row(row)

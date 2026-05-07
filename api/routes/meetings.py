@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import asyncpg
 from typing import Optional
@@ -22,6 +23,8 @@ from db.pg_queries.scheduling import (
     list_incoming_for_user,
     get_connection_by_users,
     get_participants,
+    get_task_by_meeting_tag,
+    create_meeting_task,
 )
 from api.ws import manager
 
@@ -254,3 +257,76 @@ async def get_meeting(
         raise HTTPException(status_code=403, detail="Not a participant")
 
     return request
+
+
+@router.post("/meetings/{meeting_id}/finalize")
+async def finalize_meeting(
+    meeting_id: int,
+    auth=Depends(auth_dependency),
+    conn: asyncpg.Connection = Depends(get_db_conn),
+):
+    """Create a task for the caller from an agreed meeting.
+
+    The only write path for meeting-agreed tasks. Task body is assembled from
+    structured DB fields only (agreed_slot, duration_minutes, participant
+    usernames, meeting id). The meeting.context field is NEVER read — this
+    is defense against prompt injection where crafted context could direct
+    downstream LLM calls to mutate data on behalf of another user.
+
+    Idempotency: uses a [meeting:{id}] tag in task text. A second call by the
+    same user returns the existing task (200) rather than creating a duplicate.
+    This tag-based approach avoids a dependency on the bot_actions table (PR 2).
+    """
+    caller_id = auth["user_id"]
+
+    # ── Validate meeting exists and is visible to caller ──────────────────────
+    # RLS filters non-participants before this point, so 404 is the observable
+    # response for non-participants. The explicit 403 below is defense-in-depth
+    # for paths that bypass RLS (e.g. admin/service connections).
+    request = await get_meeting_request(conn, meeting_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Meeting request not found")
+
+    # ── Validate status ────────────────────────────────────────────────────────
+    if request["status"] != "agreed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Meeting must be in 'agreed' status (current: {request['status']})",
+        )
+
+    # ── Validate participation ─────────────────────────────────────────────────
+    participants = get_participants(request)
+    if caller_id not in participants:
+        raise HTTPException(status_code=403, detail="Not a participant in this meeting")
+
+    # ── Idempotency check ──────────────────────────────────────────────────────
+    existing = await get_task_by_meeting_tag(conn, caller_id, meeting_id)
+    if existing:
+        return {"task_id": str(existing["uuid"]), "status": "already_exists"}
+
+    # ── Resolve participant usernames (excluding caller) from structured fields
+    # Never read request["context"]. Task body comes only from:
+    #   agreed_slot, duration_minutes, participant user_ids (→ usernames), meeting id.
+    other_participant_ids = [uid for uid in participants if uid != caller_id]
+    other_usernames = []
+    for uid in other_participant_ids:
+        user = await get_user_by_id(conn, uid)
+        if user:
+            other_usernames.append(user["username"])
+    mentions = " ".join(f"@{u}" for u in other_usernames)
+    duration = request["duration_minutes"]
+    task_text = f"Meeting with {mentions} ({duration}min) [meeting:{meeting_id}]"
+
+    # ── Insert exactly one task row ────────────────────────────────────────────
+    task = await create_meeting_task(
+        conn,
+        user_id=caller_id,
+        task_text=task_text,
+        agreed_slot=request["agreed_slot"],
+        duration_minutes=duration,
+    )
+
+    return JSONResponse(
+        content={"task_id": str(task["uuid"]), "status": "created"},
+        status_code=201,
+    )
