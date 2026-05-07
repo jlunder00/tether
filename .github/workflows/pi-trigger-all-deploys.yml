@@ -1,12 +1,9 @@
-name: "[Pi] Trigger all per-service deploys"
+name: "[Pi] Trigger build and all service deploys"
 
-# Fan-out dispatcher: kicks off every per-service deploy workflow.
-# Each runs as its own independent run with its own concurrency group
-# (pi-deploy-<service>) and queues at the runner level. Use this when
-# you want each service redeployed via its normal path-aware workflow.
+# Dispatches pi-build.yml with all services, which handles the single
+# shared image build and then restarts each service independently.
 #
-# For a single-log, fully-inline rebuild of all services, use
-# pi-force-deploy-all.yml instead.
+# For a fully-inline single-log rebuild, use pi-force-deploy-all.yml instead.
 
 on:
   workflow_dispatch:
@@ -23,25 +20,22 @@ permissions:
   actions: write
 
 jobs:
-  trigger-all:
-    name: Dispatch every service deploy
+  trigger-build:
+    name: Dispatch build with all services
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger each service deploy
+      - name: Trigger pi-build with all services
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NO_CACHE: ${{ inputs.no_cache }}
           REPO: ${{ github.repository }}
           REF: ${{ github.ref_name }}
         run: |
-          set -euo pipefail
-          for wf in pi-deploy-api pi-deploy-bot pi-deploy-mcp pi-deploy-frontend pi-deploy-sync pi-deploy-db; do
-            echo "Dispatching $wf.yml (no_cache=$NO_CACHE, ref=$REF)"
-            gh workflow run "$wf.yml" \
-              --repo "$REPO" \
-              --ref "$REF" \
-              -f no_cache="$NO_CACHE"
-          done
-          echo
-          echo "Dispatched. Each workflow will queue independently and run"
-          echo "sequentially through the single self-hosted runner."
+          gh workflow run pi-build.yml \
+            --repo "$REPO" \
+            --ref "$REF" \
+            -f services=api,bot,mcp,sync \
+            -f no_cache="$NO_CACHE"
+          echo "Dispatched pi-build.yml with all services."
+          echo "Build will queue on pi-build concurrency group."
+          echo "Each service restarts independently after the build completes."

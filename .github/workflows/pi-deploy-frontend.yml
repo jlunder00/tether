@@ -1,94 +1,28 @@
-name: "[Pi] Deploy Frontend"
+name: "[Pi] Restart frontend (via API service)"
+
+# Triggered by pi-build.yml after a successful image build.
+# Frontend static files are baked into tether-premium; restarting the
+# API service is all that's needed to pick up frontend changes.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'frontend/**'
-      - 'Dockerfile'
   workflow_dispatch:
-    inputs:
-      no_cache:
-        description: "Force --no-cache build"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
 
 permissions:
   contents: read
 
+# Same concurrency group as pi-deploy-api — both restart the api service.
 concurrency:
-  group: pi-deploy
-  cancel-in-progress: false
+  group: pi-deploy-api
+  cancel-in-progress: true
 
 jobs:
-  deploy-frontend:
-    name: Build and deploy frontend
+  restart-api:
+    name: Restart API service (serves frontend)
     runs-on: self-hosted
     steps:
-      - name: Pull latest code
+      - name: Restart API with current image
         run: |
           cd /home/toast/tether
-          git pull origin main
-
-      - name: Resolve version tag
-        id: version
-        run: |
-          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            SEMVER="${GITHUB_REF#refs/tags/}"
-            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
-            echo "extra_tag=${SEMVER}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
-            echo "extra_tag=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Resolve premium ref
-        id: premium
-        env:
-          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
-        run: |
-          REF=$(git ls-remote \
-            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
-            HEAD | cut -f1 | cut -c1-7)
-          if [ -z "$REF" ]; then
-            echo "ERROR: Failed to resolve tether-premium HEAD ref" >&2
-            exit 1
-          fi
-          echo "ref=${REF}" >> $GITHUB_OUTPUT
-
-      - name: Build image (includes frontend)
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          PREMIUM_REF: ${{ steps.premium.outputs.ref }}
-          NO_CACHE: ${{ github.event.inputs.no_cache }}
-          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
-        run: |
-          cd /home/toast/tether
-          BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
-          make ${BUILD_TARGET} \
-            IMAGE=tether-premium \
-            TAG=${TAG} \
-            PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
-            PREMIUM_REF=${PREMIUM_REF}
-          docker tag tether-premium:${TAG} tether-premium:latest
-          grep -q "^IMAGE_TAG=" /home/toast/tether/.env \
-            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
-            || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
-
-      - name: Restart API service (serves frontend static files)
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          cd /home/toast/tether
-          TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
+          TAG=$(grep "^IMAGE_TAG=" .env 2>/dev/null | cut -d= -f2)
+          TETHER_IMAGE=tether-premium IMAGE_TAG="${TAG:-latest}" \
             docker compose up -d --no-deps api
-
-  prune:
-    name: Prune old images
-    needs: deploy-frontend
-    uses: ./.github/workflows/pi-prune-images.yml
-    with:
-      keep: 3

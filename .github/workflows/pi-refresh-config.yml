@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pi-deploy
+  group: pi-refresh-config
   cancel-in-progress: false
 
 jobs:
