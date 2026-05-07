@@ -56,12 +56,8 @@ async function onAddTaskToNow() {
   if (!currentAnchor.value) return
   const today = localToday()
   try {
-    const resp = await api('/api/tasks/unscheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'New task', date: today, anchor_id: currentAnchor.value.id }),
-    })
-    if (!resp.ok) throw new Error(`${resp.status}`)
+    const task = await planStore.createPlanTask(today, currentAnchor.value.id)
+    if (!task) throw new Error('createPlanTask failed')
     await planStore.fetchPlan(today)
   } catch (e) {
     console.error('Failed to create task:', e)

@@ -8,6 +8,7 @@ import type { Task } from '../stores/plan'
 import { useMilestoneStore } from '../stores/milestones'
 import type { Milestone } from '../stores/milestones'
 import { api } from '../lib/api'
+import { useTasksStore } from '../stores/tasks'
 import { useDropZone } from '../composables/useDropZone'
 import { useSlideOver } from '../composables/useSlideOver'
 import { useEventStore } from '../stores/events'
@@ -27,6 +28,7 @@ const props = defineProps<{
 }>()
 
 const store = usePlanStore()
+const tasksStore = useTasksStore()
 const eventStore = useEventStore()
 const tasksRef = ref<HTMLElement | null>(null)
 const effectiveDate = computed(() => props.date ?? store.activeDate)
@@ -111,26 +113,16 @@ function onUpdate(task: Task, index: number) {
 async function onRemove(index: number) {
   const task = anchorPlan.value.tasks[index]
   if (task?.id) {
-    await fetch(`/api/tasks/${task.id}`, { method: 'DELETE', credentials: 'include' })
+    await tasksStore.deleteTask(task.id)
   }
   const updated = anchorPlan.value.tasks.filter((_, i) => i !== index)
   store.updateAnchorTasks(props.anchorId, updated, anchorPlan.value.notes ?? '')
 }
 
 async function onAddNewTask(opts: { context_subject?: string; milestone_id?: string } = {}) {
-  const body: Record<string, unknown> = {
-    text: 'New task',
-    date: effectiveDate.value,
-    anchor_id: props.anchorId,
-    ...opts,
-  }
   try {
-    const resp = await api('/api/tasks/unscheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) throw new Error(`${resp.status}`)
+    const task = await store.createPlanTask(effectiveDate.value, props.anchorId, opts)
+    if (!task) throw new Error('createPlanTask failed')
     await store.fetchPlan(effectiveDate.value)
   } catch (e) {
     console.error('Failed to create task:', e)

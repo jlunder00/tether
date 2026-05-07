@@ -243,5 +243,22 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* ignore — optimistic update stays */ }
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor }
+  /**
+   * PATCH an event with scope support (single / this_and_future / all).
+   * Used by CalendarView.onRecurrenceScopeConfirm (event-edit branch).
+   */
+  async function patchEvent(
+    eventId: string,
+    patch: Record<string, unknown>,
+    scope: RecurrenceEditScope,
+    originalStartTime?: string,
+  ): Promise<void> {
+    await api(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...patch, scope, original_start_time: originalStartTime }),
+    })
+  }
+
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor, patchEvent }
 })

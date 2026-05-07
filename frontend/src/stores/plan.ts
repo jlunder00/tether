@@ -241,10 +241,54 @@ export const usePlanStore = defineStore('plan', () => {
     return resp.ok
   }
 
+  /**
+   * Move a backlog task onto a specific date+anchor (schedule it).
+   * Calls PUT /api/tasks/:id/move.
+   */
+  async function scheduleTask(taskId: string, date: string, anchorId: string): Promise<void> {
+    await api(`/api/tasks/${taskId}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, anchor_id: anchorId }),
+    })
+  }
+
+  /**
+   * Unschedule a plan task — move it back to the backlog (date: null, anchor_id: null).
+   */
+  async function moveToBacklog(taskId: string): Promise<void> {
+    await api(`/api/tasks/${taskId}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: null, anchor_id: null }),
+    })
+  }
+
+  /**
+   * Create a new task directly on a specific date+anchor.
+   * Used by AnchorBlock.onAddNewTask and DashboardView.onAddTaskToNow.
+   */
+  async function createPlanTask(
+    date: string,
+    anchorId: string,
+    opts: { text?: string; context_subject?: string; milestone_id?: string } = {},
+  ): Promise<Task | null> {
+    const resp = await api('/api/tasks/unscheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: opts.text ?? 'New task', date, anchor_id: anchorId, ...opts }),
+    })
+    if (!resp.ok) return null
+    return resp.json()
+  }
+
+  // Deprecated: superceeded by auth store manage ws transport in /api/bot/chat
+
   return {
     plan, loading, today, activeDate, plans,
     fetchPlan,
     fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
     updateAnchorTasks, updateTaskStatus, patchTaskFields,
+    scheduleTask, moveToBacklog, createPlanTask,
   }
 })
