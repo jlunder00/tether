@@ -104,6 +104,28 @@ async def revoke_key(
     )
 
 
+async def get_delegated_user_ids(pool, bot_service_id: str) -> set[str]:
+    """Return all user_ids for which an active bot delegation key exists.
+
+    Queries api_keys for rows named 'bot_delegation_*' that have not been
+    revoked. These keys are minted by the claim flow (PR 4). Until PR 4
+    lands, no rows match and the returned set is empty.
+
+    NOTE: bot_service_id is reserved for future multi-bot scoping (PR 4).
+    Currently delegation keys are bot-global — the parameter is accepted so
+    call sites remain forward-compatible when PR 4 adds per-bot scoping.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT user_id
+            FROM api_keys
+            WHERE name LIKE 'bot_delegation_%' AND revoked_at IS NULL
+            """,
+        )
+    return {str(row["user_id"]) for row in rows}
+
+
 async def validate_key(
     conn: asyncpg.Connection,
     raw_key: str,

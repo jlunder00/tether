@@ -18,15 +18,18 @@ def create_jwt(
     user_id: str,
     username: str,
     is_admin: bool,
+    is_bot_service: bool = False,
     expires_in: timedelta | None = None,
 ) -> str:
     exp = datetime.utcnow() + (expires_in if expires_in is not None else timedelta(days=7))
-    payload = {
+    payload: dict = {
         "user_id": user_id,
         "username": username,
         "is_admin": is_admin,
         "exp": exp,
     }
+    if is_bot_service:
+        payload["is_bot_service"] = True
     return jwt.encode(payload, cfg.JWT_SECRET, algorithm="HS256")
 
 
