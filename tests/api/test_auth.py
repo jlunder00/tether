@@ -110,10 +110,9 @@ def _make_request(*, cookie_token: str | None = None, auth_header: str | None = 
 
 @pytest.mark.asyncio
 async def test_bearer_valid_key_authenticates(monkeypatch):
-    """Valid ttr_ Bearer key succeeds; user_id and is_admin are set correctly."""
+    """Valid ttr_ Bearer key succeeds; user_id, is_admin, and auth_method are set."""
     from unittest.mock import AsyncMock
     import api.auth as auth_mod
-    from fastapi import HTTPException
 
     monkeypatch.setattr(auth_mod, "_validate_bearer_key", AsyncMock(return_value=TEST_BEARER_USER_ID))
 
@@ -125,6 +124,7 @@ async def test_bearer_valid_key_authenticates(monkeypatch):
     assert request.state.user_id == TEST_BEARER_USER_ID
     assert request.state.is_admin is False
     assert request.state.username is None
+    assert request.state.auth_method == "bearer"
 
 
 @pytest.mark.asyncio
@@ -198,3 +198,29 @@ async def test_cookie_auth_regression_passes():
     assert result["user_id"] == "cookie-user-id"
     assert result["username"] == "cookieuser"
     assert result["is_admin"] is False
+    assert request.state.auth_method == "cookie"
+
+
+@pytest.mark.asyncio
+async def test_invalid_cookie_does_not_fall_through_to_bearer(monkeypatch):
+    """An invalid cookie raises 401 immediately; the Bearer header is NOT consulted.
+
+    This locks in an important invariant: Bearer cannot be used as a bypass when
+    a cookie is present but invalid (e.g. tampered or from a different secret).
+    """
+    from unittest.mock import AsyncMock
+    import api.auth as auth_mod
+    from fastapi import HTTPException
+
+    mock_validate = AsyncMock(return_value=TEST_BEARER_USER_ID)
+    monkeypatch.setattr(auth_mod, "_validate_bearer_key", mock_validate)
+
+    request = _make_request(
+        cookie_token="bad.token.value",
+        auth_header=f"Bearer {TEST_RAW_KEY}",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await auth_mod.auth_dependency(request)
+
+    assert exc_info.value.status_code == 401
+    mock_validate.assert_not_called()
