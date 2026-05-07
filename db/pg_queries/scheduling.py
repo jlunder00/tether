@@ -82,6 +82,38 @@ async def get_connection_by_users(
     return _row(row)
 
 
+async def get_connections_for_caller(
+    conn: asyncpg.Connection, caller_id: str, target_ids: list[str]
+) -> dict[str, dict]:
+    """Return {target_id: connection_row} for all target_ids. Missing = no connection.
+
+    Uses canonical ordering (user_a < user_b) consistent with get_connection_by_users.
+    """
+    if not target_ids:
+        return {}
+    # Build canonical pairs and fetch all matching rows in one query.
+    # connections table stores user_a < user_b (by UUID sort order).
+    caller_uuid = _uuid.UUID(caller_id)
+    target_uuids = [_uuid.UUID(t) for t in target_ids]
+    rows = await conn.fetch(
+        """
+        SELECT * FROM connections
+        WHERE (user_a = $1::uuid AND user_b = ANY($2))
+           OR (user_b = $1::uuid AND user_a = ANY($2))
+        """,
+        str(caller_uuid), target_uuids,
+    )
+    result: dict[str, dict] = {}
+    for row in rows:
+        row_dict = _row(row)
+        # Determine which side is the target.
+        if row_dict["user_a"] == str(caller_uuid):
+            result[row_dict["user_b"]] = row_dict
+        else:
+            result[row_dict["user_a"]] = row_dict
+    return result
+
+
 async def list_connections_for_user(
     conn: asyncpg.Connection, user_id: str
 ) -> list[dict]:

@@ -64,6 +64,27 @@ async def get_user_by_username(conn: asyncpg.Connection, username: str) -> dict 
     return _row(row)
 
 
+async def get_users_by_usernames(
+    conn: asyncpg.Connection, usernames: list[str]
+) -> dict[str, dict]:
+    """Return {username: user_row} for each found username. Missing entries omitted."""
+    if not usernames:
+        return {}
+    rows = await conn.fetch("SELECT * FROM users WHERE username = ANY($1)", usernames)
+    return {r["username"]: _row(r) for r in rows}
+
+
+async def get_users_by_ids(
+    conn: asyncpg.Connection, ids: list[str]
+) -> dict[str, dict]:
+    """Return {id: user_row} for each found id. Missing entries omitted."""
+    if not ids:
+        return {}
+    uuids = [_uuid.UUID(i) for i in ids]
+    rows = await conn.fetch("SELECT * FROM users WHERE id = ANY($1)", uuids)
+    return {str(r["id"]): _row(r) for r in rows}
+
+
 async def get_user_count(conn: asyncpg.Connection) -> int:
     return await conn.fetchval("SELECT COUNT(*) FROM users")
 

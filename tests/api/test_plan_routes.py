@@ -131,3 +131,32 @@ async def test_get_plan_range_returns_dict_of_day_plans(api_client, conn):
     assert today in data
     assert tomorrow in data
     assert "anchors" in data[today]
+
+
+@pytest.mark.asyncio
+async def test_get_plan_range_uses_batch_query(api_client, conn):
+    """GET /plan/range should use get_plans_for_range (batch), not get_plan per day."""
+    from unittest.mock import patch
+    from datetime import date, timedelta
+
+    start = date.today()
+    end = start + timedelta(days=2)
+
+    # Seed 3 days of plans
+    await upsert_anchor(conn, ANCHOR)
+    for i in range(3):
+        d = str(start + timedelta(days=i))
+        await upsert_plan(conn, d)
+        await upsert_tasks(conn, d, ANCHOR_ID, tasks=[f"Task day {i}"], notes="")
+
+    # If the route still calls get_plan() individually, this patch raises and the test fails.
+    # After the fix, get_plans_for_range is called instead, and get_plan is never invoked.
+    with patch("api.routes.plan.get_plan", side_effect=AssertionError("get_plan called — N+1 not fixed")):
+        resp = await api_client.get(f"/api/plan/range?start={start}&end={end}")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    for i in range(3):
+        d = str(start + timedelta(days=i))
+        assert d in data, f"Date {d} missing from range response"
+        assert ANCHOR_ID in data[d]["anchors"]
