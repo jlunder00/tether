@@ -66,10 +66,6 @@ async def bot_chat(websocket: WebSocket,
     - WebSocketDisconnect (client gone) cancels the running session_task
       and awaits it before returning (prevents orphaned LLM calls).
 
-    Dependency note: full status_fn threading into the premium session requires
-    bot-backend's PR (session.py + return-type changes). Until merged,
-    status_fn is accepted but silently ignored by handle_message, and chunk
-    content will be empty (handle_message returns None).
     """
     await websocket.accept()
     pool = websocket.app.state.pool

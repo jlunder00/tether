@@ -35,7 +35,6 @@ from db.pg_queries import (
     upsert_tasks,
     clear_session_state,
     insert_orchestrator_turn,
-    get_orchestrator_conversation,
     link_milestone_task,
     patch_milestone,
     init_followup_state,
