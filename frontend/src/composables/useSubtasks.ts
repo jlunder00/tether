@@ -13,7 +13,7 @@ export function useSubtasks(taskId: () => string) {
   const subtasks = ref<Subtask[]>([])
   const loading = ref(false)
 
-  async function fetch() {
+  async function load() {
     loading.value = true
     const resp = await api(`/api/tasks/${taskId()}/subtasks`)
     subtasks.value = resp.ok ? await resp.json() : []
@@ -27,7 +27,7 @@ export function useSubtasks(taskId: () => string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, position }),
     })
-    if (resp.ok) await fetch()
+    if (resp.ok) await load()
   }
 
   async function update(id: number, fields: Partial<Subtask>) {
@@ -36,14 +36,14 @@ export function useSubtasks(taskId: () => string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     })
-    await fetch()
+    await load()
   }
 
   async function remove(id: number) {
     await api(`/api/tasks/${taskId()}/subtasks/${id}`, {
       method: 'DELETE',
     })
-    await fetch()
+    await load()
   }
 
   async function reorder(idOrder: number[]) {
@@ -52,10 +52,10 @@ export function useSubtasks(taskId: () => string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id_order: idOrder }),
     })
-    await fetch()
+    await load()
   }
 
-  watch(taskId, () => fetch(), { immediate: true })
+  watch(taskId, () => load(), { immediate: true })
 
-  return { subtasks, loading, fetch, create, update, remove, reorder }
+  return { subtasks, loading, load, create, update, remove, reorder }
 }

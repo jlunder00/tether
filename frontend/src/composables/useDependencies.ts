@@ -16,7 +16,7 @@ export interface Dependencies {
 export function useDependencies(entityType: () => string, entityId: () => string) {
   const deps = ref<Dependencies>({ blocks: [], blocked_by: [] })
 
-  async function fetch() {
+  async function load() {
     const resp = await api(`/api/${entityType()}/${entityId()}/dependencies`)
     deps.value = resp.ok ? await resp.json() : { blocks: [], blocked_by: [] }
   }
@@ -27,15 +27,15 @@ export function useDependencies(entityType: () => string, entityId: () => string
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ blocker_type: blockerType, blocker_id: blockerId, blocked_type: blockedType, blocked_id: blockedId }),
     })
-    await fetch()
+    await load()
   }
 
   async function remove(depId: number) {
     await api(`/api/dependencies/${depId}`, { method: 'DELETE' })
-    await fetch()
+    await load()
   }
 
-  watch([entityType, entityId], () => fetch(), { immediate: true })
+  watch([entityType, entityId], () => load(), { immediate: true })
 
-  return { deps, fetch, add, remove }
+  return { deps, load, add, remove }
 }

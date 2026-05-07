@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { FollowupConfig } from './anchors'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/dateUtils'
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
 
@@ -38,11 +39,6 @@ export interface DayPlan {
   acknowledgements: Record<string, string>
   check_in_log: unknown[]
 }
-
-function localDateString(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 
 export const usePlanStore = defineStore('plan', () => {
   const plan = ref<DayPlan | null>(null)

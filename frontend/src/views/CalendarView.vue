@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { localDateString } from '../lib/dateUtils'
 import { useDragEdgeScroll } from '../composables/useDragEdgeScroll'
 import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
@@ -198,10 +199,6 @@ onUnmounted(() => {
 })
 
 // ─── Week date range ──────────────────────────────────────────
-function localDateString(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 function getWeekStart(d: Date): Date {
   const result = new Date(d)
   result.setDate(result.getDate() - result.getDay()) // Sunday start

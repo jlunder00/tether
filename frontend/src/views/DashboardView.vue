@@ -8,17 +8,13 @@ import { useEventStore } from '../stores/events'
 import TaskCard from '../components/TaskCard.vue'
 import AnchorFocusWidget from '../components/AnchorFocusWidget.vue'
 import { textOnColor } from '../composables/useTextOnColor'
+import { localToday } from '../lib/dateUtils'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
 const eventStore = useEventStore()
 const botStatus = ref('unknown')
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 onMounted(async () => {
   planStore.fetchPlan()

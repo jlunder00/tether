@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 export function useTaskContexts(taskId: () => string) {
   const contexts = ref<string[]>([])
 
-  async function fetch() {
+  async function load() {
     const resp = await api(`/api/tasks/${taskId()}/contexts`)
     // API returns [] or [subject] (single-context model)
     contexts.value = resp.ok ? await resp.json() : []
@@ -17,7 +17,7 @@ export function useTaskContexts(taskId: () => string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject }),
     })
-    await fetch()
+    await load()
   }
 
   async function unlink(subject: string) {
@@ -25,10 +25,10 @@ export function useTaskContexts(taskId: () => string) {
     await api(`/api/tasks/${taskId()}/contexts/${encodeURIComponent(subject)}`, {
       method: 'DELETE',
     })
-    await fetch()
+    await load()
   }
 
-  watch(taskId, () => fetch(), { immediate: true })
+  watch(taskId, () => load(), { immediate: true })
 
-  return { contexts, fetch, link, unlink }
+  return { contexts, load, link, unlink }
 }

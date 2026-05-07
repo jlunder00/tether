@@ -24,7 +24,7 @@ export const THEMES: ThemeDef[] = [
   { id: 'paper',    name: 'Paper',         tier: 'paid-oss', canvas: '#FAFAF7', accent: '#1C1C1A' },
 ]
 
-const VOICE: Record<string, TypeVoice> = {
+export const VOICE: Record<string, TypeVoice> = {
   tether: 'sharp', horizon: 'editorial', contrast: 'sharp',
   terminal: 'terminal', solstice: 'sharp', dracula: 'terminal', paper: 'editorial',
 }

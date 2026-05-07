@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, watch, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { offsetDate } from '../lib/dateUtils'
 import { usePlanStore } from '../stores/plan'
 import { useAnchorStore, computeAnchorStates } from '../stores/anchors'
 import { useMilestoneStore } from '../stores/milestones'
@@ -78,15 +79,6 @@ function onDocumentClick(e: MouseEvent) {
   }
 }
 
-
-function offsetDate(base: string, days: number): string {
-  const d = new Date(base + 'T12:00:00')
-  d.setDate(d.getDate() + days)
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
 
 function goToDate(date: string) {
   router.push(`/plan/${props.view}/${date}`)
