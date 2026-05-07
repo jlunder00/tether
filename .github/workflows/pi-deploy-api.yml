@@ -1,127 +1,28 @@
-name: "[Pi] Deploy API"
+name: "[Pi] Restart API service"
+
+# Triggered by pi-build.yml after a successful image build.
+# Just restarts the API container with the image tag written to .env.
+# Frontend static files are baked into the same image, so this also
+# serves any frontend changes.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'api/**'
-      - 'db/**'
-      - 'config/**'
-      - 'Dockerfile'
-      - 'requirements.txt'
-      - 'pyproject.toml'
   workflow_dispatch:
-    inputs:
-      no_cache:
-        description: "Force --no-cache build"
-        required: false
-        default: "false"
-        type: choice
-        options: ["false", "true"]
 
 permissions:
   contents: read
 
 concurrency:
   group: pi-deploy-api
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  deploy-api:
-    name: Build and deploy API service
+  restart-api:
+    name: Restart API service
     runs-on: self-hosted
     steps:
-      - name: Pull latest code
+      - name: Restart API with current image
         run: |
           cd /home/toast/tether
-          git pull origin main
-
-      - name: Resolve version tag
-        id: version
-        run: |
-          SHA_TAG="sha-$(echo ${GITHUB_SHA} | cut -c1-7)"
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            SEMVER="${GITHUB_REF#refs/tags/}"
-            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Resolve premium ref
-        id: premium
-        env:
-          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
-        run: |
-          REF=$(git ls-remote \
-            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
-            HEAD | cut -f1 | cut -c1-7)
-          if [ -z "$REF" ]; then
-            echo "ERROR: Failed to resolve tether-premium HEAD ref" >&2
-            exit 1
-          fi
-          echo "ref=${REF}" >> $GITHUB_OUTPUT
-
-      - name: Build API image
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-          PREMIUM_REF: ${{ steps.premium.outputs.ref }}
-          NO_CACHE: ${{ github.event.inputs.no_cache }}
-          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
-        run: |
-          cd /home/toast/tether
-          BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
-          make ${BUILD_TARGET} \
-            IMAGE=tether-premium \
-            TAG=${TAG} \
-            PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
-            PREMIUM_REF=${PREMIUM_REF}
-          docker tag tether-premium:${TAG} tether-premium:latest
-          grep -q "^IMAGE_TAG=" /home/toast/tether/.env \
-            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
-            || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
-
-      - name: Write production config
-        env:
-          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
-          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
-          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL }}
-          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL }}
-          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
-          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
-          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL }}
-          TETHER_VAULT_KEY: ${{ secrets.TETHER_VAULT_KEY }}
-        run: |
-          cd /home/toast/tether
-          make configure-auth \
-            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
-            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
-            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
-          make configure-google \
-            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
-            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
-            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
-            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
-          make configure-github \
-            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
-            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
-            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
-          make configure-vault \
-            TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
-
-      - name: Restart API service
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          cd /home/toast/tether
-          TETHER_IMAGE=tether-premium IMAGE_TAG=${TAG} \
+          TAG=$(grep "^IMAGE_TAG=" .env 2>/dev/null | cut -d= -f2)
+          TETHER_IMAGE=tether-premium IMAGE_TAG="${TAG:-latest}" \
             docker compose up -d --no-deps api
-
-  prune:
-    name: Prune old images
-    needs: deploy-api
-    uses: ./.github/workflows/pi-prune-images.yml
-    with:
-      keep: 3

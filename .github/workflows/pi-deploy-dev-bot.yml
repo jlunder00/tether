@@ -1,0 +1,30 @@
+name: "[Pi] Restart dev bot service"
+
+# Triggered by pi-build-dev.yml after a successful image build.
+# Just restarts the dev bot container with the image tag written to .env.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pi-deploy-dev-bot
+  cancel-in-progress: true
+
+jobs:
+  restart-dev-bot:
+    name: Restart dev bot service
+    runs-on: self-hosted
+    steps:
+      - name: Restart dev bot with current image
+        run: |
+          cd /home/toast/tether-dev
+          TAG=$(grep "^IMAGE_TAG=" .env 2>/dev/null | cut -d= -f2)
+          TETHER_IMAGE=tether-premium-dev IMAGE_TAG="${TAG:-latest}" \
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.dev.yml \
+              -p tether-dev \
+              up -d --no-deps bot

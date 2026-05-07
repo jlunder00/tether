@@ -1,0 +1,257 @@
+name: "[Pi] Build dev image"
+
+# Builds the tether-premium-dev image on push to dev, then dispatches
+# per-service restart workflows for each affected service.
+#
+# Separate from pi-build.yml (pi-build-dev concurrency group) so dev
+# and production builds never compete for the pending slot.
+
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - 'docs/**'
+      - 'tests/**'
+      - '**/*.md'
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Comma-separated services to restart (api,bot,mcp)"
+        required: false
+        default: "bot"
+      no_cache:
+        description: "Force --no-cache build"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: pi-build-dev
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.resolve.outputs.api }}
+      bot: ${{ steps.resolve.outputs.bot }}
+      mcp: ${{ steps.resolve.outputs.mcp }}
+      any: ${{ steps.resolve.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 2
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            api:
+              - 'api/**'
+              - 'db/**'
+              - 'frontend/**'
+              - 'config/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+            bot:
+              - 'bot/**'
+              - 'config/**'
+              - 'prompts/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+            mcp:
+              - 'tether_mcp/**'
+              - 'config/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+
+      - name: Resolve services
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          SERVICES_INPUT: ${{ inputs.services }}
+          FILTER_API: ${{ steps.filter.outputs.api }}
+          FILTER_BOT: ${{ steps.filter.outputs.bot }}
+          FILTER_MCP: ${{ steps.filter.outputs.mcp }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            contains() { echo ",$SERVICES_INPUT," | grep -q ",$1,"; }
+            API=$(contains api && echo true || echo false)
+            BOT=$(contains bot && echo true || echo false)
+            MCP=$(contains mcp && echo true || echo false)
+          else
+            API="${FILTER_API:-false}"
+            BOT="${FILTER_BOT:-false}"
+            MCP="${FILTER_MCP:-false}"
+          fi
+          echo "api=$API" >> $GITHUB_OUTPUT
+          echo "bot=$BOT" >> $GITHUB_OUTPUT
+          echo "mcp=$MCP" >> $GITHUB_OUTPUT
+          if [ "$API" = "true" ] || [ "$BOT" = "true" ] || [ "$MCP" = "true" ]; then
+            echo "any=true" >> $GITHUB_OUTPUT
+          else
+            echo "any=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build tether-premium-dev image
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: self-hosted
+    env:
+      DEV_DIR: /home/toast/tether-dev
+      TETHER_CONFIG_DIR: /home/toast/.tether-config-dev
+      TETHER_DATA_DIR: /home/toast/.tether-config-dev
+    steps:
+      - name: Ensure dev repo is present
+        run: |
+          if [ ! -d "$DEV_DIR" ]; then
+            git clone git@github.com:jlunder00/tether.git \
+              "$DEV_DIR" --branch dev --single-branch
+          else
+            cd "$DEV_DIR"
+            git fetch origin dev
+            git checkout dev
+            git pull origin dev
+          fi
+
+      - name: Resolve version tag
+        id: version
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          echo "tag=sha-$(echo "$GIT_SHA" | cut -c1-7)-dev" >> $GITHUB_OUTPUT
+
+      - name: Resolve premium ref
+        id: premium
+        env:
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          # Try dev branch first, fall back to HEAD
+          REF=$(git ls-remote \
+            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+            refs/heads/dev 2>/dev/null | cut -f1 | cut -c1-7)
+          if [ -z "$REF" ]; then
+            REF=$(git ls-remote \
+              "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+              HEAD | cut -f1 | cut -c1-7)
+          fi
+          if [ -z "$REF" ]; then
+            echo "ERROR: Failed to resolve tether-premium ref" >&2
+            exit 1
+          fi
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+
+      - name: Build dev image
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREMIUM_REF: ${{ steps.premium.outputs.ref }}
+          NO_CACHE: ${{ inputs.no_cache || 'false' }}
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          cd "$DEV_DIR"
+          BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
+          make ${BUILD_TARGET} \
+            IMAGE=tether-premium-dev \
+            TAG=${TAG} \
+            PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
+            PREMIUM_REF=${PREMIUM_REF}
+          docker tag tether-premium-dev:${TAG} tether-premium-dev:latest
+          grep -q "^IMAGE_TAG=" "$DEV_DIR/.env" 2>/dev/null \
+            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" "$DEV_DIR/.env" \
+            || echo "IMAGE_TAG=${TAG}" >> "$DEV_DIR/.env"
+
+      - name: Write dev config
+        env:
+          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
+          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS_DEV }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL_DEV }}
+          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL_DEV }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL_DEV }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_DEV }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID_DEV }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TETHER_APP_PASSWORD: ${{ secrets.TETHER_APP_PASSWORD }}
+          TETHER_VAULT_KEY: ${{ secrets.TETHER_VAULT_KEY_DEV }}
+        run: |
+          cd "$DEV_DIR"
+          make configure-auth \
+            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
+            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
+            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
+          make configure-google \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
+            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
+          make configure-github \
+            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
+            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
+            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
+          make configure-telegram \
+            TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+          make configure-db \
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
+          make configure-vault \
+            TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
+
+  dispatch-api:
+    name: Dispatch dev API restart
+    needs: [detect, build]
+    if: needs.detect.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-dev-api.yml --repo ${{ github.repository }} --ref dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dispatch-bot:
+    name: Dispatch dev bot restart
+    needs: [detect, build]
+    if: needs.detect.outputs.bot == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-dev-bot.yml --repo ${{ github.repository }} --ref dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dispatch-mcp:
+    name: Dispatch dev MCP restart
+    needs: [detect, build]
+    if: needs.detect.outputs.mcp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-dev-mcp.yml --repo ${{ github.repository }} --ref dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  prune:
+    name: Prune old dev images
+    needs: build
+    runs-on: self-hosted
+    steps:
+      - name: Remove old tether-premium-dev images
+        run: |
+          docker images tether-premium-dev --format "{{.ID}}" \
+            | awk '!seen[$0]++' \
+            | tail -n +4 \
+            | xargs -r docker rmi --force 2>/dev/null || true
+          docker image prune -f

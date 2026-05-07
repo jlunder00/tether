@@ -1,0 +1,271 @@
+name: "[Pi] Build image"
+
+# Builds the tether-premium image on push to main, then dispatches
+# per-service restart workflows for each affected service.
+#
+# Concurrency semantics (cancel-in-progress: false):
+#   - The running build is never cancelled mid-flight.
+#   - Only ONE pending slot exists per group. If a third push arrives
+#     while A is running and B is pending, B is discarded and C takes
+#     the pending slot. Result: A completes, then C runs — intermediates
+#     are automatically skipped.
+#
+# Dev builds use pi-build-dev.yml with the separate pi-build-dev group.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'tests/**'
+      - '**/*.md'
+      - 'config/envs/prod/**'
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Comma-separated services to restart (api,bot,mcp,sync)"
+        required: false
+        default: "bot"
+      no_cache:
+        description: "Force --no-cache build"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: pi-build
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect changed services
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.resolve.outputs.api }}
+      bot: ${{ steps.resolve.outputs.bot }}
+      mcp: ${{ steps.resolve.outputs.mcp }}
+      sync: ${{ steps.resolve.outputs.sync }}
+      any: ${{ steps.resolve.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push'
+        with:
+          fetch-depth: 2
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            api:
+              - 'api/**'
+              - 'db/**'
+              - 'frontend/**'
+              - 'config/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+            bot:
+              - 'bot/**'
+              - 'config/**'
+              - 'prompts/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+            mcp:
+              - 'tether_mcp/**'
+              - 'config/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+            sync:
+              - 'sync/**'
+              - 'integrations/**'
+              - 'db/**'
+              - 'config/**'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+
+      - name: Resolve services
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          SERVICES_INPUT: ${{ inputs.services }}
+          FILTER_API: ${{ steps.filter.outputs.api }}
+          FILTER_BOT: ${{ steps.filter.outputs.bot }}
+          FILTER_MCP: ${{ steps.filter.outputs.mcp }}
+          FILTER_SYNC: ${{ steps.filter.outputs.sync }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            contains() { echo ",$SERVICES_INPUT," | grep -q ",$1,"; }
+            API=$(contains api && echo true || echo false)
+            BOT=$(contains bot && echo true || echo false)
+            MCP=$(contains mcp && echo true || echo false)
+            SYNC=$(contains sync && echo true || echo false)
+          else
+            API="${FILTER_API:-false}"
+            BOT="${FILTER_BOT:-false}"
+            MCP="${FILTER_MCP:-false}"
+            SYNC="${FILTER_SYNC:-false}"
+          fi
+          echo "api=$API" >> $GITHUB_OUTPUT
+          echo "bot=$BOT" >> $GITHUB_OUTPUT
+          echo "mcp=$MCP" >> $GITHUB_OUTPUT
+          echo "sync=$SYNC" >> $GITHUB_OUTPUT
+          if [ "$API" = "true" ] || [ "$BOT" = "true" ] || [ "$MCP" = "true" ] || [ "$SYNC" = "true" ]; then
+            echo "any=true" >> $GITHUB_OUTPUT
+          else
+            echo "any=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build tether-premium image
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: self-hosted
+    steps:
+      - name: Pull latest code
+        run: |
+          cd /home/toast/tether
+          git pull origin main
+
+      - name: Resolve version tag
+        id: version
+        env:
+          GIT_SHA: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+        run: |
+          SHA_TAG="sha-$(echo "$GIT_SHA" | cut -c1-7)"
+          if [[ "$GIT_REF" == refs/tags/v* ]]; then
+            SEMVER="${GIT_REF#refs/tags/}"
+            echo "tag=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${SHA_TAG}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Resolve premium ref
+        id: premium
+        env:
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          REF=$(git ls-remote \
+            "https://${TETHER_PREMIUM_TOKEN}@github.com/jlunder00/tether-premium.git" \
+            HEAD | cut -f1 | cut -c1-7)
+          if [ -z "$REF" ]; then
+            echo "ERROR: Failed to resolve tether-premium ref" >&2
+            exit 1
+          fi
+          echo "ref=${REF}" >> $GITHUB_OUTPUT
+
+      - name: Build image
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREMIUM_REF: ${{ steps.premium.outputs.ref }}
+          NO_CACHE: ${{ inputs.no_cache || 'false' }}
+          TETHER_PREMIUM_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+        run: |
+          cd /home/toast/tether
+          BUILD_TARGET=$( [ "$NO_CACHE" = "true" ] && echo build-premium-no-cache || echo build-premium )
+          make ${BUILD_TARGET} \
+            IMAGE=tether-premium \
+            TAG=${TAG} \
+            PREMIUM_GIT_TOKEN=${TETHER_PREMIUM_TOKEN} \
+            PREMIUM_REF=${PREMIUM_REF}
+          docker tag tether-premium:${TAG} tether-premium:latest
+          grep -q "^IMAGE_TAG=" /home/toast/tether/.env \
+            && sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${TAG}/" /home/toast/tether/.env \
+            || echo "IMAGE_TAG=${TAG}" >> /home/toast/tether/.env
+
+      - name: Write production config
+        env:
+          TETHER_JWT_SECRET: ${{ secrets.TETHER_JWT_SECRET }}
+          TETHER_COOKIE_SECURE: ${{ secrets.TETHER_COOKIE_SECURE }}
+          TETHER_ALLOWED_ORIGINS: ${{ secrets.TETHER_ALLOWED_ORIGINS }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_CALLBACK_URL: ${{ secrets.GOOGLE_CALLBACK_URL }}
+          GOOGLE_INTEGRATION_CALLBACK_URL: ${{ secrets.GOOGLE_INTEGRATION_CALLBACK_URL }}
+          GH_CLIENT_ID: ${{ secrets.GH_CLIENT_ID }}
+          GH_CLIENT_SECRET: ${{ secrets.GH_CLIENT_SECRET }}
+          GH_CALLBACK_URL: ${{ secrets.GH_CALLBACK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TETHER_APP_PASSWORD: ${{ secrets.TETHER_APP_PASSWORD }}
+          TETHER_VAULT_KEY: ${{ secrets.TETHER_VAULT_KEY }}
+        run: |
+          cd /home/toast/tether
+          make configure-auth \
+            TETHER_JWT_SECRET="$TETHER_JWT_SECRET" \
+            TETHER_COOKIE_SECURE="$TETHER_COOKIE_SECURE" \
+            TETHER_ALLOWED_ORIGINS="$TETHER_ALLOWED_ORIGINS"
+          make configure-google \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            GOOGLE_CALLBACK_URL="$GOOGLE_CALLBACK_URL" \
+            GOOGLE_INTEGRATION_CALLBACK_URL="$GOOGLE_INTEGRATION_CALLBACK_URL"
+          make configure-github \
+            GITHUB_CLIENT_ID="$GH_CLIENT_ID" \
+            GITHUB_CLIENT_SECRET="$GH_CLIENT_SECRET" \
+            GITHUB_CALLBACK_URL="$GH_CALLBACK_URL"
+          make configure-telegram \
+            TELEGRAM_BOT_TOKEN="$TELEGRAM_BOT_TOKEN" \
+            TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+          make configure-db \
+            POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
+          make configure-vault \
+            TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
+
+  dispatch-api:
+    name: Dispatch API restart
+    needs: [detect, build]
+    if: needs.detect.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-api.yml --repo ${{ github.repository }} --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dispatch-bot:
+    name: Dispatch bot restart
+    needs: [detect, build]
+    if: needs.detect.outputs.bot == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-bot.yml --repo ${{ github.repository }} --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dispatch-mcp:
+    name: Dispatch MCP restart
+    needs: [detect, build]
+    if: needs.detect.outputs.mcp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-mcp.yml --repo ${{ github.repository }} --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dispatch-sync:
+    name: Dispatch sync restart
+    needs: [detect, build]
+    if: needs.detect.outputs.sync == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh workflow run pi-deploy-sync.yml --repo ${{ github.repository }} --ref main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  prune:
+    name: Prune old images
+    needs: build
+    uses: ./.github/workflows/pi-prune-images.yml
+    with:
+      keep: 3
