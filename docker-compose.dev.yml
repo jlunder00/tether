@@ -26,11 +26,11 @@ services:
       - pgdata-dev:/var/lib/postgresql/data
 
   api:
-    ports:
+    ports: !reset
       - "8001:8000"
 
   mcp:
-    ports:
+    ports: !reset
       - "5002:5001"
 
 volumes:
