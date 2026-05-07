@@ -1,7 +1,5 @@
-// Event entity — mirrors the planned DB schema.
-// Backend endpoints (GET/POST/PATCH /api/events) are not yet implemented;
-// the store uses fixture data until the backend ships.
-// Assumed API contract:
+// Event entity — mirrors the backend CalendarEvent schema.
+// API contract:
 //   GET  /api/events?start=ISO&end=ISO  → CalendarEvent[]
 //   POST /api/events                    → CalendarEvent  (promote task to event)
 //   PATCH /api/events/:id               → CalendarEvent

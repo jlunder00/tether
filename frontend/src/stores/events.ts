@@ -29,7 +29,7 @@ export const useEventStore = defineStore('events', () => {
 
   /**
    * Promote a task to a calendar event (sets start/end time).
-   * POST /api/events — not yet implemented; returns a local optimistic event.
+   * POST /api/events — creates a calendar event with the given time range.
    */
   async function promoteTask(taskId: string, startTime: string, endTime: string, title: string): Promise<CalendarEvent | null> {
     try {
