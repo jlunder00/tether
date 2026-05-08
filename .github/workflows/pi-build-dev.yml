@@ -113,6 +113,10 @@ jobs:
       DEV_DIR: /home/toast/tether-dev
       TETHER_CONFIG_DIR: /home/toast/.tether-config-dev
       TETHER_DATA_DIR: /home/toast/.tether-config-dev
+      # configure.py reads TETHER_COMPOSE_DIR to know where to write .env.
+      # Without this, it defaults to ~/tether (production), so POSTGRES_PASSWORD
+      # and TETHER_APP_PASSWORD would never land in the dev stack's .env.
+      TETHER_COMPOSE_DIR: /home/toast/tether-dev
     steps:
       - name: Ensure dev repo is present
         run: |
@@ -210,6 +214,18 @@ jobs:
           make configure-db \
             POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
             TETHER_APP_PASSWORD="$TETHER_APP_PASSWORD"
+          # Sync tether_app password directly against the dev postgres container
+          # (if it is running). make configure-db also attempts this but uses a
+          # plain `docker compose` call without the dev project flags, so it
+          # targets the wrong container. This explicit call uses the correct
+          # project name and overlay file.
+          docker compose \
+            -f "${DEV_DIR}/docker-compose.yml" \
+            -f "${DEV_DIR}/docker-compose.dev.yml" \
+            -p tether-dev \
+            exec -T postgres psql -U tether \
+            -c "ALTER ROLE tether_app WITH PASSWORD '${TETHER_APP_PASSWORD}';" \
+            2>/dev/null || true
           make configure-vault \
             TETHER_VAULT_KEY="$TETHER_VAULT_KEY"
 
