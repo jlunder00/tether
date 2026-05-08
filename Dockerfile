@@ -63,6 +63,7 @@ COPY config/ config/
 COPY prompts/ prompts/
 COPY cron/ cron/
 COPY scripts/ scripts/
+COPY alembic.ini ./
 
 # Install local package (deps already satisfied — no external downloads)
 RUN pip install --no-cache-dir --no-deps .
