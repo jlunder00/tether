@@ -48,7 +48,7 @@ RUN mkdir -p /run/tether/creds \
 WORKDIR /app
 
 # External dependencies (cached layer — only reruns when requirements.txt changes)
-COPY requirements.txt pyproject.toml ./
+COPY requirements.txt pyproject.toml alembic.ini ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Process manager for multi-service Fly.io deployments.
