@@ -51,6 +51,11 @@ WORKDIR /app
 COPY requirements.txt pyproject.toml ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Process manager for multi-service Fly.io deployments.
+# supervisor is intentionally not in requirements.txt — it's infrastructure,
+# not an application dependency, and shouldn't affect the dev/test environment.
+RUN pip install --no-cache-dir supervisor
+
 # Application code
 COPY api/ api/
 COPY bot/ bot/
@@ -66,6 +71,9 @@ COPY scripts/ scripts/
 
 # Install local package (deps already satisfied — no external downloads)
 RUN pip install --no-cache-dir --no-deps .
+
+# supervisord config — copied late so it doesn't bust the dependency cache
+COPY supervisord.conf .
 
 # Frontend build artifacts
 COPY --from=frontend-build /build/dist/ frontend/dist/
@@ -90,5 +98,6 @@ RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
 # Default port for API
 EXPOSE 8000
 
-# Default CMD — overridden per service in docker-compose.yml
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default CMD — runs all services via supervisord on Fly.io.
+# Overridden per service in docker-compose.yml for Pi deployments.
+CMD ["supervisord", "-c", "/app/supervisord.conf"]

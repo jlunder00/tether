@@ -1,0 +1,55 @@
+name: "Deploy to Fly.io"
+
+# Deploys to Fly.io on pushes to main (prod) or dev (dev).
+# Fly handles the remote image build — no self-hosted runner needed.
+#
+# Separate from Pi deploy workflows (pi-build.yml, pi-build-dev.yml)
+# which manage the local Docker image build and service restarts on the Pi.
+#
+# Required secret: FLY_API_TOKEN (personal access token — works for both apps)
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'api/**'
+      - 'bot/**'
+      - 'tether_mcp/**'
+      - 'db/**'
+      - 'shared/**'
+      - 'prompts/**'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'supervisord.conf'
+      - 'fly.toml'
+      - 'fly.dev.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-prod:
+    name: Deploy prod (tether-prod)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to tether-prod
+        run: flyctl deploy --config fly.toml --remote-only --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+
+  deploy-dev:
+    name: Deploy dev (tether-dev)
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to tether-dev
+        run: flyctl deploy --config fly.dev.toml --remote-only --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
