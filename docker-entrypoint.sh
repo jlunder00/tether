@@ -1,34 +1,33 @@
 #!/bin/bash
 # docker-entrypoint.sh
-# Downloads tether config files from a remote source before starting the app.
+# Optionally downloads tether config override files from a remote source
+# before starting the app.
 #
-# HOW IT FITS THE CONFIG SYSTEM
-# ─────────────────────────────
-# config/loader.py resolves in this order (later wins):
+# HOW THIS FITS THE CONFIG SYSTEM
+# ────────────────────────────────
+# config/loader.py (TetherConfig) resolves in order (later wins):
 #   1. Baked-in defaults   — config/*.yaml baked into the image
-#   2. Local override      — ~/.tether-config/*.yaml  ← this script writes these
+#   2. Local override      — TETHER_CONFIG_DIR/*.yaml  ← this script writes these
 #   3. Placeholder resolve — ${VAR} / ${VAR:-default} expanded from env vars
 #
-# The gist holds two files that become the local override layer:
+# The baked-in defaults + Fly secrets are sufficient to boot. The gist provides
+# the LOCAL OVERRIDE layer — use it to change non-secret values (CORS origins,
+# OAuth callback URLs, model assignments, feature flags) without a redeploy.
 #
-#   auth_config.yaml  — secrets layer: use ${VAR} for truly secret values
-#                       (JWT secret, vault key, OAuth client secrets, Telegram token)
-#                       use literal values for non-secret auth config
-#                       (CORS origins, callback URLs, OAuth client IDs, enabled flags)
+# WHAT TO PUT IN THE GIST
+# ────────────────────────
+# auth_config.yaml — literal values for non-secret auth config:
+#   cors.allowed_origins, oauth.*.callback_url, oauth.*.client_id,
+#   oauth.*.enabled, cookie.secure
+#   (Leave jwt.secret, vault.key, client_secrets as ${VAR} — resolved from
+#   Fly secrets by TetherConfig; no need to put them in the gist at all)
 #
-#   app_config.yaml   — per-env overrides: all literal values, no secrets
-#                       (model assignments, feature flags, pipeline settings)
-#                       omit a key to inherit the baked-in default
+# app_config.yaml  — literal values for per-env app config:
+#   model assignments, feature flags, llm settings, pipeline tuning
+#   (Omit a key to inherit the baked-in default)
 #
-# The TetherConfig loader handles ${VAR} resolution itself — do NOT run
-# envsubst on auth_config.yaml or app_config.yaml.
-#
-# TEMPORARY: config.yaml
-# ─────────────────────
-# bot/message_handler.py has its own load_config() that reads config.yaml
-# raw (no placeholder resolution). Until that is updated to use TetherConfig,
-# config.yaml must also be in the gist and envsubst is run on it here.
-# See: https://github.com/jlunder00/tether/issues/TODO (bot-backend task)
+# No secrets should appear literally in either file. TetherConfig resolves
+# ${VAR} placeholders from environment variables (Fly secrets) itself.
 #
 # SOURCE DETECTION (URL scheme)
 # ─────────────────────────────
@@ -37,30 +36,27 @@
 #
 # TO MIGRATE FROM GIST → S3
 # ──────────────────────────
-#   1. Copy *.yaml files (with ${VAR} placeholders intact) to s3://bucket/prefix/
+#   1. Copy *.yaml files to s3://bucket/prefix/
 #   2. Change CONFIG_SOURCE_URL to s3://bucket/prefix
-#   3. Remove CONFIG_SOURCE_TOKEN; add AWS credentials as Fly secrets if needed
+#   3. Remove CONFIG_SOURCE_TOKEN; add AWS creds as Fly secrets if needed
 #   4. Add awscli to the Dockerfile RUN apt-get line
 #   No changes to this script required.
 #
-# REQUIRED ENV VARS
-# ─────────────────
+# ENV VARS
+# ────────
 #   CONFIG_SOURCE_URL    Base URL / S3 prefix (file names appended with /)
 #                        Gist: https://gist.githubusercontent.com/USER/GIST_ID/raw
 #                        S3:   s3://bucket/tether/prod
-#
-# OPTIONAL ENV VARS
-#   CONFIG_SOURCE_TOKEN  Auth token for private sources (GitHub PAT, gist scope).
-#   TETHER_CONFIG_DIR    Config directory override (default: /root/.tether-config).
+#                        Unset: skip download, boot from baked-in defaults + Fly secrets
+#   CONFIG_SOURCE_TOKEN  Auth token for private gists (GitHub PAT, gist scope).
+#   TETHER_CONFIG_DIR    Config directory (default: /root/.tether-config).
 
 set -euo pipefail
 
 CONFIG_DIR="${TETHER_CONFIG_DIR:-/root/.tether-config}"
 mkdir -p "$CONFIG_DIR"
 
-# ── Download helpers ──────────────────────────────────────────────────────────
-
-_fetch_to_stdout() {
+_fetch() {
     local url="$1"
     case "$url" in
         s3://*)
@@ -82,47 +78,23 @@ _fetch_to_stdout() {
 
 _download() {
     local name="$1"
-    local run_envsubst="${2:-false}"
-    local url="${CONFIG_SOURCE_URL%/}/$name"
     local dest="$CONFIG_DIR/$name"
+    local url="${CONFIG_SOURCE_URL%/}/$name"
 
-    if [ "$run_envsubst" = "true" ]; then
-        # Resolve ${VAR} placeholders for callers that do raw yaml.safe_load
-        # (no ${VAR:-default} support — those are left for TetherConfig).
-        if _fetch_to_stdout "$url" | envsubst > "$dest"; then
-            echo "[entrypoint] downloaded + resolved $name → $dest"
-        else
-            echo "[entrypoint] WARN: could not fetch $name" >&2
-            return 1
-        fi
+    # TetherConfig resolves ${VAR} placeholders itself — write files as-is.
+    if _fetch "$url" > "$dest"; then
+        echo "[entrypoint] downloaded $name → $dest"
     else
-        # Leave ${VAR} / ${VAR:-default} intact — TetherConfig resolves them.
-        if _fetch_to_stdout "$url" > "$dest"; then
-            echo "[entrypoint] downloaded $name → $dest"
-        else
-            echo "[entrypoint] WARN: could not fetch $name" >&2
-            return 1
-        fi
+        echo "[entrypoint] WARN: could not fetch $name — using baked-in default" >&2
+        rm -f "$dest"
     fi
 }
 
-# ── Config download ───────────────────────────────────────────────────────────
-
 if [ -n "${CONFIG_SOURCE_URL:-}" ]; then
-
-    # TetherConfig layer — leave placeholders for the loader to resolve.
-    _download auth_config.yaml  || true
-    _download app_config.yaml   || true
-
-    # Bot backward-compat layer — bot/message_handler.py:load_config() reads
-    # this file raw (no placeholder resolution), so envsubst is applied here.
-    # Remove once the bot is updated to use TetherConfig.
-    _download config.yaml true  || true
-
+    _download auth_config.yaml
+    _download app_config.yaml
 else
-    echo "[entrypoint] WARN: CONFIG_SOURCE_URL not set — skipping remote config download" >&2
-    echo "[entrypoint]       API/MCP will use baked-in defaults only." >&2
-    echo "[entrypoint]       Bot will fail to start (requires telegram.bot_token)." >&2
+    echo "[entrypoint] CONFIG_SOURCE_URL not set — booting from baked-in defaults + env vars"
 fi
 
 exec "$@"
