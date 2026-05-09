@@ -36,9 +36,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to tether-prod
-        run: flyctl deploy --config fly.toml --remote-only
+        run: flyctl deploy --config fly.toml --remote-only --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
 
   deploy-dev:
     name: Deploy dev (tether-dev)
@@ -48,6 +49,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to tether-dev
-        run: flyctl deploy --config fly.dev.toml --remote-only
+        run: flyctl deploy --config fly.dev.toml --remote-only --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
