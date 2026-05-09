@@ -268,4 +268,4 @@ jobs:
     needs: build
     uses: ./.github/workflows/pi-prune-images.yml
     with:
-      keep: 3
+      keep: 1
