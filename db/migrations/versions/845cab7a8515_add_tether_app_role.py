@@ -34,7 +34,8 @@ def upgrade() -> None:
         $$
     """)
 
-    op.execute("GRANT CONNECT ON DATABASE tether TO tether_app")
+    db_name = op.get_bind().engine.url.database
+    op.execute(f'GRANT CONNECT ON DATABASE {db_name} TO tether_app')
     op.execute("GRANT USAGE ON SCHEMA public TO tether_app")
     op.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO tether_app")
     op.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO tether_app")
@@ -52,5 +53,6 @@ def downgrade() -> None:
     op.execute("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM tether_app")
     op.execute("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM tether_app")
     op.execute("REVOKE USAGE ON SCHEMA public FROM tether_app")
-    op.execute("REVOKE CONNECT ON DATABASE tether FROM tether_app")
+    db_name = op.get_bind().engine.url.database
+    op.execute(f'REVOKE CONNECT ON DATABASE {db_name} FROM tether_app')
     op.execute("DROP ROLE IF EXISTS tether_app")
