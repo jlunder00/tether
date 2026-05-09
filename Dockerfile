@@ -98,6 +98,14 @@ RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
 # Default port for API
 EXPOSE 8000
 
+# Entrypoint: downloads ~/.tether-config/{config,anchors}.yaml from a remote
+# source (gist or S3) before handing off to the CMD.  See docker-entrypoint.sh
+# for the URL scheme detection logic and S3 migration notes.
+# Pi deployments override ENTRYPOINT via docker-compose so this has no effect there.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
 # Default CMD — runs all services via supervisord on Fly.io.
 # Overridden per service in docker-compose.yml for Pi deployments.
 CMD ["supervisord", "-c", "/app/supervisord.conf"]
