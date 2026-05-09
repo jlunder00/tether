@@ -48,8 +48,13 @@ RUN mkdir -p /run/tether/creds \
 WORKDIR /app
 
 # External dependencies (cached layer — only reruns when requirements.txt changes)
-COPY requirements.txt pyproject.toml ./
+COPY requirements.txt pyproject.toml alembic.ini ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Process manager for multi-service Fly.io deployments.
+# supervisor is intentionally not in requirements.txt — it's infrastructure,
+# not an application dependency, and shouldn't affect the dev/test environment.
+RUN pip install --no-cache-dir supervisor
 
 # Application code
 COPY api/ api/
@@ -67,6 +72,9 @@ COPY alembic.ini ./
 
 # Install local package (deps already satisfied — no external downloads)
 RUN pip install --no-cache-dir --no-deps .
+
+# supervisord config — copied late so it doesn't bust the dependency cache
+COPY supervisord.conf .
 
 # Frontend build artifacts
 COPY --from=frontend-build /build/dist/ frontend/dist/
@@ -91,5 +99,14 @@ RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
 # Default port for API
 EXPOSE 8000
 
-# Default CMD — overridden per service in docker-compose.yml
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Entrypoint: downloads ~/.tether-config/{config,anchors}.yaml from a remote
+# source (gist or S3) before handing off to the CMD.  See docker-entrypoint.sh
+# for the URL scheme detection logic and S3 migration notes.
+# Pi deployments override ENTRYPOINT via docker-compose so this has no effect there.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+
+# Default CMD — runs all services via supervisord on Fly.io.
+# Overridden per service in docker-compose.yml for Pi deployments.
+CMD ["supervisord", "-c", "/app/supervisord.conf"]

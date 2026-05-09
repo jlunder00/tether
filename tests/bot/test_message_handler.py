@@ -140,7 +140,8 @@ async def test_call_claude_with_model_role_passes_model_to_sdk():
         yield msg
 
     with patch("claude_agent_sdk.query", side_effect=_fake_query), \
-         patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+         patch("bot.message_handler.tether_config") as mc:
+        mc.get.return_value = None  # force fallback to _MODEL_DEFAULTS
         await call_claude("test prompt", model_role="orchestrator")
 
     assert len(captured_opts) == 1
@@ -271,20 +272,30 @@ async def test_handle_message_stop_calls_premium_stop(monkeypatch):
 
 def test_get_model_returns_config_value_when_present():
     from bot.message_handler import get_model
-    with patch("bot.message_handler.load_config", return_value={"models": {"orchestrator": "custom-model"}}):
+    with patch("bot.message_handler.tether_config") as mc:
+        mc.get.return_value = "custom-model"
         assert get_model("orchestrator") == "custom-model"
 
 
 def test_get_model_falls_back_to_default_when_key_missing():
     from bot.message_handler import get_model, _MODEL_DEFAULTS
-    with patch("bot.message_handler.load_config", return_value={"models": {}}):
+    with patch("bot.message_handler.tether_config") as mc:
+        mc.get.return_value = None
         assert get_model("orchestrator") == _MODEL_DEFAULTS["orchestrator"]
 
 
 def test_get_model_falls_back_when_config_missing():
     from bot.message_handler import get_model, _MODEL_DEFAULTS
-    with patch("bot.message_handler.load_config", side_effect=FileNotFoundError):
+    with patch("bot.message_handler.tether_config") as mc:
+        mc.get.side_effect = Exception("config load error")
         assert get_model("meta_eval") == _MODEL_DEFAULTS["meta_eval"]
+
+
+def test_message_handler_uses_tether_config_singleton():
+    """message_handler.tether_config must be the same object as config.loader.config."""
+    import bot.message_handler as mh
+    from config.loader import config as singleton
+    assert mh.tether_config is singleton
 
 
 # ---------------------------------------------------------------------------

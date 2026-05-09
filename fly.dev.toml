@@ -1,0 +1,23 @@
+app = "tether-dev"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "alembic upgrade head"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # dev machine can fully sleep — no persistent bot polling needed
+  min_machines_running = 0
+
+[env]
+  PYTHON_ENV = "development"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

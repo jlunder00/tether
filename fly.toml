@@ -1,0 +1,27 @@
+app = "tether-prod"
+primary_region = "sjc"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  # Runs inside a temporary machine before traffic cuts over.
+  # Fly rolls back the deploy if this exits non-zero.
+  # Requires ADMIN_DATABASE_URL Fly secret (neondb_owner credentials).
+  release_command = "alembic upgrade head"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # bot long-polling requires a persistent connection — set to 0 once
+  # Telegram webhook mode ships (Phase 3b)
+  min_machines_running = 1
+
+[env]
+  PYTHON_ENV = "production"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
