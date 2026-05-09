@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Callable
 
 import requests
-import yaml
 from jinja2 import Environment, FileSystemLoader
+
+from config.loader import config as tether_config
 
 from bot.handler_utils import (
     get_current_anchor,
@@ -60,7 +61,6 @@ import db.pg_auth_queries as pg_auth_queries
 logger = logging.getLogger(__name__)
 
 _CONFIG_DIR = Path(os.environ.get("TETHER_CONFIG_DIR", Path.home() / ".tether-config"))
-_CONFIG_PATH = _CONFIG_DIR / "config.yaml"
 _OFFSET_PATH = _CONFIG_DIR / "telegram_offset"
 
 # pending link codes: code -> (chat_id, timestamp) — in-memory cache; authoritative copy is auth db
@@ -196,16 +196,10 @@ async def _fetch_requested_context(requests: list[dict], pool, user_id: str, rou
     return "\n\n".join(sections)
 
 
-def load_config() -> dict:
-    with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
-
-
 def get_model(role: str) -> str:
     """Return the model string for a pipeline role, reading from config with fallback."""
     try:
-        config = load_config()
-        return config.get("models", {}).get(role) or _MODEL_DEFAULTS[role]
+        return tether_config.get(f"models.{role}") or _MODEL_DEFAULTS[role]
     except Exception as e:
         logger.warning("get_model config read failed, using default: %s", e)
         return _MODEL_DEFAULTS.get(role, "claude-sonnet-4-6")
@@ -914,8 +908,7 @@ async def _run_v2_planning_loop(
 def _is_v3_enabled() -> bool:
     """Check if v3 SDK conversation loop is enabled in config."""
     try:
-        config = load_config()
-        return bool(config.get("llm", {}).get("use_v3", False))
+        return tether_config.get_bool("llm.use_v3", False)
     except Exception as e:
         logger.debug("_is_v3_enabled config read failed: %s", e)
         return False
@@ -924,8 +917,7 @@ def _is_v3_enabled() -> bool:
 def _is_v2_fallback_enabled() -> bool:
     """Check if v2 pipeline fallback is enabled when v3 fails. Default: True."""
     try:
-        config = load_config()
-        return bool(config.get("llm", {}).get("v2_fallback", True))
+        return tether_config.get_bool("llm.v2_fallback", True)
     except Exception as e:
         logger.debug("_is_v2_fallback_enabled config read failed: %s", e)
         return True
@@ -987,9 +979,7 @@ async def _handle_v3(text: str, pool, user_id: str, anchors: list[dict],
     if not backend.is_available():
         backend = PipelineBackend()
 
-    config = load_config()
-    model = config.get("llm", {}).get("roles", {}).get(
-        "main_agent", {}).get("model", "claude-sonnet-4-6")
+    model = tether_config.get("llm.roles.main_agent.model", "claude-sonnet-4-6")
 
     logger.info("v3 basic: model=%s backend=%s mode=%s", model, type(backend).__name__, mode)
     result = await backend.complete(messages=conv_history, system=system, model=model)
@@ -1285,11 +1275,10 @@ def run_polling(token: str, chat_id: str) -> None:
     logger.info("Tether bot polling started (offset=%d)", offset)
     # Start premium meeting event listener if available
     try:
-        _sched_cfg = load_config()
         from tether_premium.bot.scheduling.events import start_meeting_event_listener
         start_meeting_event_listener(
-            api_base_url=_sched_cfg.get("api", {}).get("base_url", "http://localhost:8000"),
-            api_token=_sched_cfg.get("api", {}).get("bot_token", ""),
+            api_base_url=tether_config.get("api.base_url", "http://localhost:8000"),
+            api_token=tether_config.get("api.bot_token", ""),
         )
         logger.info("Meeting event listener started")
     except ImportError:
@@ -1379,8 +1368,7 @@ def run_polling(token: str, chat_id: str) -> None:
                             import threading as _threading
                             _beacon_changes = peek_changes(str(_active_db))
                             if _beacon_changes:
-                                _cfg = load_config()
-                                _mcp_url = _cfg.get("llm", {}).get("mcp_server_url", "http://localhost:5001/sse")
+                                _mcp_url = tether_config.get("llm.mcp_server_url", "http://localhost:5001/sse")
                                 _beacon_router = LLMRouter(mcp_server_url=_mcp_url)
                                 _beacon_db = str(_active_db)
 
@@ -1432,9 +1420,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     logger.info("log level: %s", level_name)
-    config = load_config()
-    token = config["telegram"]["bot_token"]
-    chat_id = str(config["telegram"]["chat_id"])
+    token = tether_config.get("telegram.bot_token")
+    chat_id = str(tether_config.get("telegram.chat_id", ""))
     run_polling(token, chat_id)
 
 
