@@ -24,6 +24,17 @@ on:
       - 'fly.toml'
       - 'fly.dev.toml'
       - 'docker-entrypoint.sh'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+          - dev
+          - both
 
 permissions:
   contents: read
@@ -31,10 +42,14 @@ permissions:
 jobs:
   deploy-prod:
     name: Deploy prod (tether-prod)
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.environment == 'prod' || inputs.environment == 'both'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to tether-prod
         # --ha=false: single machine (no auto-HA pair). Bot long-polls, not stateless.
@@ -45,10 +60,14 @@ jobs:
 
   deploy-dev:
     name: Deploy dev (tether-dev)
-    if: github.ref == 'refs/heads/dev'
+    if: |
+      github.ref == 'refs/heads/dev' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.environment == 'dev' || inputs.environment == 'both'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: dev
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to tether-dev
         run: flyctl deploy --config fly.dev.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
