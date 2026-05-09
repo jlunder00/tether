@@ -252,6 +252,6 @@ jobs:
         run: |
           docker images tether-premium-dev --format "{{.ID}}" \
             | awk '!seen[$0]++' \
-            | tail -n +4 \
+            | tail -n +1 \
             | xargs -r docker rmi --force 2>/dev/null || true
           docker image prune -f
