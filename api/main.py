@@ -176,6 +176,11 @@ def create_app(lifespan_override=None) -> FastAPI:
     except ImportError:
         pass
 
+    @app.get("/api/health")
+    async def health():
+        """Unauthenticated liveness check. Used by supervisord wait loop."""
+        return {"status": "ok"}
+
     @app.post("/api/notify")
     async def notify(request: Request, _auth=Depends(auth_dependency)):
         if not request.state.is_admin:
