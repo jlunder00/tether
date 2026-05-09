@@ -20,7 +20,7 @@ FROM python:3.11-slim
 # cron is needed for anchor trigger scheduling in the bot container.
 # curl is needed for the NodeSource setup script.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev cron git gosu curl \
+    gcc libffi-dev cron git gosu curl gettext-base \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 via NodeSource so npm has a properly self-contained
