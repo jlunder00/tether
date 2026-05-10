@@ -17,6 +17,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # needed for branch-reachability check
+
+      - name: Assert tag is on the correct branch
+        env:
+          GH_REF: ${{ github.ref }}
+        run: |
+          TAG="${GH_REF#refs/tags/}"
+          # Alpha tags (vX.Y.ZaN) must be reachable from dev; stable (vX.Y.Z) from main.
+          if echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+a[0-9]+$'; then
+            REQUIRED_BRANCH="dev"
+          elif echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            REQUIRED_BRANCH="main"
+          else
+            echo "ERROR: Unrecognised tag format '${TAG}'. Expected vX.Y.Z or vX.Y.ZaN." >&2
+            exit 1
+          fi
+          git fetch origin "${REQUIRED_BRANCH}" --depth=100 2>/dev/null || git fetch origin "${REQUIRED_BRANCH}"
+          if ! git merge-base --is-ancestor "refs/tags/${TAG}" "origin/${REQUIRED_BRANCH}" 2>/dev/null; then
+            echo "ERROR: Tag '${TAG}' must be reachable from branch '${REQUIRED_BRANCH}' but is not." >&2
+            echo "Stable tags (vX.Y.Z) must be tagged on main; alpha tags (vX.Y.ZaN) must be tagged on dev." >&2
+            exit 1
+          fi
+          echo "Branch guard passed: tag '${TAG}' is reachable from '${REQUIRED_BRANCH}'."
 
       - name: Resolve version tag
         id: version
