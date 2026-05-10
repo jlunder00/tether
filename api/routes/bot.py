@@ -68,10 +68,15 @@ async def _process_telegram_update(update: dict, pool, vault) -> None:
     Extracts the message text and chat_id, resolves the linked user_id,
     then calls handle_message() — the same path used by the polling loop.
     Non-message updates (e.g. edited_message, channel_post) are silently ignored.
+
+    /start and /link are handled before user resolution, matching the polling
+    loop behaviour so new users can onboard in webhook mode.
     """
-    import requests as _requests
+    import random as _random
     from config.loader import config as tether_config
     from bot.message_handler import _resolve_user_id, _send_telegram
+    import db.postgres as pg
+    import db.pg_auth_queries as pg_auth_queries
 
     msg = update.get("message")
     if not msg:
@@ -89,16 +94,27 @@ async def _process_telegram_update(update: dict, pool, vault) -> None:
         return
 
     token = tether_config.get("telegram.bot_token", "")
+    send_fn = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
+
+    # Handle /start and /link before auth check — mirrors polling loop behaviour.
+    # Unlinked users must be able to generate a link code to onboard.
+    if text in ("/start", "/link"):
+        try:
+            code = f"{_random.randint(0, 999999):06d}"
+            async with pg.get_conn(pool) as conn:  # no user_id — auth table has no RLS
+                await pg_auth_queries.store_link_code(conn, code, incoming_chat_id)
+            send_fn(f"Your link code is: {code}. Enter this in Tether settings within 5 minutes.")
+        except Exception as exc:
+            logger.error("_process_telegram_update: /link error: %s", exc, exc_info=True)
+            send_fn("[Tether error generating link code]")
+        return
 
     # Resolve Telegram chat_id → Tether user_id
     user_id = await _resolve_user_id(pool, incoming_chat_id)
     if user_id is None:
-        _send_telegram(token, incoming_chat_id,
-                       "I don't recognize you. Link your Tether account at your Tether URL, "
-                       "then use /link to connect.")
+        send_fn("I don't recognize you. Link your Tether account at your Tether URL, "
+                "then use /link to connect.")
         return
-
-    send_fn = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
 
     try:
         await handle_message(text, send_fn=send_fn, pool=pool, user_id=user_id, vault=vault)
