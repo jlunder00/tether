@@ -705,6 +705,10 @@ function loadEvents() {
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
+// ── Sidebar task drag-source hiding (mirrors AnchorBlock.vue:143-165) ────────
+// rAF deferral lets the browser snapshot the ghost image before the source is hidden.
+const draggingTaskId = ref<string | null>(null)
+
 // ── Edge-scroll: advance calendar week when dragging to left/right edge ────────
 const calendarGridRef = ref<HTMLElement | null>(null)
 const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, onDragEnd: calendarEdgeDragEnd } =
@@ -764,6 +768,7 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
             <li
               v-for="task in tasks"
               :key="task.id"
+              v-show="draggingTaskId !== task.id"
               draggable="true"
               class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-3] hover:text-[--fg-1] transition-colors truncate"
               :class="task.status === 'done' ? 'line-through opacity-40' : ''"
@@ -779,7 +784,9 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
                     fromDate: focusedDay,
                   }))
                 }
+                requestAnimationFrame(() => { draggingTaskId.value = task.id })
               }"
+              @dragend="draggingTaskId = null"
             >
               {{ task.text }}
             </li>
