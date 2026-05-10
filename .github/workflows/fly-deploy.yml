@@ -1,12 +1,20 @@
 name: "Deploy to Fly.io"
 
 # Deploys to Fly.io on pushes to main (prod) or dev (dev).
-# Fly handles the remote image build — no self-hosted runner needed.
+# Fly handles the remote image build -- no self-hosted runner needed.
 #
-# Separate from Pi deploy workflows (pi-build.yml, pi-build-dev.yml)
-# which manage the local Docker image build and service restarts on the Pi.
+# Versioning:
+#   TETHER_VERSION is read from pyproject.toml at deploy time.
+#   Release version bumps are done via scripts/release.sh (which tags + pushes),
+#   not by this workflow. This workflow just bakes whatever version is in
+#   pyproject.toml into the Docker image as an env var.
 #
-# Required secret: FLY_API_TOKEN (personal access token — works for both apps)
+#   Prod deploys: TETHER_VERSION = pyproject version (e.g. 0.1.0)
+#   Dev deploys:  TETHER_VERSION = pyproject version + -dev.{sha7} (e.g. 0.1.0-dev.abc1234)
+#
+# Required secrets:
+#   FLY_API_TOKEN        -- Fly.io personal access token
+#   TETHER_PREMIUM_TOKEN -- GitHub PAT for installing tether-premium from tether-pypi
 
 on:
   push:
@@ -50,13 +58,33 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(python3 -c "
+import re, sys
+with open('pyproject.toml') as f:
+    for line in f:
+        m = re.match(r'^version\s*=\s*\"(.+)\"', line)
+        if m:
+            print(m.group(1)); sys.exit(0)
+sys.exit(1)
+")
+          echo "value=${VERSION}" >> $GITHUB_OUTPUT
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-prod
         # --ha=false: single machine (no auto-HA pair). Bot long-polls, not stateless.
-        run: flyctl deploy --config fly.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          flyctl deploy --config fly.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"
 
   deploy-dev:
     name: Deploy dev (tether-dev)
@@ -68,9 +96,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: dev
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          BASE=$(python3 -c "
+import re, sys
+with open('pyproject.toml') as f:
+    for line in f:
+        m = re.match(r'^version\s*=\s*\"(.+)\"', line)
+        if m:
+            print(m.group(1)); sys.exit(0)
+sys.exit(1)
+")
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "value=${BASE}-dev.${SHA7}" >> $GITHUB_OUTPUT
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-dev
-        run: flyctl deploy --config fly.dev.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          flyctl deploy --config fly.dev.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"

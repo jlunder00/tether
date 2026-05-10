@@ -288,3 +288,43 @@ async def test_expire_old_requests(conn):
     # Verify status
     row2 = await conn.fetchrow("SELECT status FROM meeting_requests WHERE id = $1", req_id)
     assert row2["status"] == "expired"
+
+# ─── N+1 batch-query assertions ───────────────────────────────────────────────
+
+async def test_request_meeting_uses_batch_username_resolution(api_client, conn):
+    """POST /meetings/request must use get_users_by_usernames, not get_user_by_username."""
+    from unittest.mock import patch
+    await _setup_accepted_connection(conn)
+    with patch(
+        "api.routes.meetings.get_user_by_username",
+        side_effect=AssertionError("get_user_by_username called — batch not used"),
+    ):
+        resp = await api_client.post(
+            "/api/meetings/request",
+            json={
+                "target_usernames": [TEST_USER_B_NAME],
+                "duration_minutes": 30,
+                "slots": SAMPLE_SLOTS,
+            },
+        )
+    assert resp.status_code == 201
+
+
+async def test_accept_slot_uses_batch_user_lookup(api_client, api_client_b, conn, pool):
+    """POST /meetings/{id}/accept must use get_users_by_ids, not get_user_by_id."""
+    from unittest.mock import patch
+    meeting = await _create_meeting(api_client, conn)
+    meeting_id = meeting["id"]
+    await api_client_b.post(
+        f"/api/meetings/{meeting_id}/propose",
+        json={"slots": [SAMPLE_SLOTS[0]]},
+    )
+    with patch(
+        "api.routes.meetings.get_user_by_id",
+        side_effect=AssertionError("get_user_by_id called — batch not used"),
+    ):
+        resp = await api_client.post(
+            f"/api/meetings/{meeting_id}/accept",
+            json={"slot": SAMPLE_SLOTS[0]},
+        )
+    assert resp.status_code == 200

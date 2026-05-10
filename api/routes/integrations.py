@@ -72,7 +72,6 @@ _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # `claude setup-token` prints a long-lived OAuth token to stdout (sk-ant-oat-…)
 # rather than writing a credentials file. The trailing run is URL-safe base64
 # plus dashes/underscores; we capture the longest such run after the prefix.
-_OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
 _ANTHROPIC_URL_SCHEME = "https"
 # claude setup-token may emit URLs on either domain depending on version.
 _VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}

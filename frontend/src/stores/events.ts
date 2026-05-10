@@ -29,7 +29,7 @@ export const useEventStore = defineStore('events', () => {
 
   /**
    * Promote a task to a calendar event (sets start/end time).
-   * POST /api/events — not yet implemented; returns a local optimistic event.
+   * POST /api/events — creates a calendar event with the given time range.
    */
   async function promoteTask(taskId: string, startTime: string, endTime: string, title: string): Promise<CalendarEvent | null> {
     try {
@@ -243,5 +243,22 @@ export const useEventStore = defineStore('events', () => {
     } catch { /* ignore — optimistic update stays */ }
   }
 
-  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor }
+  /**
+   * PATCH an event with scope support (single / this_and_future / all).
+   * Used by CalendarView.onRecurrenceScopeConfirm (event-edit branch).
+   */
+  async function patchEvent(
+    eventId: string,
+    patch: Record<string, unknown>,
+    scope: RecurrenceEditScope,
+    originalStartTime?: string,
+  ): Promise<void> {
+    await api(`/api/events/${eventId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...patch, scope, original_start_time: originalStartTime }),
+    })
+  }
+
+  return { events, loading, error, fetchEvents, promoteTask, createTaskAndPromote, moveEvent, demoteEvent, deleteEvent, removeEventsForTask, setRecurrence, updateEventColor, patchEvent }
 })

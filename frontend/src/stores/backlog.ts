@@ -21,11 +21,14 @@ export const useBacklogStore = defineStore('backlog', () => {
     }
   }
 
-  async function createTask(text: string, description?: string) {
+  async function createTask(
+    text: string,
+    opts: { description?: string; status?: string; date?: string; context_subject?: string; milestone_id?: string } = {},
+  ): Promise<Task> {
     const resp = await api('/api/tasks/unscheduled', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, description }),
+      body: JSON.stringify({ text, ...opts }),
     })
     if (!resp.ok) throw new Error(`${resp.status}`)
     const task = await resp.json()

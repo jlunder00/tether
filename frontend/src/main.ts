@@ -2,6 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
+import { VOICE } from './composables/useTheme'
 import './assets/themes.css'
 import './assets/motifs.css'
 import './assets/theme-distinctives.css'
@@ -15,10 +16,6 @@ document.documentElement.dataset.theme = savedTheme
 document.documentElement.dataset.mode = savedMode as 'light' | 'dark'
 
 // Also set type-voice to match theme
-const VOICE: Record<string, string> = {
-  tether: 'sharp', horizon: 'editorial', contrast: 'sharp',
-  terminal: 'terminal', solstice: 'sharp', dracula: 'terminal', paper: 'editorial',
-}
 document.documentElement.dataset.typeVoice = VOICE[savedTheme] ?? 'sharp'
 
 createApp(App).use(createPinia()).use(router).mount('#app')

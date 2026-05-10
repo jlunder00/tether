@@ -3,12 +3,13 @@ import { onMounted, computed } from 'vue'
 import KanbanColumn from '../components/KanbanColumn.vue'
 import { useKanbanStore, type KanbanTask } from '../stores/kanban'
 import { useMilestoneStore } from '../stores/milestones'
-import { api } from '../lib/api'
+import { useBacklogStore } from '../stores/backlog'
 import { useSlideOver } from '../composables/useSlideOver'
 
 const { push: pushPanel } = useSlideOver()
 const kanbanStore = useKanbanStore()
 const milestoneStore = useMilestoneStore()
+const backlogStore = useBacklogStore()
 
 onMounted(() => {
   kanbanStore.fetchColumns()
@@ -19,20 +20,12 @@ onMounted(() => {
 async function onAddTask(columnId: string, opts: { context_subject?: string; milestone_id?: string }) {
   const col = kanbanStore.columns.find(c => c.id === columnId)
   if (!col) return
-  const body: Record<string, unknown> = { text: 'New task', ...opts }
+  const taskOpts: Record<string, unknown> = { ...opts }
   const rules = col.entry_rules ?? {}
-  if (typeof rules['set_status'] === 'string') body.status = rules['set_status']
-  if (rules['prompt_schedule']) {
-    body.date = new Date().toISOString().slice(0, 10)
-  }
+  if (typeof rules['set_status'] === 'string') taskOpts.status = rules['set_status']
+  if (rules['prompt_schedule']) taskOpts.date = new Date().toISOString().slice(0, 10)
   try {
-    const resp = await api('/api/tasks/unscheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    if (!resp.ok) throw new Error(`${resp.status}`)
-    const task = await resp.json()
+    const task = await backlogStore.createTask('New task', taskOpts)
     await kanbanStore.fetchAllTasks()
     pushPanel({ kind: 'task', entityId: task.id })
   } catch (e) {
@@ -101,7 +94,5 @@ function matchesRules(task: KanbanTask, rules: Record<string, unknown>): boolean
         @add-task="(opts) => onAddTask(col.id, opts)"
         @task-drop="onTaskDrop" />
     </div>
-
-    <router-view />
   </div>
 </template>

@@ -139,3 +139,12 @@ async def get_stale_sessions(
             d["user_id"] = str(d["user_id"])
         result.append(d)
     return result
+
+
+async def get_active_sessions(conn: asyncpg.Connection) -> list[dict]:
+    """Return all sessions in active or waiting_user state, ordered by last_activity desc."""
+    rows = await conn.fetch(
+        "SELECT * FROM sessions WHERE state IN ('active', 'waiting_user') "
+        "ORDER BY last_activity DESC"
+    )
+    return [dict(r) for r in rows]

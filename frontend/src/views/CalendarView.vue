@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { localDateString } from '../lib/dateUtils'
 import { useDragEdgeScroll } from '../composables/useDragEdgeScroll'
 import { useAnchorStore } from '../stores/anchors'
 import { useEventStore } from '../stores/events'
@@ -76,14 +77,12 @@ async function onRecurrenceScopeConfirm(scope: RecurrenceEditScope) {
   if (pending.kind === 'event-move') {
     await eventStore.moveEvent(pending.eventId, pending.startTime, pending.endTime, scope, pending.originalStartTime)
   } else if (pending.kind === 'event-edit') {
-    // Apply patch with scope — PATCH /api/events/:id
-    try {
-      await fetch(`/api/events/${pending.eventId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...pending.patch, scope, original_start_time: pending.patch.original_start_time }),
-      })
-    } catch { /* ignore */ }
+    await eventStore.patchEvent(
+      pending.eventId,
+      pending.patch,
+      scope,
+      pending.patch.original_start_time as string | undefined,
+    )
   } else if (pending.kind === 'event-delete') {
     await eventStore.deleteEvent(pending.eventId, scope, pending.originalStartTime)
   } else if (pending.kind === 'task-edit' || pending.kind === 'task-move' || pending.kind === 'task-delete') {
@@ -198,10 +197,6 @@ onUnmounted(() => {
 })
 
 // ─── Week date range ──────────────────────────────────────────
-function localDateString(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 function getWeekStart(d: Date): Date {
   const result = new Date(d)
   result.setDate(result.getDate() - result.getDay()) // Sunday start
@@ -1060,8 +1055,6 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
         </div>
       </template>
     </div>
-
-    <router-view />
 
     <RecurrenceEditDialog
       :visible="pendingRecurrence !== null"

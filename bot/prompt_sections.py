@@ -111,8 +111,7 @@ RESPONSE_STYLE_QUICK = (
 
 RESOURCE_CONSTRAINTS = (
     "You are running on a resource-constrained device (Raspberry Pi). "
-    "Limit parallel subagent dispatches to at most 2 at a time. "
-    "Prefer sequential tool calls when parallelism isn't critical."
+    "Prefer lightweight operations and avoid unnecessary computation."
 )
 
 FOLLOWUP_COACHING = (

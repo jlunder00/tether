@@ -5,18 +5,10 @@ from db.pg_queries import (
     link_milestone_task, unlink_milestone_task,
 )
 from db.pool_middleware import get_db_conn
-from db.pg_queries._motif import VALID_MOTIFS
+from api.routes._common import _validate_motif
 from api.auth import auth_dependency
 
 router = APIRouter()
-
-
-def _validate_motif(body: dict) -> None:
-    if "motif" in body and body["motif"] not in VALID_MOTIFS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid motif: {body['motif']!r}. Must be one of {sorted(VALID_MOTIFS)}",
-        )
 
 
 @router.get("/milestones")

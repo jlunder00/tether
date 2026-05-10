@@ -12,18 +12,16 @@ from db.pg_queries import (
 )
 from db.pg_queries.tasks import set_task_rrule, delete_anchor_occurrence, truncate_anchor_series
 from db.pool_middleware import get_db_conn
-from db.pg_queries._motif import VALID_MOTIFS
+from api.routes._common import _validate_motif
 from api.auth import auth_dependency
 
 router = APIRouter()
 
 
-def _validate_motif(body: dict) -> None:
-    if "motif" in body and body["motif"] not in VALID_MOTIFS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid motif: {body['motif']!r}. Must be one of {sorted(VALID_MOTIFS)}",
-        )
+class MoveTaskBody(BaseModel):
+    date: str
+    anchor_id: str
+    position: int | None = None
 
 
 class TaskRruleBody(BaseModel):
@@ -153,12 +151,11 @@ async def delete_task(
 
 
 @router.put("/tasks/{task_uuid}/move")
-async def move_task(task_uuid: str, body: dict,
+async def move_task(task_uuid: str, body: MoveTaskBody,
                     _auth=Depends(auth_dependency),
                     conn: asyncpg.Connection = Depends(get_db_conn)):
     try:
-        await move_task_atomic(conn, task_uuid,
-                               body.get("date"), body.get("anchor_id"), body.get("position"))
+        await move_task_atomic(conn, task_uuid, body.date, body.anchor_id, body.position)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"ok": True}

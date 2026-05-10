@@ -6,13 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import asyncpg
-from typing import Optional
 
 log = logging.getLogger(__name__)
 
 from api.auth import auth_dependency
 from db.pool_middleware import get_db_conn
-from db.pg_auth_queries import get_user_by_username, get_user_by_id
+from db.pg_auth_queries import get_user_by_username, get_user_by_id, get_users_by_usernames, get_users_by_ids
 from db.pg_queries.scheduling import (
     create_meeting_request,
     create_proposal,
@@ -22,6 +21,7 @@ from db.pg_queries.scheduling import (
     list_meetings_for_user,
     list_incoming_for_user,
     get_connection_by_users,
+    get_connections_for_caller,
     get_participants,
     get_task_by_meeting_tag,
     create_meeting_task,
@@ -46,12 +46,12 @@ class MeetingRequestBody(BaseModel):
     target_usernames: list[str]
     duration_minutes: int = 30
     slots: list[str]
-    context: Optional[str] = None
+    context: str | None = None
 
 
 class ProposeBody(BaseModel):
     slots: list[str]
-    message: Optional[str] = None
+    message: str | None = None
 
 
 class AcceptSlotBody(BaseModel):
@@ -70,22 +70,20 @@ async def request_meeting(
     if not body.slots:
         raise HTTPException(status_code=400, detail="slots cannot be empty")
 
-    # Resolve target usernames to user IDs
-    target_ids = []
-    for username in body.target_usernames:
-        user = await get_user_by_username(conn, username)
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User '{username}' not found")
-        target_ids.append(user["id"])
+    # Batch-resolve target usernames to user IDs
+    users_by_name = await get_users_by_usernames(conn, body.target_usernames)
+    missing = [u for u in body.target_usernames if u not in users_by_name]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"User(s) not found: {missing}")
+    target_ids = [users_by_name[u]["id"] for u in body.target_usernames]
 
-    # Verify each target has an accepted connection with caller
-    for target_id in target_ids:
-        connection = await get_connection_by_users(conn, caller_id, target_id)
-        if not connection or connection["status"] != "accepted":
-            raise HTTPException(
-                status_code=400,
-                detail=f"No accepted connection with one or more targets",
-            )
+    # Batch-verify all targets have an accepted connection with caller
+    connections = await get_connections_for_caller(conn, caller_id, target_ids)
+    if any(connections.get(tid, {}).get("status") != "accepted" for tid in target_ids):
+        raise HTTPException(
+            status_code=400,
+            detail="No accepted connection with one or more targets",
+        )
 
     request = await create_meeting_request(
         conn, caller_id, target_ids, body.duration_minutes, body.context, body.slots
@@ -179,13 +177,10 @@ async def accept_slot(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Gather participant usernames for the WS event
+    # Batch-fetch participant usernames for the WS event
     participant_ids = get_participants(updated)
-    usernames = []
-    for uid in participant_ids:
-        user = await get_user_by_id(conn, uid)
-        if user:
-            usernames.append(user["username"])
+    users = await get_users_by_ids(conn, list(participant_ids))
+    usernames = [users[uid]["username"] for uid in participant_ids if uid in users]
 
     event = {
         "type": "meeting_agreed",
@@ -233,7 +228,7 @@ async def cancel_meeting_route(
 
 @router.get("/meetings")
 async def list_meetings(
-    status: Optional[str] = None,
+    status: str | None = None,
     auth=Depends(auth_dependency),
     conn: asyncpg.Connection = Depends(get_db_conn),
 ):

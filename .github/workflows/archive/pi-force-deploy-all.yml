@@ -220,7 +220,7 @@ jobs:
               -f docker-compose.yml \
               -f docker-compose.dev.yml \
               -p tether-dev \
-              up -d --no-deps api bot mcp
+              up -d --no-deps postgres api bot mcp
 
   prune:
     name: Prune old images

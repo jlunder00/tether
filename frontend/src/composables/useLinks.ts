@@ -14,7 +14,7 @@ export interface Link {
 export function useLinks(parentType: () => string, parentId: () => string) {
   const links = ref<Link[]>([])
 
-  async function fetch() {
+  async function load() {
     const resp = await api(`/api/${parentType()}/${parentId()}/links`)
     links.value = resp.ok ? await resp.json() : []
   }
@@ -25,15 +25,15 @@ export function useLinks(parentType: () => string, parentId: () => string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, label, category }),
     })
-    await fetch()
+    await load()
   }
 
   async function remove(id: number) {
     await api(`/api/links/${id}`, { method: 'DELETE' })
-    await fetch()
+    await load()
   }
 
-  watch([parentType, parentId], () => fetch(), { immediate: true })
+  watch([parentType, parentId], () => load(), { immediate: true })
 
-  return { links, fetch, create, remove }
+  return { links, load, create, remove }
 }
