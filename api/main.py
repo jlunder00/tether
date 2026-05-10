@@ -181,6 +181,18 @@ def create_app(lifespan_override=None) -> FastAPI:
         """Unauthenticated liveness check. Used by supervisord wait loop."""
         return {"status": "ok"}
 
+    @app.get("/api/version")
+    async def version():
+        """Unauthenticated version check. Returns tether and premium versions."""
+        import os as _version_os
+        from importlib.metadata import version as _pkg_ver, PackageNotFoundError as _PKGNf
+        result: dict = {"tether": _version_os.environ.get("TETHER_VERSION", "dev")}
+        try:
+            result["premium"] = _pkg_ver("tether-premium")
+        except _PKGNf:
+            pass  # community edition — premium not installed
+        return result
+
     @app.post("/api/notify")
     async def notify(request: Request, _auth=Depends(auth_dependency)):
         if not request.state.is_admin:

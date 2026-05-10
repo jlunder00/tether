@@ -1,0 +1,72 @@
+name: "Update premium version pin"
+
+# Dispatched by tether-premium's release workflow after a tag is pushed.
+# Updates the appropriate requirements file and opens a PR.
+#
+#   Alpha release -> requirements-premium-dev.txt, PR targeting dev
+#   Stable release -> requirements-premium.txt,     PR targeting main
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'PEP 440 version (e.g. 0.0.1 or 0.0.1a1)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: true
+        default: 'false'
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-pin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine target file and base branch
+        id: target
+        env:
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if [ "$PRERELEASE" = "true" ]; then
+            echo "file=requirements-premium-dev.txt" >> $GITHUB_OUTPUT
+            echo "base=dev" >> $GITHUB_OUTPUT
+          else
+            echo "file=requirements-premium.txt" >> $GITHUB_OUTPUT
+            echo "base=main" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.base }}
+
+      - name: Bump version pin
+        env:
+          VERSION: ${{ inputs.version }}
+          FILE: ${{ steps.target.outputs.file }}
+        run: |
+          sed -i "s/tether-premium==.*/tether-premium==${VERSION}/" "$FILE"
+
+      - name: Open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+          FILE: ${{ steps.target.outputs.file }}
+          BASE: ${{ steps.target.outputs.base }}
+        run: |
+          BRANCH="chore/premium-pin-${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "$FILE"
+          git commit -m "chore: bump tether-premium pin to ${VERSION}"
+          git push origin "$BRANCH"
+          gh pr create \
+            --title "chore: bump tether-premium pin to ${VERSION}" \
+            --body "Automated pin bump triggered by tether-premium release ${VERSION}." \
+            --base "$BASE" \
+            --head "$BRANCH"

@@ -1,12 +1,18 @@
 name: "Deploy to Fly.io"
 
 # Deploys to Fly.io on pushes to main (prod) or dev (dev).
-# Fly handles the remote image build — no self-hosted runner needed.
+# Fly handles the remote image build -- no self-hosted runner needed.
 #
-# Separate from Pi deploy workflows (pi-build.yml, pi-build-dev.yml)
-# which manage the local Docker image build and service restarts on the Pi.
+# Versioning:
+#   TETHER_VERSION is read from pyproject.toml at deploy time.
+#   PREMIUM_REQUIREMENTS selects which pinned tether-premium version to install:
+#     requirements-premium.txt     -- prod (stable pin, default)
+#     requirements-premium-dev.txt -- dev  (alpha pin)
+#   To upgrade premium: bump the version in the relevant requirements file.
 #
-# Required secret: FLY_API_TOKEN (personal access token — works for both apps)
+# Required secrets:
+#   FLY_API_TOKEN        -- Fly.io personal access token
+#   TETHER_PREMIUM_TOKEN -- GitHub PAT for cloning tether-premium
 
 on:
   push:
@@ -19,11 +25,24 @@ on:
       - 'shared/**'
       - 'prompts/**'
       - 'requirements.txt'
+      - 'requirements-premium.txt'
+      - 'requirements-premium-dev.txt'
       - 'Dockerfile'
       - 'supervisord.conf'
       - 'fly.toml'
       - 'fly.dev.toml'
       - 'docker-entrypoint.sh'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+          - dev
+          - both
 
 permissions:
   contents: read
@@ -31,27 +50,62 @@ permissions:
 jobs:
   deploy-prod:
     name: Deploy prod (tether-prod)
-    if: github.ref == 'refs/heads/main'
+    if: |
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.environment == 'prod' || inputs.environment == 'both'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' pyproject.toml)
+          echo "value=${VERSION}" >> $GITHUB_OUTPUT
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-prod
         # --ha=false: single machine (no auto-HA pair). Bot long-polls, not stateless.
-        run: flyctl deploy --config fly.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          flyctl deploy --config fly.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"
+          # PREMIUM_REQUIREMENTS defaults to requirements-premium.txt in Dockerfile
 
   deploy-dev:
     name: Deploy dev (tether-dev)
-    if: github.ref == 'refs/heads/dev'
+    if: |
+      github.ref == 'refs/heads/dev' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.environment == 'dev' || inputs.environment == 'both'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          BASE=$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' pyproject.toml)
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "value=${BASE}-dev.${SHA7}" >> $GITHUB_OUTPUT
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-dev
-        run: flyctl deploy --config fly.dev.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          flyctl deploy --config fly.dev.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION" \
+            --build-arg PREMIUM_REQUIREMENTS=requirements-premium-dev.txt

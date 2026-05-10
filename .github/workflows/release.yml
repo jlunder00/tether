@@ -1,0 +1,47 @@
+name: "Release"
+
+# Triggered by scripts/release.sh pushing a version tag.
+# Creates a GitHub Release for the community edition.
+#
+# Tag conventions (set by scripts/release.sh):
+#   Stable:  v0.0.1         -> pyproject version 0.0.1
+#   Alpha:   v0.0.1-alpha.1 -> pyproject version 0.0.1a1
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*-alpha.[0-9]*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Classify tag
+        id: meta
+        env:
+          GIT_TAG: ${{ github.ref_name }}
+        run: |
+          if echo "$GIT_TAG" | grep -qE '\-(alpha|beta|rc)\.'; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          FLAGS="--generate-notes"
+          [ "$PRERELEASE" = "true" ] && FLAGS="$FLAGS --prerelease"
+          gh release create "$GIT_TAG" \
+            --title "Tether Community $GIT_TAG" \
+            $FLAGS
