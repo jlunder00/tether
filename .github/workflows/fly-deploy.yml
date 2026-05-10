@@ -7,6 +7,13 @@ name: "Deploy to Fly.io"
 # which manage the local Docker image build and service restarts on the Pi.
 #
 # Required secret: FLY_API_TOKEN (personal access token — works for both apps)
+#
+# Versioning:
+#   Prod deploys auto-bump the patch component of the latest vX.Y.Z git tag
+#   and push the new tag after a successful deploy.
+#   Major/minor bumps are manual: push a tag like v1.0.0 or v0.4.0 to reset
+#   the counter before the next deploy.
+#   Dev deploys use the same base version with a -dev suffix; no tag is pushed.
 
 on:
   push:
@@ -37,7 +44,7 @@ on:
           - both
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   deploy-prod:
@@ -50,13 +57,49 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
+          fetch-depth: 0  # full history + tags required for semver bump
+
+      - name: Compute next patch version
+        id: version
+        run: |
+          # Find the latest vX.Y.Z tag (semver, no pre-release suffix).
+          # Falls back to v0.3.0 if no tags exist yet.
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.3.0"
+          fi
+          # Strip leading v and split on dots.
+          BASE="${LATEST#v}"
+          MAJOR=$(echo "$BASE" | cut -d. -f1)
+          MINOR=$(echo "$BASE" | cut -d. -f2)
+          PATCH=$(echo "$BASE" | cut -d. -f3)
+          NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+          echo "Resolved: ${LATEST} → ${NEW_TAG}"
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-prod
         # --ha=false: single machine (no auto-HA pair). Bot long-polls, not stateless.
-        run: flyctl deploy --config fly.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          flyctl deploy --config fly.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"
+
+      - name: Tag deployed commit
+        env:
+          TETHER_VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TETHER_VERSION"
+          git push origin "$TETHER_VERSION"
 
   deploy-dev:
     name: Deploy dev (tether-dev)
@@ -68,9 +111,37 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: dev
+          fetch-depth: 0  # full history + tags required for semver lookup
+
+      - name: Compute dev version
+        id: version
+        run: |
+          # Derive from the latest prod tag so dev version is always ahead of prod.
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.3.0"
+          fi
+          BASE="${LATEST#v}"
+          MAJOR=$(echo "$BASE" | cut -d. -f1)
+          MINOR=$(echo "$BASE" | cut -d. -f2)
+          PATCH=$(echo "$BASE" | cut -d. -f3)
+          # Dev version peeks one patch ahead of prod, marked -dev.
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          NEW_TAG="v${MAJOR}.${MINOR}.$((PATCH + 1))-dev.${SHA7}"
+          echo "tag=${NEW_TAG}" >> $GITHUB_OUTPUT
+          echo "Resolved: ${LATEST} → ${NEW_TAG}"
+
       - uses: superfly/flyctl-actions/setup-flyctl@master
+
       - name: Deploy to tether-dev
-        run: flyctl deploy --config fly.dev.toml --remote-only --ha=false --build-arg PREMIUM_GIT_TOKEN=$PREMIUM_GIT_TOKEN
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          flyctl deploy --config fly.dev.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"
+        # Dev builds are ephemeral — no git tag pushed.

@@ -181,6 +181,12 @@ def create_app(lifespan_override=None) -> FastAPI:
         """Unauthenticated liveness check. Used by supervisord wait loop."""
         return {"status": "ok"}
 
+    @app.get("/api/version")
+    async def version():
+        """Unauthenticated version check. Returns the deployed image tag."""
+        import os as _version_os
+        return {"version": _version_os.environ.get("TETHER_VERSION", "dev")}
+
     @app.post("/api/notify")
     async def notify(request: Request, _auth=Depends(auth_dependency)):
         if not request.state.is_admin:

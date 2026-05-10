@@ -85,6 +85,11 @@ COPY --from=frontend-build /build/dist/ frontend/dist/
 #   Now:    set to the premium repo HEAD SHA (7 chars)
 #   Future: set to the pip version tag when a private PyPI server is ready;
 #           swap the install command to: pip install tether-premium==${PREMIUM_REF}
+# Deployment version tag — set by CI to v{date}-{sha7}, defaults to "dev".
+# Baked into the image as an env var so all services can report it at runtime.
+ARG TETHER_VERSION=dev
+ENV TETHER_VERSION=${TETHER_VERSION}
+
 ARG PREMIUM_GIT_TOKEN=
 ARG PREMIUM_REF=unknown
 RUN if [ -n "$PREMIUM_GIT_TOKEN" ]; then \
