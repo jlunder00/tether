@@ -704,6 +704,26 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 // rAF deferral lets the browser snapshot the ghost image before the source is hidden.
 const draggingTaskId = ref<string | null>(null)
 
+function onSidebarTaskDragStart(
+  e: DragEvent,
+  task: { id: string; text: string },
+  anchorId: string,
+  fromDate: string,
+) {
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', JSON.stringify({
+      type: 'task',
+      taskId: task.id,
+      title: task.text,
+      fromAnchorId: anchorId,
+      fromDate,
+    }))
+  }
+  // Defer hiding until after the browser snapshots the drag ghost image
+  requestAnimationFrame(() => { draggingTaskId.value = task.id })
+}
+
 // ── Edge-scroll: advance calendar week when dragging to left/right edge ────────
 const calendarGridRef = ref<HTMLElement | null>(null)
 const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, onDragEnd: calendarEdgeDragEnd } =
@@ -768,19 +788,7 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
               class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-3] hover:text-[--fg-1] transition-colors truncate"
               :class="task.status === 'done' ? 'line-through opacity-40' : ''"
               @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
-              @dragstart="(e: DragEvent) => {
-                if (e.dataTransfer) {
-                  e.dataTransfer.effectAllowed = 'move'
-                  e.dataTransfer.setData('text/plain', JSON.stringify({
-                    type: 'task',
-                    taskId: task.id,
-                    title: task.text,
-                    fromAnchorId: anchor.id,
-                    fromDate: focusedDay,
-                  }))
-                }
-                requestAnimationFrame(() => { draggingTaskId.value = task.id })
-              }"
+              @dragstart="(e: DragEvent) => onSidebarTaskDragStart(e, task, anchor.id, focusedDay)"
               @dragend="draggingTaskId = null"
             >
               {{ task.text }}
