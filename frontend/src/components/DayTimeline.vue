@@ -177,14 +177,8 @@ function slotTime(i: number): string {
 }
 
 async function handleSlotDrop(payload: DropPayload, time: string) {
-  // Build a proper UTC Date from props.date + slot time. Using string interpolation
-  // ("2024-06-10T09:00:00") produces a local-naive ISO that backends treat as UTC,
-  // placing events hours off. Date + setHours + toISOString() is always unambiguous.
-  const [slotHours, slotMinutes] = time.split(':').map(Number)
-  const slotDate = new Date(`${props.date}T00:00:00`)
-  slotDate.setHours(slotHours, slotMinutes, 0, 0)
-  const slotStart = slotDate.toISOString()   // UTC with Z suffix — unambiguous for backend
-  const slotStartMs = slotDate.getTime()
+  const slotStart = `${props.date}T${time}:00`
+  const slotStartMs = new Date(slotStart).getTime()
 
   // type === 'task' handles both plan-view promotions AND calendar-event repositions
   // (useDraggableTask always writes type:'task'; fromStartTime present <-> calendar event)
@@ -196,15 +190,13 @@ async function handleSlotDrop(payload: DropPayload, time: string) {
     ?? eventStore.events.find(e => e.id === taskId)
   if (existing) {
     const dur = new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()
-    const newEnd = new Date(slotStartMs + (dur || 30 * 60_000)).toISOString()
+    const newEnd = toLocalIso(new Date(slotStartMs + (dur || 30 * 60_000)))
     await handleEventMove(existing, slotStart, newEnd)
   } else {
-    const endISO = new Date(slotStartMs + 30 * 60_000).toISOString()
+    const endISO = toLocalIso(new Date(slotStartMs + 30 * 60_000))
     await eventStore.promoteTask(taskId, slotStart, endISO, title)
-    // Use fetchPlanRange (not fetchPlan) — fetchPlan flips loading=true which causes
-    // PlanView's v-if="planStore.loading" to destroy and remount the entire grid.
-    // fetchPlanRange updates plans.value directly without touching loading.
-    await planStore.fetchPlanRange(props.date, props.date)
+    // Refresh plan cache so the promoted task is removed from anchor blocks
+    await planStore.fetchPlan(props.date)
   }
 }
 
@@ -259,7 +251,7 @@ function onTimedAreaDragEnter(e: DragEvent) {
 
 /** Map clientY to the nearest 15-min slot index, accounting for scroll offset. */
 function slotIndexFromClientY(clientY: number): number {
-  if (!timedAreaEl.value || !Number.isFinite(clientY)) return 0
+  if (!timedAreaEl.value) return 0
   const rect = timedAreaEl.value.getBoundingClientRect()
   const relY = Math.max(0, clientY - rect.top + timedAreaEl.value.scrollTop)
   return Math.max(0, Math.min(SLOT_COUNT - 1, Math.floor(relY / (15 * PX_PER_MINUTE))))
