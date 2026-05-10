@@ -1,0 +1,80 @@
+name: "Deploy to Fly.io (cloud release)"
+
+# Triggered only when cloud-version.txt changes on main or dev.
+# This is the normal deploy path — fly-deploy.yml is emergency manual override only.
+#
+# Version streams:
+#   cloud-version.txt  -- Fly.io cloud deploys (this workflow)
+#   pyproject.toml     -- public community image (publish-community.yml, tag-triggered)
+#   tether-premium     -- premium package index (tether-premium release workflow)
+#
+# Branch → env binding (enforced per job):
+#   main → tether-prod (fly.toml)
+#   dev  → tether-dev  (fly.dev.toml)
+#
+# Required secrets:
+#   FLY_API_TOKEN        -- Fly.io personal access token
+#   TETHER_PREMIUM_TOKEN -- GitHub PAT for installing tether-premium in remote build
+
+on:
+  push:
+    branches: [main, dev]
+    paths: ['cloud-version.txt']
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-prod:
+    name: Deploy prod (tether-prod)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Read cloud version
+        run: echo "VERSION=$(cat cloud-version.txt)" >> $GITHUB_ENV
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to tether-prod
+        # --ha=false: single machine (no auto-HA pair). Bot long-polls, not stateless.
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ env.VERSION }}
+        run: |
+          flyctl deploy --config fly.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION"
+          # PREMIUM_REQUIREMENTS defaults to requirements-premium.txt in Dockerfile
+
+  deploy-dev:
+    name: Deploy dev (tether-dev)
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+
+      - name: Read cloud version
+        run: |
+          BASE=$(cat cloud-version.txt)
+          SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
+          echo "VERSION=${BASE}-dev.${SHA7}" >> $GITHUB_ENV
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to tether-dev
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          PREMIUM_GIT_TOKEN: ${{ secrets.TETHER_PREMIUM_TOKEN }}
+          TETHER_VERSION: ${{ env.VERSION }}
+        run: |
+          flyctl deploy --config fly.dev.toml --remote-only --ha=false \
+            --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
+            --build-arg TETHER_VERSION="$TETHER_VERSION" \
+            --build-arg PREMIUM_REQUIREMENTS=requirements-premium-dev.txt
