@@ -62,15 +62,7 @@ jobs:
       - name: Read version from pyproject.toml
         id: version
         run: |
-          VERSION=$(python3 -c "
-import re, sys
-with open('pyproject.toml') as f:
-    for line in f:
-        m = re.match(r'^version\s*=\s*\"(.+)\"', line)
-        if m:
-            print(m.group(1)); sys.exit(0)
-sys.exit(1)
-")
+          VERSION=$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' pyproject.toml)
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
@@ -101,15 +93,7 @@ sys.exit(1)
       - name: Read version from pyproject.toml
         id: version
         run: |
-          BASE=$(python3 -c "
-import re, sys
-with open('pyproject.toml') as f:
-    for line in f:
-        m = re.match(r'^version\s*=\s*\"(.+)\"', line)
-        if m:
-            print(m.group(1)); sys.exit(0)
-sys.exit(1)
-")
+          BASE=$(awk -F'"' '/^version[[:space:]]*=/{print $2; exit}' pyproject.toml)
           SHA7=$(echo "$GITHUB_SHA" | cut -c1-7)
           echo "value=${BASE}-dev.${SHA7}" >> $GITHUB_OUTPUT
 
