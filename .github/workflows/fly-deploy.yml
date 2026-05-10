@@ -5,16 +5,14 @@ name: "Deploy to Fly.io"
 #
 # Versioning:
 #   TETHER_VERSION is read from pyproject.toml at deploy time.
-#   Release version bumps are done via scripts/release.sh (which tags + pushes),
-#   not by this workflow. This workflow just bakes whatever version is in
-#   pyproject.toml into the Docker image as an env var.
-#
-#   Prod deploys: TETHER_VERSION = pyproject version (e.g. 0.1.0)
-#   Dev deploys:  TETHER_VERSION = pyproject version + -dev.{sha7} (e.g. 0.1.0-dev.abc1234)
+#   PREMIUM_REQUIREMENTS selects which pinned tether-premium version to install:
+#     requirements-premium.txt     -- prod (stable pin, default)
+#     requirements-premium-dev.txt -- dev  (alpha pin)
+#   To upgrade premium: bump the version in the relevant requirements file.
 #
 # Required secrets:
 #   FLY_API_TOKEN        -- Fly.io personal access token
-#   TETHER_PREMIUM_TOKEN -- GitHub PAT for installing tether-premium from tether-pypi
+#   TETHER_PREMIUM_TOKEN -- GitHub PAT for cloning tether-premium
 
 on:
   push:
@@ -27,6 +25,8 @@ on:
       - 'shared/**'
       - 'prompts/**'
       - 'requirements.txt'
+      - 'requirements-premium.txt'
+      - 'requirements-premium-dev.txt'
       - 'Dockerfile'
       - 'supervisord.conf'
       - 'fly.toml'
@@ -85,6 +85,7 @@ sys.exit(1)
           flyctl deploy --config fly.toml --remote-only --ha=false \
             --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
             --build-arg TETHER_VERSION="$TETHER_VERSION"
+          # PREMIUM_REQUIREMENTS defaults to requirements-premium.txt in Dockerfile
 
   deploy-dev:
     name: Deploy dev (tether-dev)
@@ -122,4 +123,5 @@ sys.exit(1)
         run: |
           flyctl deploy --config fly.dev.toml --remote-only --ha=false \
             --build-arg PREMIUM_GIT_TOKEN="$PREMIUM_GIT_TOKEN" \
-            --build-arg TETHER_VERSION="$TETHER_VERSION"
+            --build-arg TETHER_VERSION="$TETHER_VERSION" \
+            --build-arg PREMIUM_REQUIREMENTS=requirements-premium-dev.txt
