@@ -34,6 +34,7 @@ vi.mock('../../lib/api', () => ({
 const mockPromoteTask = vi.fn()
 const mockMoveEvent = vi.fn()
 const mockFetchPlan = vi.fn()
+const mockFetchPlanRange = vi.fn()
 
 const mockTimedEvent: CalendarEvent = {
   id: 'ev-timed',
@@ -78,6 +79,7 @@ vi.mock('../../stores/plan', () => ({
     plan: null,
     plans: {},
     fetchPlan: mockFetchPlan,
+    fetchPlanRange: mockFetchPlanRange,
     today: '2024-06-10',
     activeDate: { value: '2024-06-10' },
   }),
@@ -117,6 +119,7 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     mockPromoteTask.mockReset()
     mockMoveEvent.mockReset()
     mockFetchPlan.mockReset()
+    mockFetchPlanRange.mockReset()
   })
 
   it('each 15-min slot has data-date and data-time attributes', async () => {
@@ -142,23 +145,52 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     expect(slot.exists()).toBe(true)
     const payload = { type: 'task', taskId: 'task-99', title: 'Do the thing' }
     await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
-    expect(mockPromoteTask).toHaveBeenCalledWith(
-      'task-99',
-      expect.stringContaining('09:00'),
-      expect.stringContaining('09:30'),
-      'Do the thing',
-    )
+    // Compute expected UTC ISO for local 09:00 (timezone-safe)
+    const expected09 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(9, 0, 0, 0); return d.toISOString() })()
+    const expected0930 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(9, 30, 0, 0); return d.toISOString() })()
+    expect(mockPromoteTask).toHaveBeenCalledWith('task-99', expected09, expected0930, 'Do the thing')
   })
 
-  it('after promoting a task to calendar, planStore.fetchPlan is called to refresh the plan cache', async () => {
-    // Bug 1: promoteTask runs but plan cache is never refreshed, so the task stays visible in the anchor block
+  it('after promoting a task, fetchPlanRange(date, date) is called — not fetchPlan — to avoid loading flash', async () => {
+    // Bug 1 + 3: fetchPlan flips loading=true which destroys the entire plan grid (v-if in PlanView).
+    // Fix: fetchPlanRange(date, date) updates plans.value without touching loading, so no remount.
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
     const slot = wrapper.find('[data-time="09:00"]')
     const payload = { type: 'task', taskId: 'task-99', title: 'Do the thing' }
     await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
     expect(mockPromoteTask).toHaveBeenCalled()
-    expect(mockFetchPlan).toHaveBeenCalledWith('2024-06-10')
+    expect(mockFetchPlanRange).toHaveBeenCalledWith('2024-06-10', '2024-06-10')
+    expect(mockFetchPlan).not.toHaveBeenCalled()
+  })
+
+  it('promoted event start and end times are UTC ISO strings (end in Z, not local-naive)', async () => {
+    // Bug 2: local-naive "2024-06-10T09:00:00" is treated as UTC by backend → event appears
+    // 7h early in PDT. Fix uses new Date(...).toISOString() which always produces UTC with Z suffix.
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const slot = wrapper.find('[data-time="09:00"]')
+    const payload = { type: 'task', taskId: 'task-99', title: 'UTC test' }
+    await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
+    expect(mockPromoteTask).toHaveBeenCalled()
+    const [, startTime, endTime] = mockPromoteTask.mock.calls[0]
+    expect(startTime).toMatch(/Z$/)  // Must be UTC ISO — unambiguous for backend
+    expect(endTime).toMatch(/Z$/)
+  })
+
+  it('repositioned event (drop of already-promoted task) passes UTC ISO times to moveEvent', async () => {
+    // Bug 2 also affects the existing-event move path: slotStart was built as local-naive.
+    // Fix: both move and promote paths use the same Date + toISOString() construction.
+    const { default: DayTimeline } = await import('../DayTimeline.vue')
+    const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
+    const slot = wrapper.find('[data-time="10:00"]')
+    // task-1 matches mockTimedEvent.task_id — triggers move path, not promote
+    const payload = { type: 'task', taskId: 'task-1', title: 'Team standup' }
+    await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
+    expect(mockMoveEvent).toHaveBeenCalled()
+    const [, startTime, endTime] = mockMoveEvent.mock.calls[0]
+    expect(startTime).toMatch(/Z$/)  // UTC ISO required
+    expect(endTime).toMatch(/Z$/)
   })
 
   it('dropping a task payload with fromStartTime moves the event preserving duration (PATCH /api/events/:id)', async () => {
@@ -176,11 +208,10 @@ describe('DayTimeline – 15-min slot drop targets', () => {
       durationMs,
     }
     await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
-    expect(mockMoveEvent).toHaveBeenCalledWith(
-      'ev-timed',
-      expect.stringContaining('10:00'),
-      expect.stringContaining('10:30'),
-    )
+    // Compute expected UTC ISO for local 10:00 / 10:30 (timezone-safe)
+    const expected10 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(10, 0, 0, 0); return d.toISOString() })()
+    const expected1030 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(10, 30, 0, 0); return d.toISOString() })()
+    expect(mockMoveEvent).toHaveBeenCalledWith('ev-timed', expected10, expected1030)
   })
 
   it('source event block is hidden (v-show=false) while its drag is active', async () => {
@@ -279,12 +310,10 @@ describe('DayTimeline – 15-min slot drop targets', () => {
       clientY: 190,
       dataTransfer: { getData: (t: string) => t === 'text/plain' ? JSON.stringify(payload) : '' },
     })
-    expect(mockPromoteTask).toHaveBeenCalledWith(
-      'task-99',
-      expect.stringContaining('T07:00'),
-      expect.stringContaining('T07:30'),
-      'X',
-    )
+    // Compute expected UTC ISO for local 07:00 / 07:30 (timezone-safe)
+    const expected07 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(7, 0, 0, 0); return d.toISOString() })()
+    const expected0730 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(7, 30, 0, 0); return d.toISOString() })()
+    expect(mockPromoteTask).toHaveBeenCalledWith('task-99', expected07, expected0730, 'X')
     wrapper.unmount()
   })
 
@@ -319,12 +348,10 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     })
 
     // Should have used overSlotIndex=12 (09:00), not slotIndexFromClientY(0)=0 (06:00)
-    expect(mockPromoteTask).toHaveBeenCalledWith(
-      'task-99',
-      expect.stringContaining('T09:00'),
-      expect.stringContaining('T09:30'),
-      'overSlotIndex test',
-    )
+    // Compute expected UTC ISO for local 09:00 / 09:30 (timezone-safe)
+    const expected09 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(9, 0, 0, 0); return d.toISOString() })()
+    const expected0930 = (() => { const d = new Date('2024-06-10T00:00:00'); d.setHours(9, 30, 0, 0); return d.toISOString() })()
+    expect(mockPromoteTask).toHaveBeenCalledWith('task-99', expected09, expected0930, 'overSlotIndex test')
     wrapper.unmount()
   })
 
