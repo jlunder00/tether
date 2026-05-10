@@ -61,6 +61,8 @@ jobs:
           BRANCH="chore/premium-pin-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Delete stale remote branch if it exists from a previous failed run
+          git push origin --delete "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add "$FILE"
           git commit -m "chore: bump tether-premium pin to ${VERSION}"
