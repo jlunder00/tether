@@ -20,6 +20,10 @@ function encodeStack(panels: Panel[]): string | undefined {
   return panels.map(p => `${p.kind}:${p.entityId}`).join(',')
 }
 
+function genId(): string {
+  return crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36))
+}
+
 function decodeStack(param: string): Panel[] {
   const result: Panel[] = []
   for (const segment of param.split(',').filter(Boolean)) {
@@ -27,7 +31,7 @@ function decodeStack(param: string): Panel[] {
     if (colon === -1) continue
     const kind = segment.slice(0, colon) as Panel['kind']
     const entityId = segment.slice(colon + 1)
-    result.push({ id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)), kind, entityId })
+    result.push({ id: genId(), kind, entityId })
   }
   return result
 }
@@ -47,7 +51,7 @@ export function useSlideOver() {
   }
 
   function push(panel: Omit<Panel, 'id'>) {
-    stack.value.push({ ...panel, id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)) })
+    stack.value.push({ ...panel, id: genId() })
     syncToUrl()
   }
 

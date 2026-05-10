@@ -2,10 +2,9 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { FollowupConfig } from './anchors'
 import { api } from '../lib/api'
+import { localDateString } from '../lib/dateUtils'
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done' | 'skipped' | 'blocked'
-
-export type { FollowupConfig }
 
 export interface Task {
   id: string
@@ -23,6 +22,8 @@ export interface Task {
   end_time?: string | null
   // Anchor association — set for plan tasks; null for backlog
   anchor_id?: string | null
+  // Plan date — present on backlog/kanban tasks (null when unscheduled)
+  plan_date?: string | null
   // Recurrence fields — anchor-recurring tasks only
   rrule?: string | null
   is_recurring_master?: boolean
@@ -39,17 +40,11 @@ export interface DayPlan {
   check_in_log: unknown[]
 }
 
-function localDateString(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-
 export const usePlanStore = defineStore('plan', () => {
   const plan = ref<DayPlan | null>(null)
   const loading = ref(false)
   const today = localDateString(new Date())
   const activeDate = ref(today)
-  const savedDates = ref<string[]>([]) // Never used, but is this useful?
   const plans = ref<Record<string, DayPlan>>({})
 
   async function fetchPlan(date?: string) {
@@ -67,15 +62,7 @@ export const usePlanStore = defineStore('plan', () => {
     }
   }
 
-  async function fetchSavedDates() {
-    const resp = await api('/api/plans')
-    savedDates.value = await resp.json()
-  }
-
   // Deprecated: superceeded by routing via router.push()
-  // function goToPrevDay() { fetchPlan(offsetDate(activeDate.value, -1)) }
-  // function goToNextDay() { fetchPlan(offsetDate(activeDate.value, +1)) }
-  // function goToToday()   { fetchPlan(today) }
 
   async function fetchPlanRange(startDate: string, endDate: string) {
     const resp = await api(`/api/plan/range?start=${startDate}&end=${endDate}`)
@@ -254,22 +241,54 @@ export const usePlanStore = defineStore('plan', () => {
     return resp.ok
   }
 
+  /**
+   * Move a backlog task onto a specific date+anchor (schedule it).
+   * Calls PUT /api/tasks/:id/move.
+   */
+  async function scheduleTask(taskId: string, date: string, anchorId: string): Promise<void> {
+    await api(`/api/tasks/${taskId}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, anchor_id: anchorId }),
+    })
+  }
+
+  /**
+   * Unschedule a plan task — move it back to the backlog (date: null, anchor_id: null).
+   */
+  async function moveToBacklog(taskId: string): Promise<void> {
+    await api(`/api/tasks/${taskId}/move`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: null, anchor_id: null }),
+    })
+  }
+
+  /**
+   * Create a new task directly on a specific date+anchor.
+   * Used by AnchorBlock.onAddNewTask and DashboardView.onAddTaskToNow.
+   */
+  async function createPlanTask(
+    date: string,
+    anchorId: string,
+    opts: { text?: string; context_subject?: string; milestone_id?: string } = {},
+  ): Promise<Task | null> {
+    const resp = await api('/api/tasks/unscheduled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: opts.text ?? 'New task', date, anchor_id: anchorId, ...opts }),
+    })
+    if (!resp.ok) return null
+    return resp.json()
+  }
+
   // Deprecated: superceeded by auth store manage ws transport in /api/bot/chat
-  // function connectWebSocket() {
-  //   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  //   const ws = new WebSocket(`${proto}://${location.host}/ws`)
-  //   ws.onmessage = (e) => {
-  //     const msg = JSON.parse(e.data)
-  //     if (msg.type === 'plan_updated') fetchPlan()
-  //   }
-  //   ws.onclose = () => setTimeout(connectWebSocket, 3000)
-  //   return ws
-  // }
 
   return {
-    plan, loading, today, activeDate, savedDates, plans,
-    fetchPlan, fetchSavedDates,
+    plan, loading, today, activeDate, plans,
+    fetchPlan,
     fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
     updateAnchorTasks, updateTaskStatus, patchTaskFields,
+    scheduleTask, moveToBacklog, createPlanTask,
   }
 })

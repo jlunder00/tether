@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { localDateString } from '../../lib/dateUtils'
 import { usePlanStore } from '../../stores/plan'
 import { useAnchorStore } from '../../stores/anchors'
 import { useDragEdgeScroll } from '../../composables/useDragEdgeScroll'
@@ -19,17 +20,13 @@ function getMonday(dateStr: string): Date {
   return d
 }
 
-function localDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 const weekStart = ref(getMonday(planStore.activeDate))
 
 const weekDates = computed<string[]>(() =>
   Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart.value)
     d.setDate(d.getDate() + i)
-    return localDateStr(d)
+    return localDateString(d)
   }),
 )
 

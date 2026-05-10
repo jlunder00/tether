@@ -8,17 +8,13 @@ import { useEventStore } from '../stores/events'
 import TaskCard from '../components/TaskCard.vue'
 import AnchorFocusWidget from '../components/AnchorFocusWidget.vue'
 import { textOnColor } from '../composables/useTextOnColor'
+import { localToday } from '../lib/dateUtils'
 
 const planStore = usePlanStore()
 const anchorStore = useAnchorStore()
 const milestoneStore = useMilestoneStore()
 const eventStore = useEventStore()
 const botStatus = ref('unknown')
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 onMounted(async () => {
   planStore.fetchPlan()
@@ -60,12 +56,8 @@ async function onAddTaskToNow() {
   if (!currentAnchor.value) return
   const today = localToday()
   try {
-    const resp = await api('/api/tasks/unscheduled', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: 'New task', date: today, anchor_id: currentAnchor.value.id }),
-    })
-    if (!resp.ok) throw new Error(`${resp.status}`)
+    const task = await planStore.createPlanTask(today, currentAnchor.value.id)
+    if (!task) throw new Error('createPlanTask failed')
     await planStore.fetchPlan(today)
   } catch (e) {
     console.error('Failed to create task:', e)
@@ -136,13 +128,6 @@ const dayStats = computed(() => {
         </ul>
       </div>
 
-      <!-- This Week Box -->
-      <div class="bg-[--bg-elev-2] border border-[--border-1] rounded-xl p-4">
-        <h2 class="font-semibold text-lg mb-3">This Week</h2>
-        <p class="text-[--fg-5] text-sm">Coming soon</p>
-      </div>
     </div>
-
-    <router-view />
   </div>
 </template>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { localDateString } from '../../lib/dateUtils'
 import { usePlanStore } from '../../stores/plan'
 import MiniCalendarDay from './MiniCalendarDay.vue'
 
@@ -8,10 +9,6 @@ const planStore = usePlanStore()
 const emit = defineEmits<{
   (e: 'day-click', date: string): void
 }>()
-
-function localDateStr(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 const viewDate = ref(new Date(planStore.activeDate + 'T12:00:00'))
 
@@ -39,11 +36,11 @@ const calendarDates = computed<string[]>(() => {
   const startOffset = first.getDay() === 0 ? 6 : first.getDay() - 1
   return Array.from({ length: 42 }, (_, i) => {
     const d = new Date(y, m, 1 - startOffset + i)
-    return localDateStr(d)
+    return localDateString(d)
   })
 })
 
-const today = computed(() => localDateStr(new Date()))
+const today = computed(() => localDateString(new Date()))
 
 function taskCount(date: string): number {
   const day = planStore.plans[date]
