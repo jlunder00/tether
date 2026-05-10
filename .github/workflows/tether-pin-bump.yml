@@ -1,10 +1,14 @@
-name: "Update premium version pin"
+name: "Bump tether-premium pin"
 
-# Dispatched by tether-premium's release workflow after a tag is pushed.
-# Updates the appropriate requirements file and opens a PR.
+# Dispatched by tether-premium's release workflow after the tether-pypi index
+# update has completed successfully.  Updates the appropriate requirements file,
+# opens a PR, and enables auto-merge so the pin lands without manual intervention.
 #
 #   Alpha release -> requirements-premium-dev.txt, PR targeting dev
 #   Stable release -> requirements-premium.txt,     PR targeting main
+#
+# Branch guard: a prerelease dispatch must target dev; stable must target main.
+# The workflow fails loudly if the inputs are inconsistent.
 
 on:
   workflow_dispatch:
@@ -40,6 +44,21 @@ jobs:
             echo "base=main" >> $GITHUB_OUTPUT
           fi
 
+      - name: Verify branch/prerelease consistency
+        env:
+          PRERELEASE: ${{ inputs.prerelease }}
+          BASE: ${{ steps.target.outputs.base }}
+        run: |
+          if [ "$PRERELEASE" = "true" ] && [ "$BASE" != "dev" ]; then
+            echo "ERROR: prerelease pin bump must target dev (got: ${BASE})"
+            exit 1
+          fi
+          if [ "$PRERELEASE" = "false" ] && [ "$BASE" != "main" ]; then
+            echo "ERROR: stable pin bump must target main (got: ${BASE})"
+            exit 1
+          fi
+          echo "Branch guard passed: prerelease=${PRERELEASE}, base=${BASE}"
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ steps.target.outputs.base }}
@@ -51,7 +70,7 @@ jobs:
         run: |
           sed -i "s/tether-premium==.*/tether-premium==${VERSION}/" "$FILE"
 
-      - name: Open PR
+      - name: Open PR and enable auto-merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
@@ -61,6 +80,8 @@ jobs:
           BRANCH="chore/premium-pin-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Clean up any stale remote branch from a previous failed run
+          git push origin --delete "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add "$FILE"
           git commit -m "chore: bump tether-premium pin to ${VERSION}"
@@ -70,3 +91,4 @@ jobs:
             --body "Automated pin bump triggered by tether-premium release ${VERSION}." \
             --base "$BASE" \
             --head "$BRANCH"
+          gh pr merge --auto --squash "$BRANCH"
