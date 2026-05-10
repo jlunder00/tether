@@ -1,7 +1,9 @@
 import asyncio
+import hmac
 import logging
+import os
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 import asyncpg
 from db.pg_queries import get_last_bot_activity
 from db.pool_middleware import get_db_conn
@@ -46,6 +48,86 @@ async def bot_health(_auth=Depends(auth_dependency),
         age_min = float("inf")
     status = "ok" if age_min < 5 else "stale" if age_min < 30 else "offline"
     return {"status": status, "last_activity": activity}
+
+
+def _verify_telegram_secret(request: Request) -> None:
+    """Verify X-Telegram-Bot-Api-Secret-Token header against TELEGRAM_WEBHOOK_SECRET env var.
+
+    Raises HTTP 403 if the header is missing or does not match.
+    Uses hmac.compare_digest to prevent timing attacks.
+    """
+    expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not expected or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+
+
+async def _process_telegram_update(update: dict, pool, vault) -> None:
+    """Process a single Telegram Update dict.
+
+    Extracts the message text and chat_id, resolves the linked user_id,
+    then calls handle_message() — the same path used by the polling loop.
+    Non-message updates (e.g. edited_message, channel_post) are silently ignored.
+    """
+    import requests as _requests
+    from config.loader import config as tether_config
+    from bot.message_handler import _resolve_user_id, _send_telegram
+
+    msg = update.get("message")
+    if not msg:
+        logger.debug("_process_telegram_update: no message field in update, skipping")
+        return
+
+    text = msg.get("text", "").strip()
+    if not text:
+        logger.debug("_process_telegram_update: empty text in message, skipping")
+        return
+
+    incoming_chat_id = str(msg.get("chat", {}).get("id", ""))
+    if not incoming_chat_id:
+        logger.warning("_process_telegram_update: no chat.id in update")
+        return
+
+    token = tether_config.get("telegram.bot_token", "")
+
+    # Resolve Telegram chat_id → Tether user_id
+    user_id = await _resolve_user_id(pool, incoming_chat_id)
+    if user_id is None:
+        _send_telegram(token, incoming_chat_id,
+                       "I don't recognize you. Link your Tether account at your Tether URL, "
+                       "then use /link to connect.")
+        return
+
+    send_fn = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
+
+    try:
+        await handle_message(text, send_fn=send_fn, pool=pool, user_id=user_id, vault=vault)
+    except Exception as exc:
+        logger.error("_process_telegram_update: handle_message raised: %s", exc, exc_info=True)
+        try:
+            send_fn(f"[Tether error: {exc}]")
+        except Exception:
+            pass
+
+
+@router.post("/bot/telegram-webhook")
+async def telegram_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    """Receive Telegram Update payloads (webhook mode).
+
+    Responds 200 immediately so Telegram doesn't retry.
+    Processing happens in a BackgroundTask — same handle_message() path as polling.
+
+    Auth: X-Telegram-Bot-Api-Secret-Token header must match TELEGRAM_WEBHOOK_SECRET env var.
+    """
+    _verify_telegram_secret(request)
+    update = await request.json()
+    pool = request.app.state.pool
+    vault = getattr(request.app.state, "vault", None)
+    background_tasks.add_task(_process_telegram_update, update, pool, vault)
+    return Response(status_code=200)
 
 
 @router.websocket("/bot/chat")

@@ -35,3 +35,13 @@ telegram:
   # local config override dir. Pi deployments override via TETHER_CONFIG_DIR.
   bot_token: "${TELEGRAM_BOT_TOKEN:-}"
   chat_id: "${TELEGRAM_CHAT_ID:-}"
+
+  # Webhook mode (Fly.io / any public HTTPS deployment):
+  # Set TELEGRAM_WEBHOOK_URL to enable webhook mode instead of long-polling.
+  # When set, the API server registers the webhook with Telegram on startup
+  # and the supervisord bot process is replaced with a no-op sleep.
+  # When unset (default), polling mode is used — compatible with Pi / local dev.
+  #
+  # Required Fly secrets when using webhook mode:
+  #   TELEGRAM_WEBHOOK_URL     — e.g. https://your-app.fly.dev/api/bot/telegram-webhook
+  #   TELEGRAM_WEBHOOK_SECRET  — random string shared between Telegram and your server

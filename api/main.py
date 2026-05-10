@@ -90,6 +90,22 @@ async def lifespan(app):
         else:
             app.state.vault = None
 
+        # Register Telegram webhook if webhook URL is configured.
+        # When TELEGRAM_WEBHOOK_URL is not set, polling mode is used (no-op here).
+        webhook_url = _startup_os.environ.get("TELEGRAM_WEBHOOK_URL")
+        if webhook_url:
+            try:
+                from bot.webhook_setup import register_webhook
+                from config.loader import config as tether_config
+                bot_token = tether_config.get("telegram.bot_token", "")
+                secret = _startup_os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+                await register_webhook(bot_token, webhook_url, secret)
+            except Exception as _wh_exc:
+                logging.getLogger(__name__).warning(
+                    "lifespan: webhook registration failed (bot may not receive messages): %s",
+                    _wh_exc,
+                )
+
         task = asyncio.create_task(_expiry_loop(app))
         yield
         task.cancel()
