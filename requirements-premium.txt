@@ -1,0 +1,2 @@
+--extra-index-url https://jlunder00.github.io/tether-pypi/simple/
+tether-premium==0.0.1
