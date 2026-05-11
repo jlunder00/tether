@@ -1,7 +1,9 @@
 name: "Deploy to Fly.io"
 
-# Deploys to Fly.io on pushes to main (prod) or dev (dev).
-# Fly handles the remote image build -- no self-hosted runner needed.
+# Emergency manual override only — normal deploys via cloud-deploy.yml.
+#
+# cloud-deploy.yml fires automatically when cloud-version.txt changes on main or dev.
+# Use this workflow only when you need to force a deploy without bumping the cloud version.
 #
 # Versioning:
 #   TETHER_VERSION is read from pyproject.toml at deploy time.
@@ -15,23 +17,7 @@ name: "Deploy to Fly.io"
 #   TETHER_PREMIUM_TOKEN -- GitHub PAT for cloning tether-premium
 
 on:
-  push:
-    branches: [main, dev]
-    paths:
-      - 'api/**'
-      - 'bot/**'
-      - 'tether_mcp/**'
-      - 'db/**'
-      - 'shared/**'
-      - 'prompts/**'
-      - 'requirements.txt'
-      - 'requirements-premium.txt'
-      - 'requirements-premium-dev.txt'
-      - 'Dockerfile'
-      - 'supervisord.conf'
-      - 'fly.toml'
-      - 'fly.dev.toml'
-      - 'docker-entrypoint.sh'
+  # Emergency manual override only — normal deploys via cloud-deploy.yml
   workflow_dispatch:
     inputs:
       environment:
