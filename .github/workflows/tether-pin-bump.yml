@@ -72,7 +72,10 @@ jobs:
 
       - name: Open PR and enable auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Use a PAT here instead of GITHUB_TOKEN so that test workflows
+          # trigger on the opened PR. PRs created by GITHUB_TOKEN are exempt
+          # from workflow triggers (GitHub restriction to prevent loops).
+          GH_TOKEN: ${{ secrets.TETHER_REPO_PAT }}
           VERSION: ${{ inputs.version }}
           FILE: ${{ steps.target.outputs.file }}
           BASE: ${{ steps.target.outputs.base }}
