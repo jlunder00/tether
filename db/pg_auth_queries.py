@@ -308,6 +308,68 @@ async def get_user_by_webhook_secret(
     return str(row["user_id"])
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 — bot token registration endpoints
+# ---------------------------------------------------------------------------
+
+async def upsert_telegram_bot_token(
+    conn: asyncpg.Connection,
+    user_id: str,
+    fernet: Fernet,
+    raw_token: str,
+    webhook_secret: str,
+) -> None:
+    """Fernet-encrypt raw_token and upsert into telegram_connections.
+
+    Handles both:
+    - New user who hasn't linked Telegram yet (inserts with NULL telegram_chat_id —
+      requires the d9e0f1a2b3c4 migration making that column nullable).
+    - Existing user updating their bot token (ON CONFLICT preserves chat_id).
+    """
+    blob: bytes = fernet.encrypt(raw_token.encode())
+    await conn.execute(
+        """
+        INSERT INTO telegram_connections (user_id, bot_token_encrypted, webhook_secret)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE
+            SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
+                webhook_secret      = EXCLUDED.webhook_secret
+        """,
+        _uuid.UUID(user_id),
+        blob,
+        webhook_secret,
+    )
+
+
+async def get_telegram_bot_row(
+    conn: asyncpg.Connection, user_id: str
+) -> dict | None:
+    """Return the telegram_connections row for this user, or None if absent."""
+    row = await conn.fetchrow(
+        "SELECT bot_token_encrypted, webhook_secret FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    return _row(row)
+
+
+async def clear_telegram_bot_token(
+    conn: asyncpg.Connection, user_id: str
+) -> None:
+    """Clear bot_token_encrypted and webhook_secret for this user.
+
+    Does nothing (no error) if the user has no telegram_connections row.
+    """
+    await conn.execute(
+        """
+        UPDATE telegram_connections
+           SET bot_token_encrypted = NULL,
+               webhook_secret      = NULL
+         WHERE user_id = $1
+        """,
+        _uuid.UUID(user_id),
+    )
+
+
 async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None:
     """Return the user with the most recent telegram link or message turn.
 
