@@ -286,11 +286,6 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     expect(mockPromoteTask).toHaveBeenCalled()
     // Sym 4 fix: optimistic removal instead of full-week fetchPlanRange
     expect(mockRemoveTaskFromPlans).toHaveBeenCalledWith('task-99')
-    // fetchPlanRange must NOT be called for promotion (eliminated the round-trip)
-    const fetchRangeCalls = (mockFetchPlanRange.mock.calls as string[][]).filter(
-      (args) => args[0] !== args[1] || args.length > 0,
-    )
-    // Only initial load call (from loadEvents) should have happened, not a post-drop call
     expect(mockRemoveTaskFromPlans).toHaveBeenCalledTimes(1)
   })
 
