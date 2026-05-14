@@ -11,6 +11,7 @@ import { useContextStore } from '../stores/context'
 import { useCalendarFocus } from '../composables/useCalendarFocus'
 import { useSlideOver } from '../composables/useSlideOver'
 import TaskCard from '../components/TaskCard.vue'
+import CalendarSidebarTask from '../components/CalendarSidebarTask.vue'
 import CalendarFilterPanel from '../components/CalendarFilterPanel.vue'
 import RecurrenceEditDialog from '../components/RecurrenceEditDialog.vue'
 import type { RecurrenceEditScope, PendingRecurrence } from '../types/recurrence'
@@ -611,8 +612,11 @@ async function onColumnDrop(e: DragEvent, dayIndex: number) {
     const endDate = new Date(startDate.getTime() + 60 * 60_000)
     const title = (payload.title as string) ?? 'Task'
     await eventStore.promoteTask(taskId, startDate.toISOString(), endDate.toISOString(), title)
-    // Refresh plan range so promoted task is removed from sidebar anchor blocks
-    await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+    // Sym 4 fix: optimistically remove the task from plan caches so the sidebar
+    // updates instantly without a network round-trip. eventStore.promoteTask already
+    // added the event to events.value, making the calendar side instant — this
+    // makes the sidebar equally instant by removing the source task in-memory.
+    planStore.removeTaskFromPlans(taskId)
   }
 }
 
@@ -631,11 +635,14 @@ async function onSidebarAnchorDrop(e: DragEvent, anchorId: string) {
           ?? eventStore.events.find(e => e.id === taskId)
         if (!ev) return
         await eventStore.demoteEvent(ev.id, anchorId, focusedDay.value)
-        await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
+        // Sym 4 fix: fetch only the focused day (not the full week) to restore the
+        // demoted task in the sidebar. We need a real fetch here because demoteEvent
+        // removes the event but we need the full task payload to display it in the plan.
+        await planStore.fetchPlanRange(focusedDay.value, focusedDay.value)
       } else if (data.fromAnchorId && data.fromDate) {
         // Task→task move: dragging a sidebar task to a different anchor (Bug A/D fix)
+        // moveTask already applies an optimistic update to plans.value — no fetch needed.
         await planStore.moveTask(taskId, data.fromDate as string, data.fromAnchorId as string, focusedDay.value, anchorId)
-        await planStore.fetchPlanRange(dayKeys.value[0], dayKeys.value[6])
       }
     }
   } catch { /* ignore malformed */ }
@@ -700,30 +707,6 @@ function loadEvents() {
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-// ── Sidebar task drag-source hiding (mirrors AnchorBlock.vue:143-165) ────────
-// rAF deferral lets the browser snapshot the ghost image before the source is hidden.
-const draggingTaskId = ref<string | null>(null)
-
-function onSidebarTaskDragStart(
-  e: DragEvent,
-  task: { id: string; text: string },
-  anchorId: string,
-  fromDate: string,
-) {
-  if (e.dataTransfer) {
-    e.dataTransfer.effectAllowed = 'move'
-    e.dataTransfer.setData('text/plain', JSON.stringify({
-      type: 'task',
-      taskId: task.id,
-      title: task.text,
-      fromAnchorId: anchorId,
-      fromDate,
-    }))
-  }
-  // Defer hiding until after the browser snapshots the drag ghost image
-  requestAnimationFrame(() => { draggingTaskId.value = task.id })
-}
-
 // ── Edge-scroll: advance calendar week when dragging to left/right edge ────────
 const calendarGridRef = ref<HTMLElement | null>(null)
 const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, onDragEnd: calendarEdgeDragEnd } =
@@ -780,19 +763,14 @@ const { onDragOver: calendarEdgeDragOver, onDragLeave: calendarEdgeDragLeave, on
           </div>
           <!-- Task list — max height + scroll so one long anchor doesn't consume the panel -->
           <ul class="flex flex-col gap-0.5 px-1 pb-1 max-h-36 overflow-y-auto">
-            <li
+            <CalendarSidebarTask
               v-for="task in tasks"
               :key="task.id"
-              v-show="draggingTaskId !== task.id"
-              draggable="true"
-              class="text-xs px-1.5 py-1 rounded cursor-grab hover:bg-[--bg-elev-2] text-[--fg-3] hover:text-[--fg-1] transition-colors truncate"
-              :class="task.status === 'done' ? 'line-through opacity-40' : ''"
-              @click.stop="pushPanel({ kind: 'task', entityId: task.id })"
-              @dragstart="(e: DragEvent) => onSidebarTaskDragStart(e, task, anchor.id, focusedDay)"
-              @dragend="draggingTaskId = null"
-            >
-              {{ task.text }}
-            </li>
+              :task="task"
+              :anchor-id="anchor.id"
+              :from-date="focusedDay"
+              @click="pushPanel({ kind: 'task', entityId: $event })"
+            />
             <li v-if="!tasks.length" class="text-[11px] text-[--fg-6] px-1.5 py-0.5">No tasks</li>
           </ul>
         </div>

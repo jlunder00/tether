@@ -68,6 +68,12 @@ export const usePlanStore = defineStore('plan', () => {
     const resp = await api(`/api/plan/range?start=${startDate}&end=${endDate}`)
     const data: Record<string, DayPlan> = await resp.json()
     plans.value = { ...plans.value, ...data }
+    // Sym 1 fix: keep plan.value (single-day cache) in sync so AnchorBlocks in PlanView
+    // (which read store.plan, not store.plans[date]) reflect promotions and demotions
+    // without requiring a fetchPlan call that would flip loading and destroy the grid.
+    if (data[activeDate.value]) {
+      plan.value = data[activeDate.value]
+    }
   }
 
   async function moveTask(
@@ -76,19 +82,48 @@ export const usePlanStore = defineStore('plan', () => {
     toDate: string, toAnchor: string,
     position?: number,
   ) {
-    // Optimistic update in plans cache — each side is independent so that
-    // moving to an uncached date still removes the task from the visible plan.
-    const fromDay = plans.value[fromDate] ?? (fromDate === activeDate.value ? plan.value : null)
-    const toDay   = plans.value[toDate]   ?? (toDate   === activeDate.value ? plan.value : null)
-    const task = fromDay?.anchors[fromAnchor]?.tasks.find(t => t.id === taskUuid)
-    if (fromDay && task) {
-      fromDay.anchors[fromAnchor].tasks = fromDay.anchors[fromAnchor].tasks.filter(t => t.id !== taskUuid)
+    // Sym 3 fix: update ALL caches that contain the affected date so that both
+    // AnchorBlocks in PlanView (reading plan.value) and CalendarView (reading
+    // plans.value[date]) see the change immediately.
+    // Build the candidate source/target objects for each cache layer.
+    const fromCandidates: (DayPlan | null)[] = [
+      plans.value[fromDate] ?? null,
+      fromDate === activeDate.value ? plan.value : null,
+    ]
+    const toCandidates: (DayPlan | null)[] = [
+      plans.value[toDate] ?? null,
+      toDate === activeDate.value ? plan.value : null,
+    ]
+
+    // Deduplicate: when plans.value[date] and plan.value point to different objects,
+    // we want to mutate both. When they're the same object (shouldn't happen normally),
+    // the second mutation is a no-op because the task was already removed/inserted.
+    const seen = new Set<DayPlan>()
+    let task: Task | undefined
+
+    // Find the task in any from-candidate (use first match)
+    for (const fromDay of fromCandidates) {
+      if (!fromDay || seen.has(fromDay)) continue
+      seen.add(fromDay)
+      const found = fromDay.anchors[fromAnchor]?.tasks.find(t => t.id === taskUuid)
+      if (found && !task) task = found as any
+      if (found) {
+        fromDay.anchors[fromAnchor].tasks = fromDay.anchors[fromAnchor].tasks.filter(t => t.id !== taskUuid)
+      }
     }
-    if (toDay && task) {
-      if (!toDay.anchors[toAnchor]) toDay.anchors[toAnchor] = { tasks: [], notes: '' }
-      const pos = position ?? toDay.anchors[toAnchor].tasks.length
-      toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
+
+    // Insert into all to-candidates that are populated
+    const toSeen = new Set<DayPlan>()
+    if (task) {
+      for (const toDay of toCandidates) {
+        if (!toDay || toSeen.has(toDay)) continue
+        toSeen.add(toDay)
+        if (!toDay.anchors[toAnchor]) toDay.anchors[toAnchor] = { tasks: [], notes: '' }
+        const pos = position ?? toDay.anchors[toAnchor].tasks.length
+        toDay.anchors[toAnchor].tasks.splice(pos, 0, { ...task, position: pos })
+      }
     }
+
     await api(`/api/tasks/${taskUuid}/move`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -254,6 +289,34 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   /**
+   * Optimistically remove a task from ALL plan caches by id.
+   * Call this immediately after eventStore.promoteTask to hide the source task
+   * from AnchorBlocks without a network round-trip. The event store's promoteTask
+   * has already added the new event to events.value, so the calendar side updates
+   * immediately — this makes the plan-sidebar side equally instant.
+   *
+   * Sym 4 fix: replaces the full-week fetchPlanRange call in CalendarView's
+   * drop handler, eliminating the network-induced lag between drop and source hide.
+   */
+  function removeTaskFromPlans(taskId: string): void {
+    // Remove from range cache (all cached days)
+    for (const dayPlan of Object.values(plans.value)) {
+      if (!dayPlan?.anchors) continue
+      for (const anchor of Object.values(dayPlan.anchors)) {
+        const idx = anchor.tasks.findIndex(t => t.id === taskId)
+        if (idx !== -1) { anchor.tasks.splice(idx, 1); break }
+      }
+    }
+    // Remove from single-day plan (PlanView's AnchorBlocks read this)
+    if (plan.value?.anchors) {
+      for (const anchor of Object.values(plan.value.anchors)) {
+        const idx = anchor.tasks.findIndex(t => t.id === taskId)
+        if (idx !== -1) { anchor.tasks.splice(idx, 1); break }
+      }
+    }
+  }
+
+  /**
    * Unschedule a plan task — move it back to the backlog (date: null, anchor_id: null).
    */
   async function moveToBacklog(taskId: string): Promise<void> {
@@ -289,6 +352,6 @@ export const usePlanStore = defineStore('plan', () => {
     fetchPlan,
     fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
     updateAnchorTasks, updateTaskStatus, patchTaskFields,
-    scheduleTask, moveToBacklog, createPlanTask,
+    scheduleTask, moveToBacklog, createPlanTask, removeTaskFromPlans,
   }
 })
