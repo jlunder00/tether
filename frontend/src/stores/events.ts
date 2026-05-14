@@ -30,23 +30,16 @@ export const useEventStore = defineStore('events', () => {
   /**
    * Promote a task to a calendar event (sets start/end time).
    * POST /api/events — creates a calendar event with the given time range.
+   *
+   * True optimistic insert: the event appears in the store immediately (before the
+   * network round-trip) with a temp ID prefixed "optimistic-". On 2xx the temp
+   * entry is replaced with the server-confirmed event (preserving list order). On
+   * any failure the temp entry is removed.
    */
   async function promoteTask(taskId: string, startTime: string, endTime: string, title: string): Promise<CalendarEvent | null> {
-    try {
-      const resp = await api('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_id: taskId, start_time: startTime, end_time: endTime, title }),
-      })
-      if (resp.ok) {
-        const event: CalendarEvent = await resp.json()
-        events.value.push(event)
-        return event
-      }
-    } catch { /* fall through */ }
-    // Optimistic local insert until backend ships
+    const tempId = `optimistic-${crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36))}`
     const optimistic: CalendarEvent = {
-      id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)),
+      id: tempId,
       title,
       start_time: startTime,
       end_time: endTime,
@@ -62,7 +55,24 @@ export const useEventStore = defineStore('events', () => {
       context_subject: null,
     }
     events.value.push(optimistic)
-    return optimistic
+
+    try {
+      const resp = await api('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, start_time: startTime, end_time: endTime, title }),
+      })
+      if (resp.ok) {
+        const confirmed: CalendarEvent = await resp.json()
+        const idx = events.value.findIndex(e => e.id === tempId)
+        if (idx !== -1) events.value[idx] = confirmed
+        return confirmed
+      }
+    } catch { /* fall through to cleanup */ }
+
+    // On failure: remove the optimistic entry
+    events.value = events.value.filter(e => e.id !== tempId)
+    return null
   }
 
   /**
