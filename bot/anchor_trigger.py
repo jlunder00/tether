@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """Cron-invoked: sends anchor transition message to Telegram.
 
-Phase 1 refactor — per-user Telegram migration:
-  - Accepts (pool, user_id, dispatch_fn) instead of reading globals.
-  - Replaces subprocess claude CLI with call_claude() from message_handler.
-  - Removes config.yaml read and TETHER_USER_ID env var requirement.
-  - Removes send_telegram() / direct bot_token / chat_id references.
+Phase C refactor — internal endpoint migration:
+  - trigger_anchor signature changed to keyword-only args:
+    trigger_anchor(anchor_id, *, pool, user_id, dispatch_fn)
+  - dispatch_fn is now called with notify-style kwargs (user_id=, notification_type=,
+    text=, priority=, thread_key=) rather than a bare string.
+  - main() and _run_standalone() removed — invocation now handled by the
+    internal API endpoint (api/routes/internal.py).
 
-The standalone CLI entry point (main()) still works: it bootstraps its own
-pool, loads the vault key, fetches credentials from DB, and invokes
-trigger_anchor(pool, user_id, dispatch_fn, anchor_id).
+DEPRECATED: The standalone CLI entry point has been removed. Use the internal
+HTTP endpoint POST /api/internal/notifications/check instead.
 """
 from __future__ import annotations
 
-import argparse
-import asyncio
 import logging
-import sys
+from datetime import date
 from pathlib import Path
 from typing import Callable, Awaitable
 
@@ -32,19 +31,20 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 
 async def trigger_anchor(
+    anchor_id: str,
+    *,
     pool,
     user_id: str,
-    dispatch_fn: Callable[[str], Awaitable[None]],
-    anchor_id: str,
+    dispatch_fn: Callable[..., Awaitable[None]],
 ) -> None:
     """Generate and send an anchor transition message for the given user.
 
     Args:
+        anchor_id: the anchor being triggered (e.g. 'grind_am').
         pool: asyncpg connection pool (already open).
         user_id: Tether user UUID string.
-        dispatch_fn: async callable that sends a text message to the user,
-            e.g. ``lambda msg: _send_telegram(token, chat_id, msg)``.
-        anchor_id: the anchor being triggered (e.g. 'grind_am').
+        dispatch_fn: async callable accepting notify-style keyword args:
+            user_id, notification_type, text, priority, thread_key.
     """
 
     async with pg.get_conn(pool, user_id) as conn:
@@ -73,71 +73,10 @@ async def trigger_anchor(
     )
 
     message = await call_claude(prompt)
-    await dispatch_fn(message)
-
-
-async def _run_standalone(anchor_id: str) -> None:
-    """Bootstrap credentials from DB and call trigger_anchor.
-
-    Used by the cron-invoked CLI entry point. No env vars needed —
-    vault key comes from config, token from telegram_connections.
-    """
-    import db.postgres as pg
-    import db.pg_auth_queries as pg_auth_queries
-    from bot.message_handler import _fetch_poll_credentials, _send_telegram
-    from bot.message_handler import tether_config
-    from cryptography.fernet import Fernet
-
-    vault_key_str = tether_config.get("vault.key")
-    if not vault_key_str:
-        logger.error("vault.key not configured — cannot decrypt bot token")
-        sys.exit(1)
-
-    fernet = Fernet(
-        vault_key_str.encode() if isinstance(vault_key_str, str) else vault_key_str
+    await dispatch_fn(
+        user_id=user_id,
+        notification_type="anchor_ping",
+        text=message,
+        priority="important",
+        thread_key=f"anchor:{anchor_id}:{date.today()}",
     )
-
-    pool = await pg.create_pool()
-    try:
-        credentials = await _fetch_poll_credentials(pool, fernet)
-        if credentials is None:
-            logger.error(
-                "No per-user bot token in DB. "
-                "Run scripts/migrate_telegram_to_per_user.py first."
-            )
-            sys.exit(1)
-
-        token, chat_id, user_id = credentials
-
-        if not chat_id:
-            # User has a bot token but hasn't linked a chat_id yet (no inbound
-            # message received since migration). Skip this anchor — sending to an
-            # empty chat_id would silently fail at the Telegram API.
-            logger.warning(
-                "Anchor %s skipped: user %s has no chat_id linked yet "
-                "(send any message to the bot first)",
-                anchor_id, user_id,
-            )
-            return
-
-        async def dispatch(msg: str) -> None:
-            _send_telegram(token, chat_id, msg)
-
-        await trigger_anchor(pool, user_id, dispatch, anchor_id)
-    finally:
-        await pool.close()
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    parser = argparse.ArgumentParser(description="Tether anchor trigger")
-    parser.add_argument("anchor_id", help="Anchor to trigger (e.g. grind_am)")
-    args = parser.parse_args()
-    asyncio.run(_run_standalone(args.anchor_id))
-
-
-if __name__ == "__main__":
-    main()
