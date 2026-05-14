@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tether"
-version = "0.0.2a1"
+version = "0.0.2a2"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
