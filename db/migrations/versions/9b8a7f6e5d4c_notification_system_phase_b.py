@@ -8,7 +8,7 @@ Adds the schema required for the unified notification dispatcher:
   - Backfills existing users' telegram_chat_id into notification_channels rows
 
 Revision ID: 9b8a7f6e5d4c
-Revises: f5a6b7c8d9e0
+Revises: b2c3d4e5f6a7
 Create Date: 2026-05-13
 """
 from typing import Sequence, Union
@@ -16,7 +16,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "9b8a7f6e5d4c"
-down_revision: Union[str, Sequence[str], None] = "f5a6b7c8d9e0"
+down_revision: Union[str, Sequence[str], None] = "b2c3d4e5f6a7"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
