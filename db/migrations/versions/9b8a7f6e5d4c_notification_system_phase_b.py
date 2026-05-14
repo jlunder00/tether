@@ -109,19 +109,18 @@ def upgrade() -> None:
         """
     )
 
-    # §3.3 backfill: existing telegram_chat_id → notification_channels row
+    # §3.3 backfill: existing telegram_connections rows → notification_channels
+    # telegram_chat_id lives in telegram_connections (user_id PK, telegram_chat_id TEXT).
     # Runs in the same transaction as the DDL — exactly once on deploy.
     op.execute(
         """
         INSERT INTO notification_channels (user_id, channel_type, config, label)
         SELECT
-            id,
+            tc.user_id,
             'telegram',
-            jsonb_build_object('chat_id', telegram_chat_id::text),
+            jsonb_build_object('chat_id', tc.telegram_chat_id),
             'Telegram (migrated)'
-        FROM users
-        WHERE telegram_chat_id IS NOT NULL
-          AND telegram_chat_id != ''
+        FROM telegram_connections tc
         ON CONFLICT DO NOTHING
         """
     )
