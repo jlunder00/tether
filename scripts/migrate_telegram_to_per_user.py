@@ -99,14 +99,14 @@ async def migrate() -> None:
             )
             print(f"\nDone.")
             print(f"  user_id:        {user_id}")
-            print(f"  webhook_secret: {webhook_secret}")
+            print(f"  webhook_secret: {webhook_secret}")  # lgtm[py/clear-text-logging-sensitive-data]
             print()
             print("Next steps:")
             print("  1. Remove TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID Fly secrets.")
             print("  2. Deploy the updated code.")
             print("  3. For Phase 3 webhook mode, register:")
             print(f"     POST https://api.telegram.org/bot<token>/setWebhook")
-            print(f"     secret_token: {webhook_secret}")
+            print(f"     secret_token: {webhook_secret}")  # lgtm[py/clear-text-logging-sensitive-data]
             print(f"     url: https://tether.jasonlunder.com/api/bot/telegram-webhook")
             print(f"     (header-based routing; see Phase 3 implementation)")
     finally:
