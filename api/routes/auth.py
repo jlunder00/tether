@@ -2,8 +2,10 @@ from __future__ import annotations
 
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -450,3 +452,154 @@ async def telegram_link(body: TelegramLinkBody, request: Request, _auth=Depends(
             raise HTTPException(status_code=400, detail="Invalid or expired link code")
         await auth_queries.set_telegram_connection(conn, request.state.user_id, chat_id)
     return {"ok": True, "telegram_chat_id": chat_id}
+
+
+# ---------------------------------------------------------------------------
+# Telegram bot token registration (Phase 2 — per-user bot tokens)
+# ---------------------------------------------------------------------------
+
+_TELEGRAM_API = "https://api.telegram.org"
+_log = logging.getLogger(__name__)
+
+
+class TelegramBotBody(BaseModel):
+    token: str
+
+
+async def _get_me(bot_token: str) -> dict:
+    """Call Telegram getMe for bot_token. Returns the result dict on success.
+
+    Raises HTTPException(400) if the token is invalid or Telegram returns an error.
+    """
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{_TELEGRAM_API}/bot{bot_token}/getMe")
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid bot token: Telegram returned HTTP {resp.status_code}",
+        )
+    data = resp.json()
+    if not data.get("ok"):
+        description = data.get("description", "unknown error")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid bot token: {description}",
+        )
+    return data["result"]
+
+
+@router.post("/auth/telegram-bot")
+async def register_telegram_bot(
+    body: TelegramBotBody,
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Validate a BotFather token, encrypt it, and store it for this user.
+
+    Steps:
+    1. Calls Telegram getMe to validate the token.
+    2. Fernet-encrypts the token using the existing CredentialsVault key.
+    3. Generates a webhook_secret UUID and upserts into telegram_connections.
+    4. If TELEGRAM_WEBHOOK_URL is set, calls webhook_setup.register_webhook
+       (no-ops gracefully if Phase E is not merged yet).
+    5. Returns {ok: true, bot_username: "@..."}
+    """
+    vault = request.app.state.vault
+    if vault is None:
+        raise HTTPException(status_code=500, detail="Vault not configured")
+
+    bot_info = await _get_me(body.token)
+    bot_username = "@" + bot_info["username"]
+
+    webhook_secret = str(uuid4())
+
+    async with pg.get_conn(request.app.state.pool) as conn:
+        await auth_queries.upsert_telegram_bot_token(
+            conn,
+            request.state.user_id,
+            vault._fernet,
+            body.token,
+            webhook_secret,
+        )
+
+    webhook_url = os.environ.get("TELEGRAM_WEBHOOK_URL")
+    if webhook_url:
+        try:
+            from bot.webhook_setup import register_webhook  # type: ignore[import]
+            await register_webhook(body.token, webhook_url, webhook_secret)
+        except ImportError:
+            _log.debug("bot.webhook_setup not available — webhook registration deferred")
+        except Exception:
+            _log.exception("register_webhook failed — token stored, webhook not registered")
+
+    return {"ok": True, "bot_username": bot_username}
+
+
+@router.delete("/auth/telegram-bot")
+async def deregister_telegram_bot(
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Disconnect this user's personal Telegram bot.
+
+    Decrypts the stored token to call Telegram's deleteWebhook (if Phase E is
+    available and TELEGRAM_WEBHOOK_URL is set), then clears both columns.
+    Always returns 200 — idempotent even if no bot is registered.
+    """
+    vault = request.app.state.vault
+
+    async with pg.get_conn(request.app.state.pool) as conn:
+        row = await auth_queries.get_telegram_bot_row(conn, request.state.user_id)
+
+    encrypted = row.get("bot_token_encrypted") if row else None
+
+    if encrypted and os.environ.get("TELEGRAM_WEBHOOK_URL") and vault is not None:
+        try:
+            from bot.webhook_setup import deregister_webhook  # type: ignore[import]
+            raw_token = vault._fernet.decrypt(bytes(encrypted)).decode()
+            await deregister_webhook(raw_token)
+        except ImportError:
+            _log.debug("bot.webhook_setup not available — skipping deregister_webhook")
+        except Exception:
+            _log.exception("deregister_webhook failed — clearing token regardless")
+
+    async with pg.get_conn(request.app.state.pool) as conn:
+        await auth_queries.clear_telegram_bot_token(conn, request.state.user_id)
+
+    return {"ok": True}
+
+
+@router.get("/auth/telegram-bot")
+async def get_telegram_bot_status(
+    request: Request,
+    _auth=Depends(auth_dependency),
+):
+    """Return the connection status for this user's personal Telegram bot.
+
+    If connected (bot_token_encrypted IS NOT NULL), calls Telegram getMe to
+    retrieve the current bot username.  Returns:
+      {connected: bool, bot_username: string | null}
+    """
+    vault = request.app.state.vault
+
+    async with pg.get_conn(request.app.state.pool) as conn:
+        row = await auth_queries.get_telegram_bot_row(conn, request.state.user_id)
+
+    encrypted = row.get("bot_token_encrypted") if row else None
+    if not encrypted:
+        return {"connected": False, "bot_username": None}
+
+    if vault is None:
+        # Vault not configured — report connected but can't retrieve username
+        return {"connected": True, "bot_username": None}
+
+    try:
+        raw_token = vault._fernet.decrypt(bytes(encrypted)).decode()
+        bot_info = await _get_me(raw_token)
+        bot_username = "@" + bot_info["username"]
+    except Exception:
+        _log.exception("getMe failed for stored bot token")
+        return {"connected": True, "bot_username": None}
+
+    return {"connected": True, "bot_username": bot_username}
