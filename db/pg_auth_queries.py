@@ -385,7 +385,7 @@ async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None
         JOIN telegram_connections tc ON tc.user_id = u.id
         WHERE tc.telegram_chat_id IS NOT NULL
           AND tc.telegram_chat_id != ''
-        ORDER BY tc.created_at DESC NULLS LAST
+        ORDER BY u.created_at DESC NULLS LAST
         LIMIT 1
         """
     )
