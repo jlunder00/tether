@@ -91,20 +91,49 @@ async def lifespan(app):
         else:
             app.state.vault = None
 
-        # Register Telegram webhook if webhook URL is configured.
+        # Register per-user Telegram webhooks if webhook URL is configured.
+        # Iterates all users with bot_token_encrypted AND webhook_secret set.
+        # Telegram's setWebhook is idempotent — safe to call on every startup.
         # When TELEGRAM_WEBHOOK_URL is not set, polling mode is used (no-op here).
         webhook_url = _startup_os.environ.get("TELEGRAM_WEBHOOK_URL")
         if webhook_url:
             try:
                 from bot.webhook_setup import register_webhook
-                from config.loader import config as tether_config
-                bot_token = tether_config.get("telegram.bot_token", "")
-                secret = _startup_os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
-                await register_webhook(bot_token, webhook_url, secret)
+                import db.postgres as _pg
+                import db.pg_auth_queries as _pg_auth
+                _wh_logger = logging.getLogger(__name__)
+                _vault = app.state.vault
+                _fernet = getattr(_vault, "_fernet", None) if _vault else None
+                if _fernet is None:
+                    _wh_logger.warning(
+                        "lifespan: TELEGRAM_WEBHOOK_URL set but vault not available — "
+                        "cannot decrypt per-user tokens; skipping webhook registration"
+                    )
+                else:
+                    async with _pg.get_conn(app.state.pool) as _conn:
+                        _users = await _pg_auth.get_users_with_webhook(_conn)
+                    registered = 0
+                    for _row in _users:
+                        try:
+                            _raw_token = _fernet.decrypt(
+                                bytes(_row["bot_token_encrypted"])
+                            ).decode()
+                            await register_webhook(
+                                _raw_token, webhook_url, _row["webhook_secret"]
+                            )
+                            registered += 1
+                        except Exception as _exc:
+                            _wh_logger.warning(
+                                "lifespan: webhook registration failed for user %s: %s",
+                                _row["user_id"], _exc,
+                            )
+                    _wh_logger.info(
+                        "lifespan: registered webhooks for %d/%d users",
+                        registered, len(_users),
+                    )
             except Exception as _wh_exc:
                 logging.getLogger(__name__).warning(
-                    "lifespan: webhook registration failed (bot may not receive messages): %s",
-                    _wh_exc,
+                    "lifespan: webhook registration loop failed: %s", _wh_exc,
                 )
 
         task = asyncio.create_task(_expiry_loop(app))

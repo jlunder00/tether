@@ -1,11 +1,19 @@
-"""Integration tests for POST /api/bot/telegram-webhook endpoint."""
+"""Integration tests for POST /api/bot/telegram-webhook endpoint.
+
+Phase E: header-based per-user routing.
+- Endpoint ALWAYS returns 200 (Telegram retries on non-200).
+- Unknown or missing X-Telegram-Bot-Api-Secret-Token → 200, no dispatch.
+- Valid secret resolves via DB lookup → BackgroundTask dispatched.
+"""
 from __future__ import annotations
 
 import os
-import pytest
-from unittest.mock import AsyncMock, patch
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager
 
-# Valid Telegram Update payload (minimal message update)
+import pytest
+
 SAMPLE_UPDATE = {
     "update_id": 123456789,
     "message": {
@@ -17,79 +25,57 @@ SAMPLE_UPDATE = {
     },
 }
 
-VALID_SECRET = "test-webhook-secret"
-WRONG_SECRET = "wrong-secret"
+VALID_SECRET = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _make_db_fixtures(user_id: str | None):
+    """Build mock pool + get_conn context that returns user_id (or None)."""
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow = AsyncMock(
+        return_value={"user_id": uuid.UUID(user_id)} if user_id else None
+    )
+    mock_pool = MagicMock()
+
+    @asynccontextmanager
+    async def _fake_get_conn(p, uid=None):
+        yield mock_conn
+
+    return mock_pool, _fake_get_conn
 
 
 @pytest.fixture
-def webhook_app_no_db():
-    """App with TELEGRAM_WEBHOOK_SECRET set but no real DB pool (for auth rejection tests)."""
-    os.environ["TELEGRAM_WEBHOOK_SECRET"] = VALID_SECRET
+def webhook_app_valid_secret():
+    """App whose DB lookup resolves VALID_SECRET to TEST_USER_ID."""
+    mock_pool, fake_get_conn = _make_db_fixtures(TEST_USER_ID)
     from api.main import create_app
-
     app = create_app()
-    # Minimal state — no pool needed for 403 rejection (happens before DB access)
-    app.state.pool = None
+    app.state.pool = mock_pool
     app.state.vault = None
-    yield app
-    os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+    with patch("db.postgres.get_conn", new=fake_get_conn):
+        yield app
 
 
 @pytest.fixture
-def webhook_app(pool):
-    """App with TELEGRAM_WEBHOOK_SECRET set and real pool for processing tests."""
-    os.environ["TELEGRAM_WEBHOOK_SECRET"] = VALID_SECRET
+def webhook_app_unknown_secret():
+    """App whose DB lookup returns None for any secret."""
+    mock_pool, fake_get_conn = _make_db_fixtures(None)
     from api.main import create_app
-
     app = create_app()
-    app.state.pool = pool
+    app.state.pool = mock_pool
     app.state.vault = None
-    yield app
-    os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+    with patch("db.postgres.get_conn", new=fake_get_conn):
+        yield app
 
 
 @pytest.mark.asyncio
-async def test_webhook_invalid_secret_returns_403(webhook_app_no_db):
-    """Wrong secret header → 403 immediately, no processing."""
-    from httpx import AsyncClient, ASGITransport
-
-    async with AsyncClient(
-        transport=ASGITransport(app=webhook_app_no_db),
-        base_url="http://test",
-    ) as client:
-        resp = await client.post(
-            "/api/bot/telegram-webhook",
-            json=SAMPLE_UPDATE,
-            headers={"X-Telegram-Bot-Api-Secret-Token": WRONG_SECRET},
-        )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_webhook_missing_secret_returns_403(webhook_app_no_db):
-    """Missing secret header → 403."""
-    from httpx import AsyncClient, ASGITransport
-
-    async with AsyncClient(
-        transport=ASGITransport(app=webhook_app_no_db),
-        base_url="http://test",
-    ) as client:
-        resp = await client.post(
-            "/api/bot/telegram-webhook",
-            json=SAMPLE_UPDATE,
-            # No header
-        )
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_webhook_valid_secret_returns_200(webhook_app):
-    """Valid secret header → 200, message queued for background processing."""
+async def test_webhook_always_returns_200_for_valid_secret(webhook_app_valid_secret):
+    """Valid secret → 200."""
     from httpx import AsyncClient, ASGITransport
 
     with patch("api.routes.bot._process_telegram_update", new_callable=AsyncMock):
         async with AsyncClient(
-            transport=ASGITransport(app=webhook_app),
+            transport=ASGITransport(app=webhook_app_valid_secret),
             base_url="http://test",
         ) as client:
             resp = await client.post(
@@ -101,8 +87,49 @@ async def test_webhook_valid_secret_returns_200(webhook_app):
 
 
 @pytest.mark.asyncio
-async def test_webhook_non_message_update_returns_200(webhook_app):
-    """Non-message updates (e.g. edited_message) are accepted silently."""
+async def test_webhook_returns_200_for_unknown_secret(webhook_app_unknown_secret):
+    """Unknown secret → 200 (not 403), no BackgroundTask dispatched."""
+    from httpx import AsyncClient, ASGITransport
+
+    with patch(
+        "api.routes.bot._process_telegram_update", new_callable=AsyncMock
+    ) as mock_dispatch:
+        async with AsyncClient(
+            transport=ASGITransport(app=webhook_app_unknown_secret),
+            base_url="http://test",
+        ) as client:
+            resp = await client.post(
+                "/api/bot/telegram-webhook",
+                json=SAMPLE_UPDATE,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"},
+            )
+    assert resp.status_code == 200
+    mock_dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_returns_200_for_missing_header(webhook_app_unknown_secret):
+    """Missing header → 200, no dispatch."""
+    from httpx import AsyncClient, ASGITransport
+
+    with patch(
+        "api.routes.bot._process_telegram_update", new_callable=AsyncMock
+    ) as mock_dispatch:
+        async with AsyncClient(
+            transport=ASGITransport(app=webhook_app_unknown_secret),
+            base_url="http://test",
+        ) as client:
+            resp = await client.post(
+                "/api/bot/telegram-webhook",
+                json=SAMPLE_UPDATE,
+            )
+    assert resp.status_code == 200
+    mock_dispatch.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_non_message_update_returns_200(webhook_app_valid_secret):
+    """Non-message updates are accepted and return 200."""
     from httpx import AsyncClient, ASGITransport
 
     edited_update = {
@@ -114,10 +141,9 @@ async def test_webhook_non_message_update_returns_200(webhook_app):
             "text": "edited",
         },
     }
-
     with patch("api.routes.bot._process_telegram_update", new_callable=AsyncMock):
         async with AsyncClient(
-            transport=ASGITransport(app=webhook_app),
+            transport=ASGITransport(app=webhook_app_valid_secret),
             base_url="http://test",
         ) as client:
             resp = await client.post(
