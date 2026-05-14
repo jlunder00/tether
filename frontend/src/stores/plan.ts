@@ -289,6 +289,40 @@ export const usePlanStore = defineStore('plan', () => {
   }
 
   /**
+   * Optimistically insert a stub task into both plan caches immediately.
+   * Call this before awaiting the PATCH in eventStore.demoteEvent so the task
+   * appears in the anchor the moment the calendar event disappears — before
+   * the round-trip completes. The stub is keyed by its real task id, so the
+   * subsequent fetchPlanRange reconciles by id when the server response arrives.
+   *
+   * Uses the same dual-cache pattern as moveTask: writes to both plan.value
+   * (single-day cache read by AnchorBlocks in PlanView) and plans.value[date]
+   * (range cache read by CalendarView). A `seen` set prevents a double-insert
+   * when the two references point to the same object (fetchPlanRange aliases them).
+   *
+   * If neither cache contains the target date, this is a no-op — the task will
+   * appear after the next fetchPlanRange.
+   */
+  function insertStubTask(date: string, anchorId: string, task: Task): void {
+    const candidates: (DayPlan | null)[] = [
+      plans.value[date] ?? null,
+      date === activeDate.value ? plan.value : null,
+    ]
+    const seen = new Set<DayPlan>()
+    for (const dayPlan of candidates) {
+      if (!dayPlan || seen.has(dayPlan)) continue
+      seen.add(dayPlan)
+      if (!dayPlan.anchors[anchorId]) {
+        dayPlan.anchors[anchorId] = { tasks: [], notes: '' }
+      }
+      // Idempotent: skip if a task with this id is already present
+      if (!dayPlan.anchors[anchorId].tasks.find(t => t.id === task.id)) {
+        dayPlan.anchors[anchorId].tasks.push(task)
+      }
+    }
+  }
+
+  /**
    * Optimistically remove a task from ALL plan caches by id.
    * Call this immediately after eventStore.promoteTask to hide the source task
    * from AnchorBlocks without a network round-trip. The event store's promoteTask
@@ -297,6 +331,9 @@ export const usePlanStore = defineStore('plan', () => {
    *
    * Sym 4 fix: replaces the full-week fetchPlanRange call in CalendarView's
    * drop handler, eliminating the network-induced lag between drop and source hide.
+   *
+   * Also used by demoteEvent error path to roll back a stub task inserted by
+   * insertStubTask when the PATCH request fails.
    */
   function removeTaskFromPlans(taskId: string): void {
     // Remove from range cache (all cached days)
@@ -352,6 +389,7 @@ export const usePlanStore = defineStore('plan', () => {
     fetchPlan,
     fetchPlanRange, moveTask, moveTaskToAnchor, reorderTask,
     updateAnchorTasks, updateTaskStatus, patchTaskFields,
-    scheduleTask, moveToBacklog, createPlanTask, removeTaskFromPlans,
+    scheduleTask, moveToBacklog, createPlanTask,
+    insertStubTask, removeTaskFromPlans,
   }
 })

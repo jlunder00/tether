@@ -394,3 +394,168 @@ describe('usePlanStore – moveTask dual-cache update (sym 3 fix)', () => {
     expect(store.plans['2026-05-10'].anchors.afternoon.tasks).toHaveLength(1)
   })
 })
+
+// ─── insertStubTask ───────────────────────────────────────────────────────────
+// New action added for optimistic demotion: inserts a minimal stub task into
+// both caches atomically so the task appears in the anchor immediately after
+// a calendar event is demoted — before the PATCH round-trip completes.
+
+describe('usePlanStore – insertStubTask', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  const STUB = {
+    id: 'task-stub',
+    text: 'My Event',
+    description: null,
+    status: 'pending' as const,
+    position: 0,
+    followup_config: null,
+    blocks: [],
+    blocked_by: [],
+    context_subject: null,
+    context_node_id: null,
+    start_time: null,
+    end_time: null,
+    anchor_id: 'anchor-a',
+    plan_date: '2026-05-10',
+    rrule: null,
+    is_recurring_master: false,
+    color: null,
+    motif: null,
+  }
+
+  it('inserts into plans.value[date] when that date is cached', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: { 'anchor-a': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks).toHaveLength(1)
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks[0].id).toBe('task-stub')
+  })
+
+  it('inserts into plan.value when date matches activeDate', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    store.activeDate = '2026-05-10'
+    store.plan = {
+      date: '2026-05-10',
+      anchors: { 'anchor-a': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    expect(store.plan!.anchors['anchor-a'].tasks).toHaveLength(1)
+    expect(store.plan!.anchors['anchor-a'].tasks[0].id).toBe('task-stub')
+  })
+
+  it('writes to both caches atomically when they are separate objects (date !== activeDate)', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    // activeDate is different from the target date → plan.value and plans.value[date] are separate objects
+    store.activeDate = '2026-05-01'
+    store.plan = {
+      date: '2026-05-01',
+      anchors: { 'anchor-a': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: { 'anchor-a': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    // Should be inserted into plans cache for the target date
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks).toHaveLength(1)
+    // Should NOT affect plan.value (different date)
+    expect(store.plan!.anchors['anchor-a'].tasks).toHaveLength(0)
+  })
+
+  it('does not insert a duplicate when stub id already exists in the anchor', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: { 'anchor-a': { tasks: [{ ...STUB }], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    // Call twice — should remain idempotent
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks).toHaveLength(1)
+  })
+
+  it('creates the anchor in the day plan if it does not yet exist', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: {},  // anchor-a not present
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    expect(store.plans['2026-05-10'].anchors['anchor-a']).toBeDefined()
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks).toHaveLength(1)
+  })
+
+  it('is a no-op when neither cache contains the target date', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    // No matching cache entry — should not throw
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    // No crash, no side effects
+    expect(store.plans['2026-05-10']).toBeUndefined()
+  })
+
+  it('handles same-object aliasing: plan.value and plans.value[date] pointing to the same object', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+
+    // Simulate fetchPlanRange aliasing: plan.value === plans.value[activeDate]
+    const sharedPlan = {
+      date: '2026-05-10',
+      anchors: { 'anchor-a': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+    store.activeDate = '2026-05-10'
+    store.plan = sharedPlan
+    store.plans['2026-05-10'] = sharedPlan  // same object reference
+
+    store.insertStubTask('2026-05-10', 'anchor-a', STUB as any)
+
+    // The stub should appear exactly once (not duplicated via two separate inserts)
+    expect(store.plans['2026-05-10'].anchors['anchor-a'].tasks).toHaveLength(1)
+    expect(store.plan!.anchors['anchor-a'].tasks).toHaveLength(1)
+    // Verify they're still the same reference (aliasing preserved)
+    expect(store.plan).toBe(store.plans['2026-05-10'])
+  })
+})
