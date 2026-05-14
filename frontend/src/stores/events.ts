@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { api } from '../lib/api'
 import type { CalendarEvent } from '../types/events'
 import type { RecurrenceEditScope } from '../types/recurrence'
+import { usePlanStore } from './plan'
 
 export const useEventStore = defineStore('events', () => {
   const events = ref<CalendarEvent[]>([])
@@ -139,7 +140,17 @@ export const useEventStore = defineStore('events', () => {
   /**
    * Demote a calendar event to a plain anchor-bound task.
    * Finds the linked task_id and PATCHes it with null times + anchorId + planDate.
-   * Optimistic: removes the event locally first.
+   *
+   * Optimistic (two-phase):
+   *   1. Remove the event from events.value immediately — calendar hides it at once.
+   *   2. Insert a stub task into planStore SYNCHRONOUSLY (before any await) so the
+   *      task appears in the anchor the moment the event disappears. The stub carries
+   *      the real task id, so fetchPlanRange's subsequent write reconciles by id.
+   *   3. Await the PATCH.
+   *   4. On any failure (thrown error OR non-ok response): remove the stub via
+   *      planStore.removeTaskFromPlans so the UI doesn't show stale phantom data.
+   *      We check resp.ok explicitly (not just catch) because a non-ok response
+   *      is a real failure — a stuck stub is more disorienting than a missing event.
    */
   async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
@@ -147,14 +158,49 @@ export const useEventStore = defineStore('events', () => {
       console.warn('Cannot demote event with no task_id — skipping')
       return
     }
+
+    // Step 1 — optimistically remove event from calendar
     events.value = events.value.filter(e => e.id !== eventId)
+
+    // Step 2 — optimistically insert stub task into plan caches (synchronous, before any await)
+    const planStore = usePlanStore()
+    const stubTask = {
+      id: ev.task_id,
+      text: ev.title,
+      description: null,
+      status: 'pending' as const,
+      position: 0,
+      followup_config: null,
+      blocks: [] as string[],
+      blocked_by: [] as string[],
+      context_subject: ev.context_subject,
+      context_node_id: null,
+      start_time: null,
+      end_time: null,
+      anchor_id: anchorId,
+      plan_date: planDate,
+      rrule: null,
+      is_recurring_master: false,
+      color: ev.color,
+      motif: null,
+    }
+    planStore.insertStubTask(planDate, anchorId, stubTask)
+
+    // Step 3 — PATCH the task on the server
     try {
-      await api(`/api/tasks/${ev.task_id}`, {
+      const resp = await api(`/api/tasks/${ev.task_id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start_time: null, end_time: null, anchor_id: anchorId, plan_date: planDate }),
       })
-    } catch { /* ignore — optimistic update stays */ }
+      // Step 4a — non-ok response: roll back stub
+      if (!resp.ok) {
+        planStore.removeTaskFromPlans(ev.task_id)
+      }
+    } catch {
+      // Step 4b — network error: roll back stub
+      planStore.removeTaskFromPlans(ev.task_id)
+    }
   }
 
   /**
