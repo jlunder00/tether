@@ -443,8 +443,9 @@ async def test_get_telegram_bot_connected_returns_username(
             json={"token": SAMPLE_BOT_TOKEN},
         )
 
-    # Now GET — should call getMe again
-    with patch("httpx.AsyncClient.get", return_value=mock_resp):
+    # Now GET — patch _get_me directly to avoid intercepting the test client's
+    # own .get() call (test client is also an httpx.AsyncClient).
+    with patch("api.routes.auth._get_me", return_value=SAMPLE_GET_ME_RESPONSE["result"]):
         resp = await client.get("/auth/telegram-bot")
 
     assert resp.status_code == 200
