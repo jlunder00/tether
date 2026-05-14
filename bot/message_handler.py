@@ -130,7 +130,7 @@ def _format_history(history: list[dict]) -> str:
     lines = []
     for row in history:
         label = "User" if row["role"] == "user" else "Bot"
-        ts = row["ts"][:16] if row["ts"] else ""
+        ts = (row["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(row["ts"], "strftime") else row["ts"][:16]) if row["ts"] else ""
         body = row["body"]
         if len(body) > _HISTORY_BODY_MAX:
             body = body[:_HISTORY_BODY_MAX] + "…"
@@ -1474,7 +1474,7 @@ def main() -> None:
             )
             time.sleep(30)
     finally:
-        _startup_loop.run_until_complete(_pool.close())
+        _startup_loop.run_until_complete(pg.close_pool())
         _startup_loop.close()
 
     token, chat_id, poll_user_id = credentials

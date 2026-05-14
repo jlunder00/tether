@@ -242,5 +242,5 @@ async def get_last_bot_activity(conn: asyncpg.Connection) -> dict | None:
         "stage": row["stage"],
         "response": row["response"][:200] if row["response"] else None,
         "error": row["error"],
-        "ts": row["ts"],
+        "ts": row["ts"].isoformat() if row["ts"] else None,
     }
