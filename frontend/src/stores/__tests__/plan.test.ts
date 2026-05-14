@@ -237,3 +237,160 @@ describe('usePlanStore – moveTaskToAnchor', () => {
     expect(store.plan!.anchors.morning.tasks).toHaveLength(0)
   })
 })
+
+// ─── Sym 1 + Sym 3 regression tests ───────────────────────────────────────────
+// These cover the split-cache bug: plan.value (single-day) and plans.value (range)
+// are two separate caches. fetchPlanRange only updated plans.value, causing AnchorBlock
+// in PlanView (which reads plan.value) to not reflect promotions or anchor→anchor moves.
+
+describe('usePlanStore – fetchPlanRange syncs plan.value (sym 1 fix)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('updates plan.value when fetched range includes activeDate', async () => {
+    const { api } = await import('../../lib/api')
+    const updatedPlan = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    }
+    vi.mocked(api).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ '2026-05-10': updatedPlan }),
+    } as any)
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+    store.activeDate = '2026-05-10'
+
+    // Seed plan with a task that should be gone after fetchPlanRange returns empty
+    store.plan = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [{ id: 'old-task', text: 'Stale' } as any], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    await store.fetchPlanRange('2026-05-10', '2026-05-10')
+
+    // plan.value must be replaced with the server response, not just plans.value
+    expect(store.plan).toBeDefined()
+    expect(store.plan!.anchors.morning.tasks).toHaveLength(0)
+  })
+
+  it('does NOT update plan.value when fetched range does not include activeDate', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        '2026-05-11': {
+          date: '2026-05-11',
+          anchors: { morning: { tasks: [], notes: '' } },
+          acknowledgements: {},
+          check_in_log: [],
+        },
+      }),
+    } as any)
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+    store.activeDate = '2026-05-10'
+
+    const originalTask = { id: 'keep-me', text: 'Should stay' } as any
+    store.plan = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [originalTask], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    await store.fetchPlanRange('2026-05-11', '2026-05-11')
+
+    // plan.value must be unchanged when activeDate not in range
+    expect(store.plan!.anchors.morning.tasks).toHaveLength(1)
+    expect(store.plan!.anchors.morning.tasks[0].id).toBe('keep-me')
+  })
+})
+
+describe('usePlanStore – removeTaskFromPlans (sym 4 optimistic fix)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('removes the task from both plans.value and plan.value by id', async () => {
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+    store.activeDate = '2026-05-10'
+
+    const task = { id: 'promoted-task', text: 'Gone now', status: 'pending', position: 0 } as any
+    store.plan = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [{ ...task }], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [{ ...task }], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+    store.plans['2026-05-11'] = {
+      date: '2026-05-11',
+      anchors: { morning: { tasks: [{ ...task }], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    store.removeTaskFromPlans('promoted-task')
+
+    // Removed from single-day plan
+    expect(store.plan!.anchors.morning.tasks).toHaveLength(0)
+    // Removed from all range-cached days
+    expect(store.plans['2026-05-10'].anchors.morning.tasks).toHaveLength(0)
+    expect(store.plans['2026-05-11'].anchors.morning.tasks).toHaveLength(0)
+  })
+})
+
+describe('usePlanStore – moveTask dual-cache update (sym 3 fix)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('updates plan.value even when plans.value[fromDate] also exists', async () => {
+    // Reproduces sym 3: after a DayTimeline promotion populates plans.value[date],
+    // subsequent anchor→anchor moveTask calls update plans.value[date] but leave
+    // plan.value stale — AnchorBlock in PlanView still shows the task at source.
+    const { usePlanStore } = await import('../plan')
+    const store = usePlanStore()
+    store.activeDate = '2026-05-10'
+
+    const task = { id: 'move-me', text: 'Drag me', status: 'pending', position: 0 } as any
+
+    // Seed BOTH caches with the same day — this is the post-promotion state
+    store.plan = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [{ ...task }], notes: '' }, afternoon: { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+    store.plans['2026-05-10'] = {
+      date: '2026-05-10',
+      anchors: { morning: { tasks: [{ ...task }], notes: '' }, afternoon: { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    await store.moveTask('move-me', '2026-05-10', 'morning', '2026-05-10', 'afternoon')
+
+    // BOTH caches must reflect the removal from source anchor
+    expect(store.plan!.anchors.morning.tasks).toHaveLength(0)
+    expect(store.plans['2026-05-10'].anchors.morning.tasks).toHaveLength(0)
+    // AND the insertion into target anchor
+    expect(store.plan!.anchors.afternoon.tasks).toHaveLength(1)
+    expect(store.plans['2026-05-10'].anchors.afternoon.tasks).toHaveLength(1)
+  })
+})
