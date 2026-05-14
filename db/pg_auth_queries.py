@@ -232,6 +232,31 @@ async def verify_and_consume_link_code(
 # Per-user bot token helpers (Phase 1 — per-user Telegram migration)
 # ---------------------------------------------------------------------------
 
+async def auto_link_chat_id(
+    conn: asyncpg.Connection, user_id: str, chat_id: str
+) -> bool:
+    """Bind chat_id to the polling user ONLY when no real binding exists.
+
+    Unlike set_telegram_connection (UPSERT), this UPDATE only fires when
+    telegram_chat_id is NULL or the empty-string placeholder. This prevents
+    a stranger's inbound message from overwriting a legitimate binding.
+
+    Returns True if the row was updated, False if a binding already existed.
+    """
+    result = await conn.execute(
+        """
+        UPDATE telegram_connections
+        SET telegram_chat_id = $1
+        WHERE user_id = $2
+          AND (telegram_chat_id IS NULL OR telegram_chat_id = '')
+        """,
+        chat_id,
+        _uuid.UUID(user_id),
+    )
+    # result is e.g. "UPDATE 1" or "UPDATE 0"
+    return result.endswith("1")
+
+
 async def store_bot_token(
     conn: asyncpg.Connection, user_id: str, fernet: Fernet, raw_token: str
 ) -> None:

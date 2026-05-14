@@ -1287,14 +1287,15 @@ async def _fetch_poll_credentials(pool, fernet: Fernet) -> tuple[str, str, str] 
     return raw_token, str(row["telegram_chat_id"]) if row["telegram_chat_id"] else "", str(row["user_id"])
 
 
-async def _auto_link_chat(pool, user_id: str, chat_id: str) -> None:
-    """Store chat_id for the polling user on first inbound message.
+async def _auto_link_chat(pool, user_id: str, chat_id: str) -> bool:
+    """Bind chat_id to the polling user ONLY when no real binding exists.
 
-    Called when a message arrives from an unrecognized chat_id. Since we're
-    polling with this user's own bot token, any inbound message belongs to them.
+    Uses a guarded UPDATE (not UPSERT) so that a legitimate existing binding is
+    never overwritten by a stranger's first message. Returns True if the link
+    was established, False if a real chat_id was already bound.
     """
     async with pg.get_conn(pool) as conn:
-        await pg_auth_queries.set_telegram_connection(conn, user_id, chat_id)
+        return await pg_auth_queries.auto_link_chat_id(conn, user_id, chat_id)
 
 
 def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> None:
@@ -1341,16 +1342,31 @@ def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> No
                 resolved_user_id = loop.run_until_complete(_resolve_user_id(pool, incoming_chat_id))
 
                 if resolved_user_id is None:
-                    # Auto-link: any first message to this bot belongs to the
-                    # polling user (their personal bot token is what we're using).
+                    # Auto-link: the polling user's personal bot token is what
+                    # we're using, so any first message to this bot belongs to them.
+                    # Guard: only link when no real chat_id is bound yet (guarded
+                    # UPDATE — won't overwrite an existing legitimate binding, so a
+                    # stranger discovering the bot cannot hijack Jason's account).
                     if poll_user_id is not None:
                         try:
-                            loop.run_until_complete(_auto_link_chat(pool, poll_user_id, incoming_chat_id))
-                            resolved_user_id = poll_user_id
-                            logger.info(
-                                "Auto-linked chat_id %s to user %s on first message",
-                                incoming_chat_id, poll_user_id,
+                            linked = loop.run_until_complete(
+                                _auto_link_chat(pool, poll_user_id, incoming_chat_id)
                             )
+                            if linked:
+                                resolved_user_id = poll_user_id
+                                logger.info(
+                                    "Auto-linked chat_id %s to user %s on first message",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                            else:
+                                # A real binding already exists for a different chat_id.
+                                # Reject silently — do not reveal account details.
+                                logger.warning(
+                                    "Rejected message from unrecognized chat_id %s "
+                                    "(user %s already linked to a different chat)",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                                continue
                         except Exception as e:
                             logger.error("Auto-link failed for chat_id %s: %s", incoming_chat_id, e)
                             send("[Tether error: could not link your chat. Please try again.]")

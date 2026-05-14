@@ -109,6 +109,17 @@ async def _run_standalone(anchor_id: str) -> None:
 
         token, chat_id, user_id = credentials
 
+        if not chat_id:
+            # User has a bot token but hasn't linked a chat_id yet (no inbound
+            # message received since migration). Skip this anchor — sending to an
+            # empty chat_id would silently fail at the Telegram API.
+            logger.warning(
+                "Anchor %s skipped: user %s has no chat_id linked yet "
+                "(send any message to the bot first)",
+                anchor_id, user_id,
+            )
+            return
+
         async def dispatch(msg: str) -> None:
             _send_telegram(token, chat_id, msg)
 
