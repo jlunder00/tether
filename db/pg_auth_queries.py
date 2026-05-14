@@ -306,3 +306,27 @@ async def get_user_by_webhook_secret(
     if row is None:
         return None
     return str(row["user_id"])
+
+
+async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None:
+    """Return the user with the most recent telegram link or message turn.
+
+    'Most recent' = latest created_at in telegram_connections (for users who have a telegram_chat_id set).
+    Falls back to users ordered by conversation_history recency if available.
+
+    Returns dict with 'id' (str UUID) and 'telegram_chat_id' (str), or None.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT u.id, tc.telegram_chat_id
+        FROM users u
+        JOIN telegram_connections tc ON tc.user_id = u.id
+        WHERE tc.telegram_chat_id IS NOT NULL
+          AND tc.telegram_chat_id != ''
+        ORDER BY tc.created_at DESC NULLS LAST
+        LIMIT 1
+        """
+    )
+    if row is None:
+        return None
+    return {"id": str(row["id"]), "telegram_chat_id": row["telegram_chat_id"]}

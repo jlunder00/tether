@@ -1298,6 +1298,12 @@ async def _auto_link_chat(pool, user_id: str, chat_id: str) -> bool:
         return await pg_auth_queries.auto_link_chat_id(conn, user_id, chat_id)
 
 
+async def _bootstrap_last_user(pool) -> dict | None:
+    """Fetch the most recently active telegram-linked user from DB for cold-start."""
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.get_most_recent_telegram_user(conn)
+
+
 def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1308,6 +1314,15 @@ def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> No
     # These get set when a message is processed and remembered for background checks.
     last_user_id: str | None = None
     last_chat_id: str | None = None
+    # Bootstrap last_user_id from DB so followup pings work immediately after restart
+    try:
+        _bootstrap = loop.run_until_complete(_bootstrap_last_user(pool))
+        if _bootstrap:
+            last_user_id = _bootstrap["id"]
+            last_chat_id = _bootstrap.get("telegram_chat_id")
+            logger.info("run_polling: bootstrapped user_id=%s from DB", last_user_id)
+    except Exception as _be:
+        logger.warning("run_polling: failed to bootstrap last_user_id from DB: %s", _be)
     logger.info("Tether bot polling started (offset=%d)", offset)
     # Start premium meeting event listener if available
     try:
