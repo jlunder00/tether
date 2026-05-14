@@ -97,4 +97,4 @@ else
     echo "[entrypoint] CONFIG_SOURCE_URL not set — booting from baked-in defaults + env vars"
 fi
 
-exec gosu tether "$@"
+exec "$@"
