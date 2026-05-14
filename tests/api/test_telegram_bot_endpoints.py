@@ -183,7 +183,7 @@ async def test_post_telegram_bot_invalid_token_ok_false(telegram_bot_client):
     )
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         resp = await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": "bad-token"},
         )
 
@@ -199,7 +199,7 @@ async def test_post_telegram_bot_http_error_returns_400(telegram_bot_client):
     mock_resp = _make_mock_httpx_response({}, status_code=404)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         resp = await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": "bad-token"},
         )
 
@@ -220,7 +220,7 @@ async def test_post_telegram_bot_valid_token_stores_and_returns(
     mock_resp = _make_mock_httpx_response(SAMPLE_GET_ME_RESPONSE)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         resp = await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": SAMPLE_BOT_TOKEN},
         )
 
@@ -255,7 +255,7 @@ async def test_post_telegram_bot_upserts_when_connection_exists(
     mock_resp = _make_mock_httpx_response(SAMPLE_GET_ME_RESPONSE)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         resp = await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": SAMPLE_BOT_TOKEN},
         )
 
@@ -299,7 +299,7 @@ async def test_post_telegram_bot_webhook_setup_called_when_url_set(
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         with patch.dict("sys.modules", {"bot.webhook_setup": mock_module}):
             resp = await client.post(
-                "/api/auth/telegram-bot",
+                "/auth/telegram-bot",
                 json={"token": SAMPLE_BOT_TOKEN},
             )
 
@@ -322,7 +322,7 @@ async def test_post_telegram_bot_webhook_setup_import_error_still_succeeds(
         # Force ImportError for the webhook_setup module
         with patch.dict("sys.modules", {"bot.webhook_setup": None}):
             resp = await client.post(
-                "/api/auth/telegram-bot",
+                "/auth/telegram-bot",
                 json={"token": SAMPLE_BOT_TOKEN},
             )
 
@@ -343,13 +343,13 @@ async def test_delete_telegram_bot_clears_columns(telegram_bot_client_with_exist
     mock_resp = _make_mock_httpx_response(SAMPLE_GET_ME_RESPONSE)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         post_resp = await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": SAMPLE_BOT_TOKEN},
         )
     assert post_resp.status_code == 200
 
     # Now delete
-    resp = await client.delete("/api/auth/telegram-bot")
+    resp = await client.delete("/auth/telegram-bot")
     assert resp.status_code == 200
 
     async with pool.acquire() as conn:
@@ -366,7 +366,7 @@ async def test_delete_telegram_bot_clears_columns(telegram_bot_client_with_exist
 async def test_delete_telegram_bot_no_connection_row_returns_200(telegram_bot_client):
     """DELETE when user has no telegram_connections row still returns 200."""
     client, _ = telegram_bot_client
-    resp = await client.delete("/api/auth/telegram-bot")
+    resp = await client.delete("/auth/telegram-bot")
     assert resp.status_code == 200
 
 
@@ -382,7 +382,7 @@ async def test_delete_telegram_bot_deregister_webhook_called(
     mock_resp = _make_mock_httpx_response(SAMPLE_GET_ME_RESPONSE)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": SAMPLE_BOT_TOKEN},
         )
 
@@ -395,7 +395,7 @@ async def test_delete_telegram_bot_deregister_webhook_called(
     mock_module.deregister_webhook = mock_deregister
 
     with patch.dict("sys.modules", {"bot.webhook_setup": mock_module}):
-        resp = await client.delete("/api/auth/telegram-bot")
+        resp = await client.delete("/auth/telegram-bot")
 
     assert resp.status_code == 200
     assert len(deregister_called) == 1
@@ -410,7 +410,7 @@ async def test_delete_telegram_bot_deregister_webhook_called(
 async def test_get_telegram_bot_not_connected_no_row(telegram_bot_client):
     """User with no telegram_connections row → connected:false."""
     client, _ = telegram_bot_client
-    resp = await client.get("/api/auth/telegram-bot")
+    resp = await client.get("/auth/telegram-bot")
     assert resp.status_code == 200
     data = resp.json()
     assert data["connected"] is False
@@ -422,7 +422,7 @@ async def test_get_telegram_bot_not_connected_no_token(
 ):
     """User with telegram_connections row but no bot_token → connected:false."""
     client, _ = telegram_bot_client_with_existing_connection
-    resp = await client.get("/api/auth/telegram-bot")
+    resp = await client.get("/auth/telegram-bot")
     assert resp.status_code == 200
     data = resp.json()
     assert data["connected"] is False
@@ -439,13 +439,13 @@ async def test_get_telegram_bot_connected_returns_username(
     mock_resp = _make_mock_httpx_response(SAMPLE_GET_ME_RESPONSE)
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
         await client.post(
-            "/api/auth/telegram-bot",
+            "/auth/telegram-bot",
             json={"token": SAMPLE_BOT_TOKEN},
         )
 
     # Now GET — should call getMe again
     with patch("httpx.AsyncClient.get", return_value=mock_resp):
-        resp = await client.get("/api/auth/telegram-bot")
+        resp = await client.get("/auth/telegram-bot")
 
     assert resp.status_code == 200
     data = resp.json()
