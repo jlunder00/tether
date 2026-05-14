@@ -282,15 +282,18 @@ async def test_sync_no_integration_returns_404(api_client):
 
 
 # ---------------------------------------------------------------------------
-# 5. POST /api/integrations/google/webhook — must return 200 fast
+# 5. POST /api/integrations/google/webhook — inline BackgroundTask (Phase F)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_webhook_returns_200_immediately(api_client, monkeypatch):
-    """Webhook endpoint returns 200 immediately regardless of payload."""
-    async def mock_dispatch(pool, integration_id, calendar_id, *, provider, notify_type="poll", **extra):
-        pass
-    monkeypatch.setattr("api.routes.integrations.dispatch_sync", mock_dispatch)
+    """Webhook endpoint returns 200 immediately; dispatches BackgroundTask."""
+    called: list[tuple] = []
+
+    async def mock_process(channel_id, resource_state, pool):
+        called.append((channel_id, resource_state))
+
+    monkeypatch.setattr("api.routes.integrations._process_gcal_event", mock_process)
 
     resp = await api_client.post(
         "/api/integrations/google/webhook",
@@ -301,11 +304,63 @@ async def test_webhook_returns_200_immediately(api_client, monkeypatch):
         },
     )
     assert resp.status_code == 200
+    assert ("ch_test_001", "exists") in called
+
+
+@pytest.mark.asyncio
+async def test_webhook_dispatches_background_task_args(api_client, monkeypatch):
+    """Webhook handler passes channel_id and resource_state to _process_gcal_event."""
+    captured: list[dict] = []
+
+    async def mock_process(channel_id, resource_state, pool):
+        captured.append({"channel_id": channel_id, "resource_state": resource_state})
+
+    monkeypatch.setattr("api.routes.integrations._process_gcal_event", mock_process)
+
+    resp = await api_client.post(
+        "/api/integrations/google/webhook",
+        headers={
+            "X-Goog-Channel-Id": "my-channel-123",
+            "X-Goog-Resource-State": "exists",
+        },
+    )
+    assert resp.status_code == 200
+    assert len(captured) == 1
+    assert captured[0]["channel_id"] == "my-channel-123"
+    assert captured[0]["resource_state"] == "exists"
+
+
+@pytest.mark.asyncio
+async def test_webhook_dispatch_does_not_call_dispatch_sync(api_client, monkeypatch):
+    """Webhook handler no longer calls dispatch_sync (removed PG NOTIFY from path)."""
+    dispatch_called = []
+
+    async def spy_dispatch(*args, **kwargs):
+        dispatch_called.append(1)
+
+    async def mock_process(channel_id, resource_state, pool):
+        pass
+
+    monkeypatch.setattr("api.routes.integrations.dispatch_sync", spy_dispatch)
+    monkeypatch.setattr("api.routes.integrations._process_gcal_event", mock_process)
+
+    resp = await api_client.post(
+        "/api/integrations/google/webhook",
+        headers={
+            "X-Goog-Channel-Id": "ch_001",
+            "X-Goog-Resource-State": "exists",
+        },
+    )
+    assert resp.status_code == 200
+    assert dispatch_called == [], "dispatch_sync must not be called from the webhook handler"
 
 
 @pytest.mark.asyncio
 async def test_webhook_unknown_channel_still_200(api_client):
-    """Webhook with unknown channel-id still returns 200 (Google's requirement)."""
+    """Webhook with unknown channel-id still returns 200 (Google's requirement).
+
+    _process_gcal_event finds no integration_sync_state row and returns silently.
+    """
     resp = await api_client.post(
         "/api/integrations/google/webhook",
         headers={
@@ -315,6 +370,130 @@ async def test_webhook_unknown_channel_still_200(api_client):
         },
     )
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 5b. _process_gcal_event unit tests (Phase F inline handler)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_process_gcal_event_skips_sync_resource_state(monkeypatch):
+    """_process_gcal_event returns early for resource_state='sync' (channel registration ping)."""
+    from api.routes import integrations as routes
+
+    handle_called = []
+
+    async def mock_handle_webhook(self, integration_id, payload):
+        handle_called.append(1)
+
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.handle_webhook",
+        mock_handle_webhook,
+    )
+
+    # Should return without calling handle_webhook
+    await routes._process_gcal_event("ch_001", "sync", pool=None)
+    assert handle_called == []
+
+
+@pytest.mark.asyncio
+async def test_process_gcal_event_skips_none_channel_id(monkeypatch):
+    """_process_gcal_event returns early when channel_id is None."""
+    from api.routes import integrations as routes
+
+    handle_called = []
+
+    async def mock_handle_webhook(self, integration_id, payload):
+        handle_called.append(1)
+
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.handle_webhook",
+        mock_handle_webhook,
+    )
+
+    await routes._process_gcal_event(None, "exists", pool=None)
+    assert handle_called == []
+
+
+@pytest.mark.asyncio
+async def test_process_gcal_event_unknown_channel_no_raise(monkeypatch):
+    """_process_gcal_event logs and returns silently when channel has no sync state row."""
+    from api.routes import integrations as routes
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value=None)
+        yield conn
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+
+    # Must not raise
+    await routes._process_gcal_event("ch-unknown", "exists", pool=None)
+
+
+@pytest.mark.asyncio
+async def test_process_gcal_event_calls_handle_webhook(monkeypatch):
+    """_process_gcal_event resolves integration_id from channel_id and calls handle_webhook."""
+    import uuid
+    from api.routes import integrations as routes
+    from contextlib import asynccontextmanager
+
+    fake_integration_id = str(uuid.uuid4())
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"integration_id": uuid.UUID(fake_integration_id)})
+        yield conn
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+
+    handle_calls: list[dict] = []
+
+    async def mock_handle_webhook(self, integration_id, payload):
+        handle_calls.append({"integration_id": integration_id, "channel_id": payload.channel_id})
+
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.handle_webhook",
+        mock_handle_webhook,
+    )
+
+    await routes._process_gcal_event("ch-known", "exists", pool=None)
+
+    assert len(handle_calls) == 1
+    assert handle_calls[0]["integration_id"] == fake_integration_id
+    assert handle_calls[0]["channel_id"] == "ch-known"
+
+
+@pytest.mark.asyncio
+async def test_process_gcal_event_exception_does_not_propagate(monkeypatch):
+    """_process_gcal_event catches and logs exceptions from handle_webhook."""
+    import uuid
+    from api.routes import integrations as routes
+    from contextlib import asynccontextmanager
+
+    fake_id = str(uuid.uuid4())
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, user_id=None):
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"integration_id": uuid.UUID(fake_id)})
+        yield conn
+
+    monkeypatch.setattr("db.postgres.get_conn", fake_get_conn)
+
+    async def mock_handle_webhook_raises(self, integration_id, payload):
+        raise RuntimeError("Google API flaked")
+
+    monkeypatch.setattr(
+        "api.routes.integrations.GoogleCalendarSync.handle_webhook",
+        mock_handle_webhook_raises,
+    )
+
+    # Must not propagate the exception
+    await routes._process_gcal_event("ch-boom", "exists", pool=None)
 
 
 # ---------------------------------------------------------------------------
