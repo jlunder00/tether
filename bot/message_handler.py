@@ -1298,6 +1298,12 @@ async def _auto_link_chat(pool, user_id: str, chat_id: str) -> bool:
         return await pg_auth_queries.auto_link_chat_id(conn, user_id, chat_id)
 
 
+async def _bootstrap_last_user(pool) -> dict | None:
+    """Fetch the most recently active telegram-linked user from DB for cold-start."""
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.get_most_recent_telegram_user(conn)
+
+
 def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -1308,6 +1314,15 @@ def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> No
     # These get set when a message is processed and remembered for background checks.
     last_user_id: str | None = None
     last_chat_id: str | None = None
+    # Bootstrap last_user_id from DB so followup pings work immediately after restart
+    try:
+        _bootstrap = loop.run_until_complete(_bootstrap_last_user(pool))
+        if _bootstrap:
+            last_user_id = _bootstrap["id"]
+            last_chat_id = _bootstrap.get("telegram_chat_id")
+            logger.info("run_polling: bootstrapped user_id=%s from DB", last_user_id)
+    except Exception as _be:
+        logger.warning("run_polling: failed to bootstrap last_user_id from DB: %s", _be)
     logger.info("Tether bot polling started (offset=%d)", offset)
     # Start premium meeting event listener if available
     try:
@@ -1443,19 +1458,24 @@ def main() -> None:
         sys.exit(1)
     fernet = Fernet(vault_key_str.encode() if isinstance(vault_key_str, str) else vault_key_str)
 
+    # Soft config: per-user token not yet in DB (migration not yet run).
+    # Loop until the token appears — once the ops migration script runs, the bot
+    # picks it up without supervisord intervention.
     _startup_loop = asyncio.new_event_loop()
     _pool = _startup_loop.run_until_complete(pg.create_pool())
-    credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
-    _startup_loop.run_until_complete(_pool.close())
-    _startup_loop.close()
-
-    if credentials is None:
-        logger.error(
-            "No per-user bot token found in DB. "
-            "Run scripts/migrate_telegram_to_per_user.py first."
-        )
-        import sys
-        sys.exit(1)
+    try:
+        while True:
+            credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
+            if credentials is not None:
+                break
+            logger.warning(
+                "No per-user bot token found in DB. "
+                "Sleeping 30 s — run scripts/migrate_telegram_to_per_user.py to resolve."
+            )
+            time.sleep(30)
+    finally:
+        _startup_loop.run_until_complete(_pool.close())
+        _startup_loop.close()
 
     token, chat_id, poll_user_id = credentials
     logger.info("Polling as user %s (chat_id=%s)", poll_user_id, chat_id or "<none yet>")

@@ -35,6 +35,7 @@ const mockPromoteTask = vi.fn()
 const mockMoveEvent = vi.fn()
 const mockFetchPlan = vi.fn()
 const mockFetchPlanRange = vi.fn()
+const mockRemoveTaskFromPlans = vi.fn()
 
 const mockTimedEvent: CalendarEvent = {
   id: 'ev-timed',
@@ -80,6 +81,7 @@ vi.mock('../../stores/plan', () => ({
     plans: {},
     fetchPlan: mockFetchPlan,
     fetchPlanRange: mockFetchPlanRange,
+    removeTaskFromPlans: mockRemoveTaskFromPlans,
     today: '2024-06-10',
     activeDate: { value: '2024-06-10' },
   }),
@@ -120,6 +122,7 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     mockMoveEvent.mockReset()
     mockFetchPlan.mockReset()
     mockFetchPlanRange.mockReset()
+    mockRemoveTaskFromPlans.mockReset()
   })
 
   it('each 15-min slot has data-date and data-time attributes', async () => {
@@ -151,16 +154,17 @@ describe('DayTimeline – 15-min slot drop targets', () => {
     expect(mockPromoteTask).toHaveBeenCalledWith('task-99', expected09, expected0930, 'Do the thing')
   })
 
-  it('after promoting a task, fetchPlanRange(date, date) is called — not fetchPlan — to avoid loading flash', async () => {
-    // Bug 1 + 3: fetchPlan flips loading=true which destroys the entire plan grid (v-if in PlanView).
-    // Fix: fetchPlanRange(date, date) updates plans.value without touching loading, so no remount.
+  it('after promoting a task, removeTaskFromPlans(taskId) is called — eliminates the second RTT', async () => {
+    // Optimistic promotion: after promoteTask the task is already gone client-side via
+    // removeTaskFromPlans (same pattern as CalendarView). No fetchPlanRange round-trip needed.
     const { default: DayTimeline } = await import('../DayTimeline.vue')
     const wrapper = mount(DayTimeline, { props: { date: '2024-06-10' } })
     const slot = wrapper.find('[data-time="09:00"]')
     const payload = { type: 'task', taskId: 'task-99', title: 'Do the thing' }
     await slot.trigger('drop', { dataTransfer: { getData: (t: string) => t === 'application/json' ? JSON.stringify(payload) : '' } })
     expect(mockPromoteTask).toHaveBeenCalled()
-    expect(mockFetchPlanRange).toHaveBeenCalledWith('2024-06-10', '2024-06-10')
+    expect(mockRemoveTaskFromPlans).toHaveBeenCalledWith('task-99')
+    expect(mockFetchPlanRange).not.toHaveBeenCalled()
     expect(mockFetchPlan).not.toHaveBeenCalled()
   })
 

@@ -1,9 +1,7 @@
 import asyncio
-import hmac
 import logging
-import os
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, WebSocket, WebSocketDisconnect
 import asyncpg
 from db.pg_queries import get_last_bot_activity
 from db.pool_middleware import get_db_conn
@@ -50,31 +48,43 @@ async def bot_health(_auth=Depends(auth_dependency),
     return {"status": status, "last_activity": activity}
 
 
-def _verify_telegram_secret(request: Request) -> None:
-    """Verify X-Telegram-Bot-Api-Secret-Token header against TELEGRAM_WEBHOOK_SECRET env var.
+async def _resolve_user_from_webhook_header(request: Request, pool) -> str | None:
+    """Look up user_id from the X-Telegram-Bot-Api-Secret-Token header.
 
-    Raises HTTP 403 if the header is missing or does not match.
-    Uses hmac.compare_digest to prevent timing attacks.
+    Uses hmac.compare_digest for the empty-secret guard (constant time).
+    Returns the user_id string if the secret resolves to a known user, else None.
+    This is a no-RLS auth-schema lookup (telegram_connections has no RLS).
     """
-    expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    import db.postgres as pg
+    import db.pg_auth_queries as pg_auth_queries
+
     provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not expected or not hmac.compare_digest(provided, expected):
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    if not provided:
+        return None
+
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.get_user_by_webhook_secret(conn, provided)
 
 
-async def _process_telegram_update(update: dict, pool, vault) -> None:
-    """Process a single Telegram Update dict.
+async def _process_telegram_update(
+    update: dict,
+    user_id: str,
+    pool,
+    vault,
+) -> None:
+    """Process a single Telegram Update dict for a known user.
 
-    Extracts the message text and chat_id, resolves the linked user_id,
-    then calls handle_message() — the same path used by the polling loop.
-    Non-message updates (e.g. edited_message, channel_post) are silently ignored.
+    Called as a BackgroundTask after the webhook endpoint resolves the user from
+    the X-Telegram-Bot-Api-Secret-Token header.
 
-    /start and /link are handled before user resolution, matching the polling
-    loop behaviour so new users can onboard in webhook mode.
+    Non-message updates (edited_message, channel_post, etc.) are silently ignored.
+
+    First-message capture: if the user's telegram_chat_id is NULL, store
+    update.message.chat.id and reply "Connected to Tether." — no further
+    processing (the linking IS the action). Subsequent messages go to
+    handle_message() as normal.
     """
-    import random as _random
-    from config.loader import config as tether_config
-    from bot.message_handler import _resolve_user_id, _send_telegram
+    from bot.message_handler import _send_telegram
     import db.postgres as pg
     import db.pg_auth_queries as pg_auth_queries
 
@@ -93,27 +103,53 @@ async def _process_telegram_update(update: dict, pool, vault) -> None:
         logger.warning("_process_telegram_update: no chat.id in update")
         return
 
-    token = tether_config.get("telegram.bot_token", "")
+    # Resolve per-user bot token for outbound messages.
+    # Falls back to None if not set — handle_message handles its own fallbacks.
+    fernet = getattr(vault, "_fernet", None) if vault else None
+    token: str | None = None
+    if fernet is not None:
+        try:
+            async with pg.get_conn(pool) as conn:
+                token = await pg_auth_queries.get_bot_token(conn, user_id, fernet)
+        except Exception as exc:
+            logger.warning(
+                "_process_telegram_update: could not fetch per-user bot token: %s", exc
+            )
+
+    if not token:
+        from config.loader import config as tether_config
+        token = tether_config.get("telegram.bot_token", "")
+
     send_fn = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
 
-    # Handle /start and /link before auth check — mirrors polling loop behaviour.
-    # Unlinked users must be able to generate a link code to onboard.
-    if text in ("/start", "/link"):
-        try:
-            code = f"{_random.randint(0, 999999):06d}"
-            async with pg.get_conn(pool) as conn:  # no user_id — auth table has no RLS
-                await pg_auth_queries.store_link_code(conn, code, incoming_chat_id)
-            send_fn(f"Your link code is: {code}. Enter this in Tether settings within 5 minutes.")
-        except Exception as exc:
-            logger.error("_process_telegram_update: /link error: %s", exc, exc_info=True)
-            send_fn("[Tether error generating link code]")
+    # First-message capture: when telegram_chat_id is NULL, store it and
+    # reply "Connected to Tether." — simplified linking per Jason's override.
+    # No /link slash command, no 6-digit code needed.
+    try:
+        async with pg.get_conn(pool) as conn:
+            current_chat_id = await pg_auth_queries.get_telegram_chat_id(conn, user_id)
+    except Exception as exc:
+        logger.error(
+            "_process_telegram_update: get_telegram_chat_id failed user_id=%s: %s",
+            user_id, exc, exc_info=True,
+        )
         return
 
-    # Resolve Telegram chat_id → Tether user_id
-    user_id = await _resolve_user_id(pool, incoming_chat_id)
-    if user_id is None:
-        send_fn("I don't recognize you. Link your Tether account at your Tether URL, "
-                "then use /link to connect.")
+    if current_chat_id is None:
+        # First message — bind this chat_id to the user.
+        try:
+            async with pg.get_conn(pool) as conn:
+                await pg_auth_queries.auto_link_chat_id(conn, user_id, incoming_chat_id)
+            send_fn("Connected to Tether.")
+            logger.info(
+                "_process_telegram_update: first-message chat_id capture user_id=%s chat_id=%s",
+                user_id, incoming_chat_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "_process_telegram_update: chat_id capture failed user_id=%s: %s",
+                user_id, exc, exc_info=True,
+            )
         return
 
     try:
@@ -133,16 +169,23 @@ async def telegram_webhook(
 ) -> Response:
     """Receive Telegram Update payloads (webhook mode).
 
-    Responds 200 immediately so Telegram doesn't retry.
-    Processing happens in a BackgroundTask — same handle_message() path as polling.
+    Always responds 200 immediately — Telegram retries on non-200, so we must
+    never return an error status. Unknown/missing secrets are silently discarded.
 
-    Auth: X-Telegram-Bot-Api-Secret-Token header must match TELEGRAM_WEBHOOK_SECRET env var.
+    Auth: X-Telegram-Bot-Api-Secret-Token header is used to resolve the user.
+    Lookup: SELECT user_id FROM telegram_connections WHERE webhook_secret = $1
+    (no-RLS auth-schema query). Processing happens in a BackgroundTask.
     """
-    _verify_telegram_secret(request)
-    update = await request.json()
     pool = request.app.state.pool
     vault = getattr(request.app.state, "vault", None)
-    background_tasks.add_task(_process_telegram_update, update, pool, vault)
+
+    user_id = await _resolve_user_from_webhook_header(request, pool)
+    if user_id is None:
+        # Unknown or missing secret — discard silently.
+        return Response(status_code=200)
+
+    update = await request.json()
+    background_tasks.add_task(_process_telegram_update, update, user_id, pool, vault)
     return Response(status_code=200)
 
 

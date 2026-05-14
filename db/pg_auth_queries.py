@@ -368,3 +368,65 @@ async def clear_telegram_bot_token(
         """,
         _uuid.UUID(user_id),
     )
+
+
+async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None:
+    """Return the user with the most recent telegram link or message turn.
+
+    'Most recent' = latest created_at in telegram_connections (for users who have a telegram_chat_id set).
+    Falls back to users ordered by conversation_history recency if available.
+
+    Returns dict with 'id' (str UUID) and 'telegram_chat_id' (str), or None.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT u.id, tc.telegram_chat_id
+        FROM users u
+        JOIN telegram_connections tc ON tc.user_id = u.id
+        WHERE tc.telegram_chat_id IS NOT NULL
+          AND tc.telegram_chat_id != ''
+        ORDER BY tc.created_at DESC NULLS LAST
+        LIMIT 1
+        """
+    )
+    if row is None:
+        return None
+    return {"id": str(row["id"]), "telegram_chat_id": row["telegram_chat_id"]}
+
+
+async def get_users_with_webhook(
+    conn: asyncpg.Connection,
+) -> list[dict]:
+    """Return all users that have both bot_token_encrypted AND webhook_secret set.
+
+    Used at startup to register per-user webhooks with Telegram.
+    Returns a list of dicts with keys: user_id, bot_token_encrypted, webhook_secret.
+    This is a no-RLS auth-schema query — do NOT pass a scoped connection.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT user_id, bot_token_encrypted, webhook_secret
+        FROM telegram_connections
+        WHERE bot_token_encrypted IS NOT NULL
+          AND webhook_secret IS NOT NULL
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_telegram_chat_id(
+    conn: asyncpg.Connection, user_id: str
+) -> str | None:
+    """Return telegram_chat_id for the given user, or None if not set.
+
+    Used by the webhook receive path to check whether this is a first-message
+    (chat_id not yet captured) or a returning user.
+    """
+    row = await conn.fetchrow(
+        "SELECT telegram_chat_id FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    if row is None:
+        return None
+    chat_id = row["telegram_chat_id"]
+    return chat_id if chat_id else None
