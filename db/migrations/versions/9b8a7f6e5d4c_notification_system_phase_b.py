@@ -7,7 +7,7 @@ Adds the schema required for the unified notification dispatcher:
   - context_nodes: summary, summary_updated_at columns
   - Backfills existing users' telegram_chat_id into notification_channels rows
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: 9b8a7f6e5d4c
 Revises: f5a6b7c8d9e0
 Create Date: 2026-05-13
 """
@@ -15,7 +15,7 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "9b8a7f6e5d4c"
 down_revision: Union[str, Sequence[str], None] = "f5a6b7c8d9e0"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
