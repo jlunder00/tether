@@ -10,7 +10,7 @@ enabling each user to register their own BotFather bot token.
   endpoint, allowing O(1) user lookup without iterating all connections.
 
 Revision ID: c8d9e0f1a2b3
-Revises: b2c3d4e5f6a7
+Revises: 9b8a7f6e5d4c
 Create Date: 2026-05-13
 """
 from typing import Sequence, Union
@@ -19,7 +19,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = "c8d9e0f1a2b3"
-down_revision: Union[str, Sequence[str], None] = "b2c3d4e5f6a7"
+down_revision: Union[str, Sequence[str], None] = "9b8a7f6e5d4c"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
