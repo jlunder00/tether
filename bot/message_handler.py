@@ -56,6 +56,7 @@ from db.pg_queries import (
 )
 import db.postgres as pg
 import db.pg_auth_queries as pg_auth_queries
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
@@ -1261,7 +1262,43 @@ async def _init_followup_states(pool, user_id: str, today: str, anchor_id: str, 
             await init_followup_state(conn, today, anchor_id, task_id, now)
 
 
-def run_polling(token: str, chat_id: str) -> None:
+async def _fetch_poll_credentials(pool, fernet: Fernet) -> tuple[str, str, str] | None:
+    """Look up the polling user's bot token and chat_id from the DB.
+
+    Returns (token, chat_id, user_id) for the first user who has a
+    bot_token_encrypted set, or None if no user has registered a bot token.
+
+    Phase 1 assumption: single-user deployment. The LIMIT 1 documents this
+    explicitly so multi-user Phase 5 work is immediately visible.
+    """
+    async with pg.get_conn(pool) as conn:  # no user_id — auth schema, no RLS
+        row = await conn.fetchrow(
+            """
+            SELECT tc.user_id, tc.telegram_chat_id, tc.bot_token_encrypted
+            FROM telegram_connections tc
+            WHERE tc.bot_token_encrypted IS NOT NULL
+            ORDER BY tc.user_id
+            LIMIT 1
+            """
+        )
+    if row is None:
+        return None
+    raw_token = fernet.decrypt(bytes(row["bot_token_encrypted"])).decode()
+    return raw_token, str(row["telegram_chat_id"]) if row["telegram_chat_id"] else "", str(row["user_id"])
+
+
+async def _auto_link_chat(pool, user_id: str, chat_id: str) -> bool:
+    """Bind chat_id to the polling user ONLY when no real binding exists.
+
+    Uses a guarded UPDATE (not UPSERT) so that a legitimate existing binding is
+    never overwritten by a stranger's first message. Returns True if the link
+    was established, False if a real chat_id was already bound.
+    """
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.auto_link_chat_id(conn, user_id, chat_id)
+
+
+def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     pool = loop.run_until_complete(pg.create_pool())
@@ -1301,25 +1338,42 @@ def run_polling(token: str, chat_id: str) -> None:
 
                 send = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
 
-                # Handle /start and /link before auth check
-                if text.strip() in ("/start", "/link"):
-                    try:
-                        code = f"{random.randint(0, 999999):06d}"
-                        async def _store_link():
-                            async with pg.get_conn(pool) as conn:  # no user_id — auth table
-                                await pg_auth_queries.store_link_code(conn, code, incoming_chat_id)
-                        loop.run_until_complete(_store_link())
-                        send(f"Your link code is: {code}. Enter this in Tether settings within 5 minutes.")
-                    except Exception as e:
-                        logger.error("Error handling /link: %s", e)
-                        send("[Tether error generating link code]")
-                    continue
-
                 # Resolve user_id from chat_id
                 resolved_user_id = loop.run_until_complete(_resolve_user_id(pool, incoming_chat_id))
+
                 if resolved_user_id is None:
-                    send("I don't recognize you. Link your Tether account at your Tether URL, then use /link to connect.")
-                    continue
+                    # Auto-link: the polling user's personal bot token is what
+                    # we're using, so any first message to this bot belongs to them.
+                    # Guard: only link when no real chat_id is bound yet (guarded
+                    # UPDATE — won't overwrite an existing legitimate binding, so a
+                    # stranger discovering the bot cannot hijack Jason's account).
+                    if poll_user_id is not None:
+                        try:
+                            linked = loop.run_until_complete(
+                                _auto_link_chat(pool, poll_user_id, incoming_chat_id)
+                            )
+                            if linked:
+                                resolved_user_id = poll_user_id
+                                logger.info(
+                                    "Auto-linked chat_id %s to user %s on first message",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                            else:
+                                # A real binding already exists for a different chat_id.
+                                # Reject silently — do not reveal account details.
+                                logger.warning(
+                                    "Rejected message from unrecognized chat_id %s "
+                                    "(user %s already linked to a different chat)",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                                continue
+                        except Exception as e:
+                            logger.error("Auto-link failed for chat_id %s: %s", incoming_chat_id, e)
+                            send("[Tether error: could not link your chat. Please try again.]")
+                            continue
+                    else:
+                        send("I don't recognize you. Contact your Tether administrator to link your account.")
+                        continue
 
                 try:
                     loop.run_until_complete(handle_message(text, send, pool, resolved_user_id))
@@ -1378,9 +1432,34 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     logger.info("log level: %s", level_name)
-    token = tether_config.get("telegram.bot_token")
-    chat_id = str(tether_config.get("telegram.chat_id", ""))
-    run_polling(token, chat_id)
+
+    # Load the vault key and look up the polling user's bot token from DB.
+    # Per Jason's Phase 1 override: no env-var fallback. The token lives in
+    # telegram_connections.bot_token_encrypted only.
+    vault_key_str = tether_config.get("vault.key")
+    if not vault_key_str:
+        logger.error("vault.key not configured — cannot decrypt bot token")
+        import sys
+        sys.exit(1)
+    fernet = Fernet(vault_key_str.encode() if isinstance(vault_key_str, str) else vault_key_str)
+
+    _startup_loop = asyncio.new_event_loop()
+    _pool = _startup_loop.run_until_complete(pg.create_pool())
+    credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
+    _startup_loop.run_until_complete(_pool.close())
+    _startup_loop.close()
+
+    if credentials is None:
+        logger.error(
+            "No per-user bot token found in DB. "
+            "Run scripts/migrate_telegram_to_per_user.py first."
+        )
+        import sys
+        sys.exit(1)
+
+    token, chat_id, poll_user_id = credentials
+    logger.info("Polling as user %s (chat_id=%s)", poll_user_id, chat_id or "<none yet>")
+    run_polling(token, chat_id, poll_user_id=poll_user_id)
 
 
 if __name__ == "__main__":
