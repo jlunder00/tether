@@ -151,6 +151,12 @@ export const useEventStore = defineStore('events', () => {
    *      planStore.removeTaskFromPlans so the UI doesn't show stale phantom data.
    *      We check resp.ok explicitly (not just catch) because a non-ok response
    *      is a real failure — a stuck stub is more disorienting than a missing event.
+   *
+   * Note: on failure the event is NOT re-inserted into events.value (matching the
+   * convention of moveEvent/deleteEvent elsewhere in this store). The event will
+   * reappear on the next fetchEvents call. A phantom stub is more confusing than
+   * a temporarily missing event, which is why step 4 removes the stub but leaves
+   * the event removal in place.
    */
   async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
