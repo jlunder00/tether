@@ -71,13 +71,22 @@
   --node-now         the "now" node fill
   --node-done        the "done" node fill
 
-  STATUS  (5 states, every theme defines)
-  ───────────────────────────────────────
+  STATUS  (5 task states + 2 notification priority levels, every theme defines)
+  ──────────────────────────────────────────────────────────────────────────────
   --status-todo-{bg,fg}
   --status-doing-{bg,fg,card}
   --status-done-{bg,fg,card}
   --status-skip-{bg,fg,card}
   --status-block-{bg,fg,card}
+
+  NOTIFICATION PRIORITY  (semantic — distinct from motif categorical palette)
+  ────────────────────────────────────────────────────────────────────────────
+  --status-urgent          "stop and look at this" (aliases --motif-urgent)
+  --status-urgent-bg       soft tint background for urgent badge/pill
+  --status-urgent-fg       text colour on --status-urgent-bg
+  --status-important       "time-sensitive" (warm amber-orange per theme)
+  --status-important-bg    soft tint background for important badge/pill
+  --status-important-fg    text colour on --status-important-bg
 
   TYPE
   ────
@@ -219,6 +228,14 @@
   --shadow-pop:    0 12px 32px -8px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
   --shadow-event:  0 2px 8px -2px rgba(0, 0, 0, 0.40);
   --shadow-focus:  0 0 0 3px rgba(124, 138, 255, 0.32);
+
+  /* priority status — semantic notification urgency (distinct from motif categorical palette) */
+  --status-urgent:        var(--motif-urgent);           /* "stop and look at this" — aliases motif-urgent red */
+  --status-urgent-bg:     rgba(255, 92, 92, 0.16);
+  --status-urgent-fg:     #FFA8A8;
+  --status-important:     #F59B38;                       /* "time-sensitive" — warm amber-orange */
+  --status-important-bg:  rgba(245, 155, 56, 0.15);
+  --status-important-fg:  #FBCC80;
 }
 
 /* TETHER · LIGHT MODE  (day mode of the default — same brand, light canvas) */
@@ -270,6 +287,14 @@
   --status-block-bg:   rgba(200, 60, 60, 0.14);
   --status-block-fg:   #9C2828;
   --status-block-card: #F6E9E9;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(192, 57, 43, 0.12);
+  --status-urgent-fg:     #8A1818;
+  --status-important:     #C47B18;
+  --status-important-bg:  rgba(196, 123, 24, 0.12);
+  --status-important-fg:  #7A4C0A;
 }
 
 
@@ -341,6 +366,14 @@
   --shadow-pop:    0 16px 40px -10px rgba(0, 0, 0, 0.60), 0 2px 8px rgba(0, 0, 0, 0.40);
   --shadow-event:  0 2px 10px -2px rgba(0, 0, 0, 0.50);
   --shadow-focus:  0 0 0 3px rgba(212, 168, 95, 0.35);
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(224, 82, 82, 0.16);
+  --status-urgent-fg:     #F0A0A0;
+  --status-important:     #D4842A;
+  --status-important-bg:  rgba(212, 132, 42, 0.16);
+  --status-important-fg:  #E8B870;
 }
 
 /* HORIZON · LIGHT — paper at noon */
@@ -392,6 +425,14 @@
   --status-block-bg:   rgba(168, 64, 56, 0.16);
   --status-block-fg:   #87291F;
   --status-block-card: #F1D9D2;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(156, 42, 26, 0.12);
+  --status-urgent-fg:     #6A1A12;
+  --status-important:     #9E5810;
+  --status-important-bg:  rgba(158, 88, 16, 0.12);
+  --status-important-fg:  #643608;
 }
 
 
@@ -461,6 +502,14 @@
   --shadow-pop:    0 0 0 1px #FFFFFF, 0 8px 24px rgba(0, 0, 0, 0.80);
   --shadow-event:  0 0 0 1px #FFFFFF;
   --shadow-focus:  0 0 0 3px #FFD43B;
+
+  /* priority status — solid (no alpha) to match contrast theme conventions */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     #3A0000;
+  --status-urgent-fg:     #FF9999;
+  --status-important:     #FF9900;
+  --status-important-bg:  #2A1800;
+  --status-important-fg:  #FFD080;
 }
 
 [data-theme="contrast"][data-mode="light"] {
@@ -511,6 +560,14 @@
   --status-block-bg:   #FACECE;
   --status-block-fg:   #8A0000;
   --status-block-card: #F8E2E2;
+
+  /* priority status — solid (no alpha) to match contrast theme conventions */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     #F9CCCC;
+  --status-urgent-fg:     #700000;
+  --status-important:     #9A5600;
+  --status-important-bg:  #F6E5C5;
+  --status-important-fg:  #5A3200;
 }
 
 
@@ -593,6 +650,14 @@
   --glyph-done:        "[x]";
   --glyph-skipped:     "[-]";
   --glyph-blocked:     "[!]";
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(255, 85, 85, 0.14);
+  --status-urgent-fg:     #FF9999;
+  --status-important:     #E8A020;
+  --status-important-bg:  rgba(232, 160, 32, 0.14);
+  --status-important-fg:  #F0C864;
 }
 
 /* TERMINAL · DAYLIGHT — paper-white canvas, dark forest green text.
@@ -647,6 +712,14 @@
   --status-block-bg:   rgba(165, 30, 30, 0.16);
   --status-block-fg:   #A51E1E;
   --status-block-card: #F2DCDC;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(170, 30, 30, 0.12);
+  --status-urgent-fg:     #6E1010;
+  --status-important:     #8C5E00;
+  --status-important-bg:  rgba(140, 94, 0, 0.12);
+  --status-important-fg:  #5E3E00;
 }
 
 
@@ -722,6 +795,14 @@
   --radius-sharp: 3px;
   --radius-soft:  10px;
   --type-voice:   sharp;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(255, 122, 107, 0.15);
+  --status-urgent-fg:     #FFAAAA;
+  --status-important:     #E8942A;
+  --status-important-bg:  rgba(232, 148, 42, 0.15);
+  --status-important-fg:  #F0C070;
 }
 
 [data-theme="solstice"][data-mode="light"] {
@@ -777,6 +858,14 @@
   --radius-sharp: 3px;
   --radius-soft:  10px;
   --type-voice:   sharp;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(178, 58, 40, 0.12);
+  --status-urgent-fg:     #7A2018;
+  --status-important:     #9A6010;
+  --status-important-bg:  rgba(154, 96, 16, 0.12);
+  --status-important-fg:  #643E08;
 }
 
 /* DRACULA-TETHER — homage to Dracula, with the Tether line. Devs love this. */
@@ -842,6 +931,14 @@
   --glyph-done:        "[x]";
   --glyph-skipped:     "[-]";
   --glyph-blocked:     "[!]";
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(255, 85, 85, 0.16);
+  --status-urgent-fg:     #FF9999;
+  --status-important:     #F0A030;
+  --status-important-bg:  rgba(240, 160, 48, 0.14);
+  --status-important-fg:  #F8CC80;
 }
 
 [data-theme="dracula"][data-mode="light"] {
@@ -898,6 +995,14 @@
   --type-voice:   terminal;
   --font-display: "JetBrains Mono", ui-monospace, monospace;
   --font-sans:    "Inter", system-ui, sans-serif;
+
+  /* priority status */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(201, 32, 32, 0.12);
+  --status-urgent-fg:     #8A1414;
+  --status-important:     #B0782A;
+  --status-important-bg:  rgba(176, 120, 42, 0.12);
+  --status-important-fg:  #704A12;
 }
 
 /* PAPER — pure light theme, low chroma, almost monochrome. Like printing. */
@@ -957,6 +1062,14 @@
   --type-voice:   editorial;
   --font-display: "Source Serif Pro", Georgia, serif;
   --font-sans:    "Inter", system-ui, sans-serif;
+
+  /* priority status — muted to honour paper's near-monochrome aesthetic */
+  --status-urgent:        var(--motif-urgent);
+  --status-urgent-bg:     rgba(138, 24, 24, 0.08);
+  --status-urgent-fg:     #5A0E0E;
+  --status-important:     #7A4E00;
+  --status-important-bg:  rgba(122, 78, 0, 0.08);
+  --status-important-fg:  #4A3000;
 }
 
 
