@@ -201,10 +201,9 @@ async function handleSlotDrop(payload: DropPayload, time: string) {
   } else {
     const endISO = new Date(slotStartMs + 30 * 60_000).toISOString()
     await eventStore.promoteTask(taskId, slotStart, endISO, title)
-    // Use fetchPlanRange (not fetchPlan) — fetchPlan flips loading=true which causes
-    // PlanView's v-if="planStore.loading" to destroy and remount the entire grid.
-    // fetchPlanRange updates plans.value directly without touching loading.
-    await planStore.fetchPlanRange(props.date, props.date)
+    // CalendarView pattern: remove task from plans immediately (optimistic).
+    // No round-trip needed — promoteTask already inserted the event optimistically.
+    planStore.removeTaskFromPlans(taskId)
   }
 }
 

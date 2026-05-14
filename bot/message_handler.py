@@ -1443,19 +1443,24 @@ def main() -> None:
         sys.exit(1)
     fernet = Fernet(vault_key_str.encode() if isinstance(vault_key_str, str) else vault_key_str)
 
+    # Soft config: per-user token not yet in DB (migration not yet run).
+    # Loop until the token appears — once the ops migration script runs, the bot
+    # picks it up without supervisord intervention.
     _startup_loop = asyncio.new_event_loop()
     _pool = _startup_loop.run_until_complete(pg.create_pool())
-    credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
-    _startup_loop.run_until_complete(_pool.close())
-    _startup_loop.close()
-
-    if credentials is None:
-        logger.error(
-            "No per-user bot token found in DB. "
-            "Run scripts/migrate_telegram_to_per_user.py first."
-        )
-        import sys
-        sys.exit(1)
+    try:
+        while True:
+            credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
+            if credentials is not None:
+                break
+            logger.warning(
+                "No per-user bot token found in DB. "
+                "Sleeping 30 s — run scripts/migrate_telegram_to_per_user.py to resolve."
+            )
+            time.sleep(30)
+    finally:
+        _startup_loop.run_until_complete(_pool.close())
+        _startup_loop.close()
 
     token, chat_id, poll_user_id = credentials
     logger.info("Polling as user %s (chat_id=%s)", poll_user_id, chat_id or "<none yet>")
