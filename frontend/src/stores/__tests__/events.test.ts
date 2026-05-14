@@ -262,6 +262,149 @@ describe('useEventStore', () => {
     expect(store.events).toHaveLength(0)
   })
 
+  // --- demoteEvent + optimistic plan-side stub (optimistic demote fix) ---
+
+  it('demoteEvent inserts a stub task into planStore synchronously before awaiting PATCH', async () => {
+    const { api } = await import('../../lib/api')
+    // Use a deferred promise to intercept the PATCH call mid-execution
+    let resolveApi!: (v: any) => void
+    vi.mocked(api).mockImplementationOnce(() => new Promise(r => { resolveApi = r }))
+
+    const { useEventStore } = await import('../events')
+    const { usePlanStore } = await import('../plan')
+    const eventStore = useEventStore()
+    const planStore = usePlanStore()
+
+    // Seed plan cache so insertStubTask has somewhere to write
+    planStore.plans['2024-06-10'] = {
+      date: '2024-06-10',
+      anchors: { 'anchor-1': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    eventStore.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-sync',
+      title: 'My Event',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-sync',
+    })
+
+    // Do NOT await — we want to inspect state before the PATCH resolves
+    const demotePromise = eventStore.demoteEvent('ev-sync', 'anchor-1', '2024-06-10')
+
+    // Stub must already be in the plan cache synchronously (before PATCH returns)
+    expect(planStore.plans['2024-06-10'].anchors['anchor-1'].tasks).toHaveLength(1)
+    expect(planStore.plans['2024-06-10'].anchors['anchor-1'].tasks[0].id).toBe('task-sync')
+    expect(planStore.plans['2024-06-10'].anchors['anchor-1'].tasks[0].text).toBe('My Event')
+
+    // Now let the PATCH resolve
+    resolveApi({ ok: true, json: async () => ({}) })
+    await demotePromise
+  })
+
+  it('demoteEvent stub carries the task_id as its id (reconciliation key)', async () => {
+    const { api } = await import('../../lib/api')
+    let resolveApi!: (v: any) => void
+    vi.mocked(api).mockImplementationOnce(() => new Promise(r => { resolveApi = r }))
+
+    const { useEventStore } = await import('../events')
+    const { usePlanStore } = await import('../plan')
+    const eventStore = useEventStore()
+    const planStore = usePlanStore()
+
+    planStore.activeDate = '2024-06-10'
+    planStore.plan = {
+      date: '2024-06-10',
+      anchors: { 'anchor-1': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    eventStore.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-reconcile',
+      title: 'Reconcile me',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-reconcile',
+    })
+
+    const demotePromise = eventStore.demoteEvent('ev-reconcile', 'anchor-1', '2024-06-10')
+
+    // The stub's id must equal the task_id so that fetchPlanRange can reconcile
+    // by id when the server response arrives (same row, same id)
+    const stub = planStore.plan!.anchors['anchor-1'].tasks[0]
+    expect(stub.id).toBe('task-reconcile')
+
+    resolveApi({ ok: true, json: async () => ({}) })
+    await demotePromise
+  })
+
+  it('demoteEvent removes the stub on PATCH network error', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockRejectedValueOnce(new Error('network'))
+
+    const { useEventStore } = await import('../events')
+    const { usePlanStore } = await import('../plan')
+    const eventStore = useEventStore()
+    const planStore = usePlanStore()
+
+    planStore.plans['2024-06-10'] = {
+      date: '2024-06-10',
+      anchors: { 'anchor-1': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    eventStore.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-err',
+      title: 'Error task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-err',
+    })
+
+    await eventStore.demoteEvent('ev-err', 'anchor-1', '2024-06-10')
+
+    // Stub should have been removed on error
+    expect(planStore.plans['2024-06-10'].anchors['anchor-1'].tasks).toHaveLength(0)
+  })
+
+  it('demoteEvent removes the stub when PATCH returns a non-ok response', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: false, json: async () => ({}) } as any)
+
+    const { useEventStore } = await import('../events')
+    const { usePlanStore } = await import('../plan')
+    const eventStore = useEventStore()
+    const planStore = usePlanStore()
+
+    planStore.plans['2024-06-10'] = {
+      date: '2024-06-10',
+      anchors: { 'anchor-1': { tasks: [], notes: '' } },
+      acknowledgements: {},
+      check_in_log: [],
+    } as any
+
+    eventStore.events.push({
+      ...BASE_EVENT_FIELDS,
+      id: 'ev-nonok',
+      title: 'Non-ok task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T10:00:00Z',
+      task_id: 'task-nonok',
+    })
+
+    await eventStore.demoteEvent('ev-nonok', 'anchor-1', '2024-06-10')
+
+    // Stub should be removed when server reports failure
+    expect(planStore.plans['2024-06-10'].anchors['anchor-1'].tasks).toHaveLength(0)
+  })
+
   // --- deleteEvent ---
 
   it('deleteEvent removes event locally and calls DELETE /api/events/:id', async () => {
@@ -355,5 +498,80 @@ describe('useEventStore', () => {
     const { useEventStore } = await import('../events')
     const store = useEventStore()
     await expect(store.updateEventColor('nonexistent', '#ff0000')).resolves.toBeUndefined()
+  })
+
+  // --- promoteTask — true optimistic insert ---
+
+  it('promoteTask inserts optimistic event synchronously before API resolves', async () => {
+    const { api } = await import('../../lib/api')
+    // Hold the API response until we explicitly resolve it
+    let resolveApi!: (v: Response) => void
+    vi.mocked(api).mockReturnValueOnce(new Promise(r => { resolveApi = r }) as any)
+
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+
+    // Start promotion but do NOT await — we want to inspect state mid-flight
+    const promise = store.promoteTask('task-opt', '2024-06-10T09:00:00Z', '2024-06-10T09:30:00Z', 'Optimistic Task')
+
+    // The optimistic event must appear synchronously (before any microtask boundary)
+    expect(store.events).toHaveLength(1)
+    expect(store.events[0].task_id).toBe('task-opt')
+    expect(store.events[0].title).toBe('Optimistic Task')
+    expect(store.events[0].id).toMatch(/^optimistic-/)
+
+    // Resolve the API call to clean up
+    resolveApi({ ok: false, json: async () => ({}) } as any)
+    await promise
+  })
+
+  it('promoteTask replaces optimistic event with server response on 2xx', async () => {
+    const { api } = await import('../../lib/api')
+    const serverEvent = {
+      ...BASE_EVENT_FIELDS,
+      id: 'server-123',
+      title: 'Reconciled Task',
+      start_time: '2024-06-10T09:00:00Z',
+      end_time: '2024-06-10T09:30:00Z',
+      task_id: 'task-opt',
+    }
+    vi.mocked(api).mockResolvedValueOnce({ ok: true, json: async () => serverEvent } as any)
+
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+
+    const result = await store.promoteTask('task-opt', '2024-06-10T09:00:00Z', '2024-06-10T09:30:00Z', 'Reconciled Task')
+
+    // After API resolves, exactly one event — the server-confirmed one
+    expect(store.events).toHaveLength(1)
+    expect(store.events[0].id).toBe('server-123')
+    expect(result?.id).toBe('server-123')
+  })
+
+  it('promoteTask removes optimistic event on network error', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockRejectedValueOnce(new Error('network failure'))
+
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+
+    const result = await store.promoteTask('task-err', '2024-06-10T09:00:00Z', '2024-06-10T09:30:00Z', 'Error Task')
+
+    // Optimistic event must be cleaned up on failure
+    expect(store.events).toHaveLength(0)
+    expect(result).toBeNull()
+  })
+
+  it('promoteTask removes optimistic event when API returns non-2xx', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({ ok: false, json: async () => ({}) } as any)
+
+    const { useEventStore } = await import('../events')
+    const store = useEventStore()
+
+    const result = await store.promoteTask('task-fail', '2024-06-10T09:00:00Z', '2024-06-10T09:30:00Z', 'Failed Task')
+
+    expect(store.events).toHaveLength(0)
+    expect(result).toBeNull()
   })
 })
