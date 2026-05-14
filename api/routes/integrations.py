@@ -26,7 +26,7 @@ import urllib.parse
 import asyncpg
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 import api.config as cfg
@@ -43,6 +43,7 @@ from integrations.google_calendar.auth import (
     verify_oauth_state,
 )
 from integrations.google_calendar.sync import GoogleCalendarSync
+from integrations.models import WebhookPayload
 from sync.dispatch import dispatch_sync  # re-exported so tests can monkeypatch at this name
 
 logger = logging.getLogger(__name__)
@@ -476,33 +477,82 @@ async def google_sync(
 # 5. POST /integrations/google/webhook — Google push notifications
 # ---------------------------------------------------------------------------
 
+async def _process_gcal_event(
+    channel_id: str | None,
+    resource_state: str | None,
+    pool,
+) -> None:
+    """BackgroundTask: process an inbound Google Calendar push notification inline.
+
+    Replaces the former PG NOTIFY → tether-sync worker hop. The HTTP request
+    itself wakes the Fly.io machine; syncing inline means no persistent LISTEN
+    connection is needed.
+
+    resource_state="sync" is Google's registration ping — safe to ignore.
+    An unknown channel_id (no matching integration_sync_state row) is logged
+    and discarded; it could mean a channel that expired and was re-registered
+    under a new ID, or a stale notification after disconnect.
+    """
+    if not channel_id or resource_state == "sync":
+        return
+
+    import db.postgres as pg
+
+    # Resolve channel_id → integration_id via an unscoped connection.
+    # integration_sync_state is a background-system table; no user context needed.
+    async with pg.get_conn(pool) as conn:
+        row = await conn.fetchrow(
+            "SELECT integration_id FROM integration_sync_state WHERE watch_channel_id = $1",
+            channel_id,
+        )
+
+    if not row:
+        logger.warning(
+            "_process_gcal_event: no sync state for channel_id=%s; ignoring",
+            channel_id,
+        )
+        return
+
+    integration_id = str(row["integration_id"])
+    payload = WebhookPayload(
+        channel_id=channel_id,
+        resource_id="",
+        resource_state=resource_state or "",
+        raw_headers={},
+    )
+
+    provider = GoogleCalendarSync(pool)
+    try:
+        await provider.handle_webhook(integration_id, payload)
+    except Exception:
+        logger.exception(
+            "_process_gcal_event: error handling channel_id=%s integration_id=%s",
+            channel_id,
+            integration_id,
+        )
+
+
 @router.post("/integrations/google/webhook")
 async def google_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_goog_channel_id: str | None = Header(default=None, alias="X-Goog-Channel-Id"),
-    x_goog_resource_id: str | None = Header(default=None, alias="X-Goog-Resource-Id"),
     x_goog_resource_state: str | None = Header(default=None, alias="X-Goog-Resource-State"),
 ):
     """Receive Google Calendar push notifications.
 
-    Must return 200 within Google's timeout. No DB lookup here — the endpoint
-    has no user context so RLS would block any integration_sync_state query.
-    Instead, channel_id is forwarded in the NOTIFY payload; the tether-sync
-    worker resolves it to an integration via its own unscoped DB access.
+    Returns 200 immediately; sync is dispatched as a BackgroundTask so the
+    response is never delayed by DB or Google API latency. The Fly.io machine
+    wakes on this HTTP request, making a persistent PG LISTEN connection
+    unnecessary.
     """
-    if x_goog_channel_id and x_goog_resource_state != "sync":
-        await dispatch_sync(
-            request.app.state.pool,
-            integration_id="",   # unknown — worker resolves via channel_id
-            calendar_id="",      # unknown — worker resolves via channel_id
-            provider=_PROVIDER,
-            notify_type="webhook",
-            channel_id=x_goog_channel_id,
-            resource_id=x_goog_resource_id or "",
-            resource_state=x_goog_resource_state or "",
-        )
-
-    return {"ok": True}
+    background_tasks.add_task(
+        _process_gcal_event,
+        x_goog_channel_id,
+        x_goog_resource_state,
+        request.app.state.pool,
+    )
+    return Response(status_code=200)
 
 
 # ---------------------------------------------------------------------------

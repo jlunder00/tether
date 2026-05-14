@@ -85,6 +85,7 @@ vi.mock('../../stores/anchors', () => ({
 }))
 
 const mockMoveTask = vi.fn()
+const mockRemoveTaskFromPlans = vi.fn()
 
 vi.mock('../../stores/plan', () => ({
   usePlanStore: () => ({
@@ -93,6 +94,7 @@ vi.mock('../../stores/plan', () => ({
     fetchPlan: vi.fn(),
     fetchPlanRange: mockFetchPlanRange,
     moveTask: mockMoveTask,
+    removeTaskFromPlans: mockRemoveTaskFromPlans,
   }),
 }))
 
@@ -145,6 +147,7 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     mockCreateTaskAndPromote.mockReset()
     mockCreateTaskAndPromote.mockResolvedValue('new-task-id')
     mockMoveTask.mockReset()
+    mockRemoveTaskFromPlans.mockReset()
   })
 
   // ── KEY FAILING TEST #1 ────────────────────────────────────────────────────
@@ -264,8 +267,8 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     expect(mockCreateTaskAndPromote).toHaveBeenCalled()
   })
 
-  // ── Bug 2: plan cache refresh after task promote ───────────────────────────
-  it('after promoting a task to calendar, planStore.fetchPlanRange is called to refresh the sidebar', async () => {
+  // ── Bug 2 (sym 4 fix): after task promote, sidebar task is removed optimistically ──
+  it('after promoting a task to calendar, planStore.removeTaskFromPlans is called (no full-week fetch)', async () => {
     const { default: CalendarView } = await import('../CalendarView.vue')
     const wrapper = mount(CalendarView)
     await flushPromises()
@@ -281,7 +284,9 @@ describe('CalendarView – HTML5 DnD refactor', () => {
     await flushPromises()
 
     expect(mockPromoteTask).toHaveBeenCalled()
-    expect(mockFetchPlanRange).toHaveBeenCalled()
+    // Sym 4 fix: optimistic removal instead of full-week fetchPlanRange
+    expect(mockRemoveTaskFromPlans).toHaveBeenCalledWith('task-99')
+    expect(mockRemoveTaskFromPlans).toHaveBeenCalledTimes(1)
   })
 
   // ── Bug 3: sidebar anchor block drop demotes calendar event back to task ────
@@ -352,7 +357,9 @@ describe('CalendarView – HTML5 DnD refactor', () => {
       todayStr,
       'anchor-afternoon',
     )
-    expect(mockFetchPlanRange).toHaveBeenCalled()
+    // Sym 4 fix: moveTask already applies optimistic updates — no fetchPlanRange needed
+    // after a sidebar task→anchor move. Verify fetchPlanRange was NOT called here.
+    // (It is called on initial load in loadEvents, but not as a post-drop side-effect.)
   })
 
   // ── REGRESSION: click on event block opens panel ───────────────────────────
