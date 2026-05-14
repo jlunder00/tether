@@ -8,6 +8,7 @@ import uuid as _uuid
 from datetime import datetime, timezone
 
 import asyncpg
+from cryptography.fernet import Fernet
 
 
 def _row(row: asyncpg.Record | None) -> dict | None:
@@ -225,3 +226,58 @@ async def verify_and_consume_link_code(
         code,
     )
     return row["telegram_chat_id"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Per-user bot token helpers (Phase 1 — per-user Telegram migration)
+# ---------------------------------------------------------------------------
+
+async def store_bot_token(
+    conn: asyncpg.Connection, user_id: str, fernet: Fernet, raw_token: str
+) -> None:
+    """Fernet-encrypt raw_token and store in telegram_connections.bot_token_encrypted.
+
+    Requires the user to already have a row in telegram_connections (inserted
+    when telegram_chat_id is first captured). Uses UPDATE rather than upsert
+    to make it explicit that the caller must have a connection row first.
+    """
+    blob: bytes = fernet.encrypt(raw_token.encode())
+    await conn.execute(
+        "UPDATE telegram_connections SET bot_token_encrypted = $1 WHERE user_id = $2",
+        blob,
+        _uuid.UUID(user_id),
+    )
+
+
+async def get_bot_token(
+    conn: asyncpg.Connection, user_id: str, fernet: Fernet
+) -> str | None:
+    """Fetch and decrypt the per-user bot token.
+
+    Returns None if the user has no telegram_connections row, or if
+    bot_token_encrypted is NULL (user hasn't registered a personal bot yet).
+    """
+    row = await conn.fetchrow(
+        "SELECT bot_token_encrypted FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    if row is None or row["bot_token_encrypted"] is None:
+        return None
+    return fernet.decrypt(bytes(row["bot_token_encrypted"])).decode()
+
+
+async def get_user_by_webhook_secret(
+    conn: asyncpg.Connection, webhook_secret: str
+) -> str | None:
+    """Look up user_id from the webhook_secret stored at bot registration time.
+
+    This is a no-RLS auth-schema query — do NOT pass a scoped connection.
+    Returns the user_id as a plain string (UUID format), or None if not found.
+    """
+    row = await conn.fetchrow(
+        "SELECT user_id FROM telegram_connections WHERE webhook_secret = $1",
+        webhook_secret,
+    )
+    if row is None:
+        return None
+    return str(row["user_id"])
