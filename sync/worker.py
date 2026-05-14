@@ -1,6 +1,17 @@
-"""Tether sync worker.
+"""Tether sync worker — optional local-dev convenience.
 
-Owns:
+**Fly.io / production deployments no longer require this process.**
+Since Phase F (notification-system-overhaul §11), Google Calendar push
+notifications are handled inline as FastAPI BackgroundTasks in
+`api/routes/integrations.py`. The Fly.io machine wakes on the inbound
+HTTP request, so no persistent PG LISTEN connection is needed.
+
+This worker remains useful for local development: it lets you trigger
+syncs via `pg_notify('integration_sync', ...)` without running the API.
+The `[program:sync]` supervisord section is intentionally absent from
+production config (cleanup deferred to Phase K).
+
+Historical ownership (still applies in local-dev mode):
   - PG LISTEN on the `integration_sync` channel
   - APScheduler cron for watch channel renewal (daily, <24h to expiry)
   - APScheduler cron for proactive token refresh (hourly, <1h to expiry)
