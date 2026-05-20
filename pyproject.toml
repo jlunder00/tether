@@ -46,9 +46,13 @@ dev = [
 packages = [
     "bot", "db", "api", "api.routes", "tether_mcp", "shared",
     "sync", "integrations", "integrations.google_calendar", "integrations.ical",
+    "agent_pool_manager",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: mark test as requiring a real claude binary",
+]
