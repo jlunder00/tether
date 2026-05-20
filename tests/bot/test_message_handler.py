@@ -336,3 +336,51 @@ def test_stale_beacon_block_removed():
     assert "Beacon anchor transition check failed" not in src, (
         "Stale SQLite-era Beacon block still present in message_handler.py — remove it."
     )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline config — wired constants and classifier timeout
+# ---------------------------------------------------------------------------
+
+def test_pipeline_constants_read_from_config():
+    """HISTORY_EXCHANGES, MAX_PLANNING_ROUNDS, MAX_REPAIR_ATTEMPTS, MAX_SATISFACTION_RETRIES
+    must be assigned via tether_config.get(), not hardcoded integers."""
+    import inspect
+    from bot import message_handler
+    src = inspect.getsource(message_handler)
+
+    for key in (
+        "pipeline.history_exchanges",
+        "pipeline.max_planning_rounds",
+        "pipeline.max_repair_attempts",
+        "pipeline.max_satisfaction_retries",
+    ):
+        assert key in src, (
+            f"Expected tether_config.get('{key}', ...) in message_handler.py — "
+            "pipeline constants must be wired to config."
+        )
+
+
+@pytest.mark.asyncio
+async def test_classify_message_uses_config_timeout():
+    """_classify_message must pass a timeout derived from tether_config, not hardcoded 15."""
+    from claude_agent_sdk import AssistantMessage, TextBlock
+
+    captured_timeouts: list[int] = []
+
+    async def _fake_call_claude(prompt, timeout=180, model_role=None, stage=""):
+        captured_timeouts.append(timeout)
+        return '{"route": "quick"}'
+
+    with patch("bot.message_handler.call_claude", side_effect=_fake_call_claude), \
+         patch("bot.message_handler.tether_config") as mc:
+        mc.get.side_effect = lambda key, default=None: (
+            60 if key == "pipeline.classifier_timeout_seconds" else default
+        )
+        from bot.message_handler import _classify_message
+        await _classify_message("hello", {}, "2026-01-01")
+
+    assert len(captured_timeouts) == 1
+    assert captured_timeouts[0] == 60, (
+        f"Expected classifier timeout=60 from config, got {captured_timeouts[0]}"
+    )
