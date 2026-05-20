@@ -13,6 +13,8 @@ import uuid as _uuid
 
 import asyncpg
 
+import db.postgres as pg
+
 
 def _hash(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
@@ -115,7 +117,7 @@ async def get_delegated_user_ids(pool, bot_service_id: str) -> set[str]:
     Currently delegation keys are bot-global — the parameter is accepted so
     call sites remain forward-compatible when PR 4 adds per-bot scoping.
     """
-    async with pool.acquire() as conn:
+    async with pg.get_conn(pool, user_id=bot_service_id) as conn:
         rows = await conn.fetch(
             """
             SELECT DISTINCT user_id
