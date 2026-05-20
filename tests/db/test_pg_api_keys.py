@@ -1,5 +1,6 @@
 """Tests for api_keys DB queries — create, list, revoke, validate."""
 from __future__ import annotations
+import os
 import pytest
 
 from tests.db.pg_conftest import auth_conn  # noqa: F401
@@ -8,7 +9,26 @@ from db.pg_queries.api_keys import (
     list_keys,
     revoke_key,
     validate_key,
+    get_delegated_user_ids,
 )
+from db.postgres import create_pool, close_pool
+
+BOT_USER_ID = "00000000-0000-0000-0000-000000000b07"
+
+
+@pytest.fixture
+def db_url():
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        pytest.skip("DATABASE_URL not set — Postgres tests skipped")
+    return url
+
+
+@pytest.fixture
+async def pool(db_url):
+    p = await create_pool()
+    yield p
+    await close_pool()
 
 TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 pytestmark = pytest.mark.asyncio
@@ -94,3 +114,18 @@ async def test_validate_revoked_key_does_not_update_last_used(auth_conn):
         "SELECT last_used_at FROM api_keys WHERE id = $1::uuid", record["id"]
     )
     assert rows[0]["last_used_at"] is None
+
+
+async def test_get_delegated_user_ids_bot_service_does_not_crash(pool):
+    """Regression: get_delegated_user_ids must not raise when called with the
+    bot service UUID.
+
+    Before the fix the function acquired a raw pool connection without setting
+    app.current_user_id. The RLS policy then evaluated
+    current_setting('app.current_user_id', true)::uuid which is '':uuid, raising
+    asyncpg.exceptions.InvalidTextRepresentationError and crashing the WS handler.
+    """
+    result = await get_delegated_user_ids(pool, BOT_USER_ID)
+    assert isinstance(result, set)
+    # No bot delegation keys exist in test DB — expect empty set.
+    assert result == set()
