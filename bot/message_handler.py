@@ -69,12 +69,13 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
 
-HISTORY_EXCHANGES = 5
+HISTORY_EXCHANGES = int(tether_config.get("pipeline.history_exchanges", 5))
 
 # v2 pipeline constants
-MAX_PLANNING_ROUNDS = 4
-MAX_REPAIR_ATTEMPTS = 3
-MAX_SATISFACTION_RETRIES = 2
+MAX_PLANNING_ROUNDS = int(tether_config.get("pipeline.max_planning_rounds", 4))
+MAX_REPAIR_ATTEMPTS = int(tether_config.get("pipeline.max_repair_attempts", 3))
+MAX_SATISFACTION_RETRIES = int(tether_config.get("pipeline.max_satisfaction_retries", 2))
+_CLASSIFIER_TIMEOUT = 45
 
 # Module-level log context — set once per _run_v2_planning_loop call.
 # Safe because the bot is single-threaded.
@@ -793,7 +794,8 @@ async def _classify_message(text: str, current_anchor: dict, today: str) -> str:
         date=today,
     )
     try:
-        raw = await call_claude(prompt, timeout=15, model_role="quick_classifier",
+        _timeout = int(tether_config.get("pipeline.classifier_timeout_seconds", _CLASSIFIER_TIMEOUT))
+        raw = await call_claude(prompt, timeout=_timeout, model_role="quick_classifier",
                           stage="quick_classifier")
         data = _parse_json(raw)
         route = data.get("route", "full")
