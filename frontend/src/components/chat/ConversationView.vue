@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
 import { useConversationChat } from '../../composables/useConversationChat'
+import { useAgentPickerStore } from '../../stores/agentPicker'
 import AgentPicker from '../AgentPicker.vue'
 import PriorityPill from './PriorityPill.vue'
 import StateToggle from './StateToggle.vue'
 import type { ConversationMessage, ConversationPriority, ConversationState } from '../../types/conversations'
 
 const store = useConversationsStore()
+const agentPickerStore = useAgentPickerStore()
+
+onMounted(() => agentPickerStore.fetchPreference())
 
 const draft = ref('')
 const scrollEl = ref<HTMLDivElement | null>(null)
