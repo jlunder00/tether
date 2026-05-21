@@ -221,8 +221,9 @@ async def list_conversations(
 
     LEFT JOINs context_nodes so that folder_name is included in each row.
     """
+    # $1 = limit, $2 = offset; optional filters appended as $3, $4...
+    params: list = [limit, offset]
     conditions: list[str] = []
-    params: list = []
 
     if state is not None:
         params.append(state)
@@ -232,9 +233,6 @@ async def list_conversations(
         conditions.append(f"c.context_node_id = ${len(params)}::uuid")
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    params.extend([limit, offset])
-    limit_p = len(params) - 1
-    offset_p = len(params)
 
     rows = await conn.fetch(
         f"""
@@ -255,7 +253,7 @@ async def list_conversations(
         LEFT JOIN context_nodes cn ON cn.id = c.context_node_id
         {where}
         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
-        LIMIT ${limit_p} OFFSET ${offset_p}
+        LIMIT $1 OFFSET $2
         """,
         *params,
     )

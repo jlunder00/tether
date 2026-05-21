@@ -52,32 +52,20 @@ async def build_conversation_context(
 
         sections = await get_sections(conn, node_id)
 
-        # Cross-node parent summary (premium feature) — not implemented in public. See tether-premium for extended context injection.
-
+    # Cross-node parent summary is handled in tether-premium (not in OSS).
     return _format_context_block(node, sections)
 
 
-def _format_context_block(
-    node: dict,
-    sections: list[dict],
-) -> str:
+def _format_context_block(node: dict, sections: list[dict]) -> str:
     """Render a markdown block summarising the context node and its sections."""
-    lines: list[str] = [
-        f"## Context: {node['name']}",
-        "",
-    ]
+    lines = [f"## Context: {node['name']}", ""]
 
-    if sections:
-        for sec in sections:
-            section_label = sec["section_type"].replace("_", " ").title()
-            lines += [
-                f"### {section_label}",
-                sec["body"] or "",
-                "",
-            ]
-    else:
+    if not sections:
         # Node exists but has no sections — still useful to name it
         lines.append("*(no section content)*")
-        lines.append("")
+    else:
+        for sec in sections:
+            label = sec["section_type"].replace("_", " ").title()
+            lines += [f"### {label}", sec["body"] or "", ""]
 
     return "\n".join(lines).rstrip() + "\n"

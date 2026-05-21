@@ -20,21 +20,21 @@ TEST_USER_ID = "00000000-0000-0000-0000-000000000001"
 # ---------------------------------------------------------------------------
 
 
-async def _make_pool_stub(conn):
-    """Return a minimal pool-like stub that yields `conn` via acquire()."""
-    class _FakePool:
-        def acquire(self):
-            return _AcquireCtx(conn)
+class _AcquireCtx:
+    def __init__(self, conn):
+        self._conn = conn
+    async def __aenter__(self):
+        return self._conn
+    async def __aexit__(self, *_):
+        pass
 
-    class _AcquireCtx:
-        def __init__(self, c):
-            self._c = c
-        async def __aenter__(self):
-            return self._c
-        async def __aexit__(self, *_):
-            pass
 
-    return _FakePool()
+class _FakePool:
+    """Minimal pool-like stub that yields the given conn via acquire()."""
+    def __init__(self, conn):
+        self._conn = conn
+    def acquire(self):
+        return _AcquireCtx(self._conn)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ async def test_no_context_node_returns_empty(conn):
     cid = await create_conversation(
         conn, user_id=TEST_USER_ID, name="Bare chat", notification_type="bot",
     )
-    pool = await _make_pool_stub(conn)
+    pool = _FakePool(conn)
     result = await build_conversation_context(cid, pool, TEST_USER_ID)
     assert result == ""
 
@@ -68,26 +68,11 @@ async def test_with_context_node_returns_block(conn):
         notification_type="bot",
         context_node_id=node["id"],
     )
-    pool = await _make_pool_stub(conn)
+    pool = _FakePool(conn)
     result = await build_conversation_context(cid, pool, TEST_USER_ID)
     assert result != ""
     assert "My Project" in result
     assert "Important project details." in result
-
-
-@pytest.mark.asyncio
-async def test_context_block_contains_node_name(conn):
-    node = await create_node(conn, "Tether Dev")
-    cid = await create_conversation(
-        conn,
-        user_id=TEST_USER_ID,
-        name="Dev chat",
-        notification_type="bot",
-        context_node_id=node["id"],
-    )
-    pool = await _make_pool_stub(conn)
-    result = await build_conversation_context(cid, pool, TEST_USER_ID)
-    assert "Tether Dev" in result
 
 
 @pytest.mark.asyncio
@@ -102,7 +87,7 @@ async def test_root_node_no_parent_summary(conn):
         notification_type="bot",
         context_node_id=node["id"],
     )
-    pool = await _make_pool_stub(conn)
+    pool = _FakePool(conn)
     result = await build_conversation_context(cid, pool, TEST_USER_ID)
     assert "Root goals here." in result
 
@@ -125,6 +110,6 @@ async def test_deleted_context_node_returns_empty(conn):
     )
     # Delete the node after linking
     await conn.execute("DELETE FROM context_nodes WHERE id = $1::uuid", node["id"])
-    pool = await _make_pool_stub(conn)
+    pool = _FakePool(conn)
     result = await build_conversation_context(cid, pool, TEST_USER_ID)
     assert result == ""
