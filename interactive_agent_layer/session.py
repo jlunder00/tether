@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import time
 import uuid
@@ -33,6 +34,17 @@ class Session:
     created_at: float = dataclasses.field(default_factory=time.time)
     permission_pending: dict = dataclasses.field(default_factory=dict)
     coalescing_buffer: CoalescingBuffer = dataclasses.field(default_factory=CoalescingBuffer)
+
+
+def _stable_options_hash(options: dict) -> str:
+    """Return a stable, process-safe string hash of options.
+
+    Uses SHA-256 of the canonical JSON so the hash is consistent across
+    processes and restarts (unlike Python's built-in hash() which is
+    randomised via PYTHONHASHSEED).
+    """
+    canonical = json.dumps(options, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 class Layer:
@@ -73,18 +85,30 @@ class Layer:
 
     async def run_turn(self, session_id: str, prompt: str) -> AsyncIterator[dict]:
         session = self.sessions[session_id]  # raises KeyError if missing
-        options_hash = hash(json.dumps(session.options, sort_keys=True))
+        options_hash = _stable_options_hash(session.options)
+
+        # TODO(pool-permissions): PermissionGate is constructed here but its
+        # can_use_tool callback cannot be passed to query_stream — the real
+        # PoolClient uses SSE (one-way server push) and has no mechanism to
+        # intercept tool execution before it happens. The gate's auto-approve
+        # path still functions correctly for event translation; the user_action
+        # deny path is dormant until the pool protocol gains a control-message
+        # channel. Tracked as a follow-up: pool control-protocol extension.
         gate = PermissionGate(
             translation_table=self.translation_table,
             ws_publisher=self.ws_publisher,
             session=session,
             auto_approve_user_actions=get_auto_approve_user_actions(),
         )
-        handle = await self.pool_client.acquire(session.user_id, options_hash)
+        _ = gate  # gate built for future wiring; currently dormant (see TODO above)
+
+        handle = await self.pool_client.acquire(
+            session.user_id, options_hash, session.options
+        )
         session.active_handles.append(handle)
         try:
-            async for sdk_event in self.pool_client.query(
-                handle, prompt, can_use_tool=gate.can_use_tool
+            async for sdk_event in self.pool_client.query_stream(
+                handle, prompt, session_id=session_id
             ):
                 async for layer_event in _translate_event(
                     session_id, sdk_event, self.translation_table, session
@@ -112,6 +136,12 @@ async def _translate_event(
     session: Session,
 ) -> AsyncIterator[dict]:
     """Translate a raw SDK event to one or more layer events."""
+    # Pool uses {"event": "cancelled"} (SSE event-field convention) when the
+    # subprocess is interrupted — check this key first before the type dispatch.
+    if sdk_event.get("event") == "cancelled":
+        yield {"type": "interrupted", "session_id": session_id}
+        return
+
     event_type = sdk_event.get("type", "")
 
     if event_type == "text_delta":
@@ -137,7 +167,6 @@ async def _translate_event(
         entry = table.lookup(tool_name)
 
         if isinstance(entry, PassthroughEntry):
-            # Emit the status text directly
             yield {
                 "type": "status",
                 "session_id": session_id,

@@ -20,22 +20,33 @@ def patch_config_getters(monkeypatch):
 
 
 class MockPoolClient:
-    """Fake pool: immediately returns a handle and yields hardcoded SDK events."""
+    """Fake pool: immediately returns a handle and yields hardcoded SDK events.
 
-    async def acquire(self, user_id: str, options_hash: int) -> str:
+    Matches the real agent_pool_manager.client.PoolClient API:
+    - acquire(user_id, options_hash: str, options: dict, timeout_seconds=None)
+    - query_stream(handle_id, prompt, session_id="default")
+    - release(handle_id, *, reusable: bool = False)  — keyword-only
+    - interrupt(handle_id)
+    """
+
+    async def acquire(
+        self, user_id: str, options_hash: str, options: dict, timeout_seconds=None
+    ) -> str:
         return f"mock-handle-{user_id}"
 
-    async def query(self, handle: str, prompt: str, can_use_tool=None):
+    async def query_stream(
+        self, handle_id: str, prompt: str, session_id: str = "default"
+    ):
         yield {"type": "text_delta", "delta": "Hello "}
         yield {"type": "tool_use", "tool_name": "get_anchors", "args": {}}
         yield {"type": "tool_use", "tool_name": "send_status_update", "args": {"text": "Still working"}}
         yield {"type": "text_delta", "delta": "world"}
         yield {"type": "result", "final_text": "Hello world", "tokens_used": 42}
 
-    async def release(self, handle: str, reusable: bool = True) -> None:
+    async def release(self, handle_id: str, *, reusable: bool = False) -> None:
         pass
 
-    async def interrupt(self, handle: str) -> None:
+    async def interrupt(self, handle_id: str) -> None:
         pass
 
 
