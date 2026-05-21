@@ -15,12 +15,12 @@ import asyncio
 import pathlib
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport
 
-from interactive_agent_layer.session import Layer, Session
+from interactive_agent_layer.session import Layer
 from interactive_agent_layer.ws_publisher import WSPublisher
 
 
@@ -149,9 +149,7 @@ async def test_control_request_background_tool_auto_allows():
 # ---------------------------------------------------------------------------
 
 async def test_control_request_user_action_auto_approve_allows():
-    """user_action tool with auto_approve=True → allow, no permission_request WS event."""
-
-    published: list[dict] = []
+    """user_action tool with auto_approve=True → allow, no permission_request on SSE stream."""
 
     class _Pool(_BasePool):
         async def query_stream(self, handle_id, prompt, session_id="default"):
@@ -165,9 +163,7 @@ async def test_control_request_user_action_auto_approve_allows():
             yield {"type": "result", "final_text": "done", "tokens_used": 1}
 
     pool = _Pool()
-    ws = WSPublisher()
-    ws.push = AsyncMock(side_effect=lambda ws_id, event: published.append(event))
-    layer = _make_layer(pool, ws)
+    layer = _make_layer(pool)
 
     s = layer.create_session("user1", "ws1", "v1", {})
 
@@ -176,12 +172,12 @@ async def test_control_request_user_action_auto_approve_allows():
         "interactive_agent_layer.session.get_auto_approve_user_actions",
         return_value=True,
     ):
-        await _consume(layer.run_turn(s.session_id, "hi"))
+        events = await _consume_list(layer.run_turn(s.session_id, "hi"))
 
     assert len(pool._send_control_calls) == 1
     assert pool._send_control_calls[0]["decision"] == "allow"
-    perm_events = [e for e in published if e.get("type") == "permission_request"]
-    assert perm_events == [], "auto_approve must not emit permission_request"
+    perm_events = [e for e in events if e.get("type") == "permission_request"]
+    assert perm_events == [], "auto_approve must not emit permission_request on SSE stream"
 
 
 # ---------------------------------------------------------------------------
@@ -189,10 +185,7 @@ async def test_control_request_user_action_auto_approve_allows():
 # ---------------------------------------------------------------------------
 
 async def test_control_request_user_action_user_approves():
-    """user_action tool: permission_request WS event emitted, user approves → allow."""
-
-    published: list[dict] = []
-    session_holder: list[Session] = []
+    """user_action tool: permission_request yielded on SSE stream, user approves → allow."""
 
     class _Pool(_BasePool):
         async def query_stream(self, handle_id, prompt, session_id="default"):
@@ -205,27 +198,22 @@ async def test_control_request_user_action_user_approves():
             }
             yield {"type": "result", "final_text": "done", "tokens_used": 1}
 
-    async def _ws_push(ws_id: str, event: dict) -> None:
-        published.append(event)
+    pool = _Pool()
+    layer = _make_layer(pool)
+
+    s = layer.create_session("user1", "ws1", "v1", {})
+    events: list[dict] = []
+
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
         if event.get("type") == "permission_request":
-            # Simulate user approving immediately
+            # Simulate user approving: resolve the future stored in session
             request_id = event["request_id"]
-            sess = session_holder[0]
-            fut = sess.permission_pending.get(request_id)
+            fut = s.permission_pending.get(request_id)
             if fut is not None and not fut.done():
                 fut.set_result(True)
 
-    pool = _Pool()
-    ws = WSPublisher()
-    ws.push = _ws_push
-    layer = _make_layer(pool, ws)
-
-    s = layer.create_session("user1", "ws1", "v1", {})
-    session_holder.append(s)
-
-    await _consume(layer.run_turn(s.session_id, "hi"))
-
-    perm_events = [e for e in published if e.get("type") == "permission_request"]
+    perm_events = [e for e in events if e.get("type") == "permission_request"]
     assert len(perm_events) == 1
     assert perm_events[0]["summary"] == "Update 1 tasks"
 
@@ -238,9 +226,7 @@ async def test_control_request_user_action_user_approves():
 # ---------------------------------------------------------------------------
 
 async def test_control_request_user_action_user_denies():
-    """user_action tool: user denies → send_control_response("deny")."""
-
-    session_holder: list[Session] = []
+    """user_action tool: permission_request yielded on SSE stream, user denies → deny."""
 
     class _Pool(_BasePool):
         async def query_stream(self, handle_id, prompt, session_id="default"):
@@ -253,23 +239,17 @@ async def test_control_request_user_action_user_denies():
             }
             yield {"type": "result", "final_text": "done", "tokens_used": 1}
 
-    async def _ws_push(ws_id: str, event: dict) -> None:
-        if event.get("type") == "permission_request":
-            request_id = event["request_id"]
-            sess = session_holder[0]
-            fut = sess.permission_pending.get(request_id)
-            if fut is not None and not fut.done():
-                fut.set_result(False)
-
     pool = _Pool()
-    ws = WSPublisher()
-    ws.push = _ws_push
-    layer = _make_layer(pool, ws)
+    layer = _make_layer(pool)
 
     s = layer.create_session("user1", "ws1", "v1", {})
-    session_holder.append(s)
 
-    await _consume(layer.run_turn(s.session_id, "hi"))
+    async for event in layer.run_turn(s.session_id, "hi"):
+        if event.get("type") == "permission_request":
+            request_id = event["request_id"]
+            fut = s.permission_pending.get(request_id)
+            if fut is not None and not fut.done():
+                fut.set_result(False)
 
     assert len(pool._send_control_calls) == 1
     assert pool._send_control_calls[0]["decision"] == "deny"

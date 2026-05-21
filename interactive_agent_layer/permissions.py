@@ -18,6 +18,7 @@ from interactive_agent_layer.translation import (
 )
 
 
+
 @dataclasses.dataclass
 class PermissionResultAllow:
     pass
@@ -34,18 +35,22 @@ class PermissionGate:
 
     The callback signature matches the claude-agent-sdk CanUseTool protocol:
         async (tool_name: str, args: dict, ctx: Any) -> PermissionResultAllow | PermissionResultDeny
+
+    ``outbound_events`` receives permission_request dicts when a user_action tool
+    needs approval.  Callers (run_turn) drain this queue and yield the events on
+    the SSE stream so they cross the process boundary to the API / dispatch layer.
     """
 
     def __init__(
         self,
         translation_table: TranslationTable,
-        ws_publisher: Any,  # WSPublisher — avoid circular import
         session: Any,       # Session — avoid circular import
+        outbound_events: asyncio.Queue,
         auto_approve_user_actions: bool = False,
     ) -> None:
         self._table = translation_table
-        self._ws = ws_publisher
         self._session = session
+        self._outbound_events = outbound_events
         self._auto_approve = auto_approve_user_actions
 
     async def can_use_tool(
@@ -79,15 +84,18 @@ class PermissionGate:
         future: asyncio.Future[bool] = loop.create_future()
         self._session.permission_pending[request_id] = future
 
-        await self._ws.push(
-            self._session.user_ws_id,
+        # Emit on the outbound queue — run_turn drains this and yields the
+        # event on the SSE stream so it crosses the process boundary to
+        # dispatch / the API layer.  WSPublisher is intentionally not used
+        # here: it only works within the same OS process.
+        await self._outbound_events.put(
             {
                 "type": "permission_request",
                 "session_id": self._session.session_id,
                 "request_id": request_id,
                 "summary": summary,
                 "details": detail,
-            },
+            }
         )
 
         try:

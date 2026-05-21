@@ -1,6 +1,8 @@
 """Session dataclass and Layer class."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -109,10 +111,15 @@ class Layer:
         # auto-approve based on config.  Decisions are forwarded back to the
         # pool via send_control_response, which unblocks the pool's can_use_tool
         # callback and lets the SDK proceed or skip the tool call.
+        #
+        # permission_request events are enqueued here and yielded on the SSE
+        # stream so they cross the process boundary to the dispatch / API layer.
+        # WSPublisher (in-process only) is not used for permission_request.
+        gate_events: asyncio.Queue[dict] = asyncio.Queue()
         gate = PermissionGate(
             translation_table=self.translation_table,
-            ws_publisher=self.ws_publisher,
             session=session,
+            outbound_events=gate_events,
             auto_approve_user_actions=get_auto_approve_user_actions(),
         )
 
@@ -127,9 +134,18 @@ class Layer:
                 # Pool blocks its can_use_tool callback until we respond —
                 # process control events inline before translating other events.
                 if sdk_event.get("event") == "control_request":
-                    await _handle_control_request(
-                        sdk_event, handle, gate, self.pool_client
+                    ctrl_task = asyncio.create_task(
+                        _handle_control_request(sdk_event, handle, gate, self.pool_client)
                     )
+                    # Drain gate_events while the permission decision is pending.
+                    # For background/passthrough tools ctrl_task completes immediately
+                    # and the drain loop exits without yielding anything.
+                    # For user_action tools a permission_request event is put into
+                    # gate_events; we yield it on the SSE stream so dispatch's
+                    # event_fn can forward it to the user's WebSocket.
+                    async for gate_event in _drain_until_done(gate_events, ctrl_task):
+                        yield gate_event
+                    await ctrl_task  # propagate any exception
                     continue
 
                 if sdk_event.get("event") == "control_timeout":
@@ -191,6 +207,37 @@ async def _handle_control_request(
             exc,
             request_id,
         )
+
+
+async def _drain_until_done(
+    queue: asyncio.Queue,
+    task: asyncio.Task,
+) -> AsyncIterator[dict]:
+    """Yield items from queue until task is done.
+
+    Uses asyncio.wait to race a queue.get() against the task completing so
+    we exit promptly without polling.  The get_task is cancelled on exit to
+    avoid leaving orphaned tasks.
+    """
+    while not task.done():
+        get_task: asyncio.Task = asyncio.ensure_future(queue.get())
+        try:
+            done, _ = await asyncio.wait(
+                [get_task, task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            get_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await get_task
+            raise
+        if get_task in done:
+            yield get_task.result()
+        else:
+            # task completed before a queue item arrived — clean up and exit
+            get_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await get_task
 
 
 async def _translate_event(
