@@ -73,20 +73,16 @@ class TranslationTable:
         else:
             phrase = entry.phrase
         try:
-            return phrase.format_map(_ForgivingMap(args))
+            return phrase.format_map(ForgivingMap(args))
         except Exception:
             return phrase
 
 
-class _ForgivingMap(dict):
+class ForgivingMap(dict):
     """dict subclass that returns '{key}' for missing keys instead of raising KeyError."""
 
     def __missing__(self, key: str) -> str:
         return f"{{{key}}}"
-
-
-# Public alias for external use (e.g. permissions.py).
-ForgivingMap = _ForgivingMap
 
 
 def _parse_entry(data: dict) -> TranslationEntry:
