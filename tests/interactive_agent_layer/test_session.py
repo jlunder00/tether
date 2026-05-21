@@ -1,8 +1,11 @@
 """Tests for Session dataclass and Layer class."""
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 from interactive_agent_layer.session import Session, Layer
+from interactive_agent_layer.translation import TranslationTable
 from interactive_agent_layer.ws_publisher import WSPublisher
 
 
@@ -10,8 +13,10 @@ class _MockPoolClient:
     async def acquire(self, user_id: str, options_hash: int) -> str:
         return f"mock-handle-{user_id}"
 
-    async def query(self, handle: str, prompt: str):
+    async def query(self, handle: str, prompt: str, can_use_tool=None):
         yield {"type": "text_delta", "delta": "Hello "}
+        yield {"type": "tool_use", "tool_name": "get_anchors", "args": {}}
+        yield {"type": "tool_use", "tool_name": "send_status_update", "args": {"text": "Still working"}}
         yield {"type": "text_delta", "delta": "world"}
         yield {"type": "result", "final_text": "Hello world", "tokens_used": 42}
 
@@ -26,7 +31,12 @@ class _MockPoolClient:
 def layer():
     publisher = WSPublisher()
     pool = _MockPoolClient()
-    return Layer(pool_client=pool, ws_publisher=publisher)
+    yaml_path = pathlib.Path(__file__).parent.parent.parent / "config" / "agent_translations.yaml"
+    return Layer(
+        pool_client=pool,
+        ws_publisher=publisher,
+        translation_table=TranslationTable.from_yaml(yaml_path),
+    )
 
 
 def test_session_dataclass_fields():
@@ -115,3 +125,48 @@ async def test_layer_run_turn_increments_turn_count(layer):
     async for _ in layer.run_turn(s.session_id, "second"):
         pass
     assert s.turn_count == 2
+
+
+async def test_tool_use_emits_agent_action(layer):
+    """tool_use event for background tool → agent_action with correct phrase."""
+    s = layer.create_session("user1", "wsid1", "v1", {})
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    agent_actions = [e for e in events if e["type"] == "agent_action"]
+    assert len(agent_actions) >= 1
+    # get_anchors maps to "Reading your schedule"
+    actions_text = [e["action"] for e in agent_actions]
+    assert "Reading your schedule" in actions_text
+
+
+async def test_passthrough_emits_status(layer):
+    """send_status_update tool_use → status event with raw text."""
+    s = layer.create_session("user1", "wsid1", "v1", {})
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    status_events = [e for e in events if e["type"] == "status"]
+    messages = [e["message"] for e in status_events]
+    assert "Still working" in messages
+
+
+async def test_coalescing_same_tool_deduplicates(layer):
+    """Two calls to same background tool within window → same action_id, second coalesced."""
+    s = layer.create_session("user1", "wsid1", "v1", {})
+    events = []
+    async for event in layer.run_turn(s.session_id, "first turn"):
+        events.append(event)
+    async for event in layer.run_turn(s.session_id, "second turn"):
+        events.append(event)
+
+    # get_anchors appears in both turns — second should be coalesced
+    get_anchors_events = [
+        e for e in events
+        if e["type"] == "agent_action" and e.get("action") == "Reading your schedule"
+    ]
+    assert len(get_anchors_events) == 2
+    assert get_anchors_events[0]["action_id"] == get_anchors_events[1]["action_id"]
+    assert get_anchors_events[1]["coalesced"] is True

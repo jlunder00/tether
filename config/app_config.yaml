@@ -62,6 +62,7 @@ agent_layer:
   base_url: "http://127.0.0.1:5003"
   enabled: true
   permission_timeout_seconds: 60
+  auto_approve_user_actions: false
   trial_monthly_quota: 10
   leaky_providers:
     - openrouter

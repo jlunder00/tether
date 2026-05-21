@@ -22,6 +22,10 @@ class TurnRequest(BaseModel):
     prompt: str
 
 
+class PermissionRespondRequest(BaseModel):
+    approve: bool
+
+
 def create_app(layer: Layer) -> FastAPI:
     app = FastAPI(title="Interactive Agent Layer")
     app.state.layer = layer
@@ -81,5 +85,14 @@ def create_app(layer: Layer) -> FastAPI:
             "turn_count": session.turn_count,
             "created_at": session.created_at,
         }
+
+    @app.post("/permission/{request_id}/respond")
+    async def permission_respond(request_id: str, body: PermissionRespondRequest) -> dict:
+        for session in layer.sessions.values():
+            future = session.permission_pending.get(request_id)
+            if future is not None and not future.done():
+                future.set_result(body.approve)
+                return {"status": "ok"}
+        raise HTTPException(status_code=404, detail="Permission request not found")
 
     return app
