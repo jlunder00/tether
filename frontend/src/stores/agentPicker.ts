@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '../lib/api'
+import { useAuthStore } from './auth'
 
 const AGENT_VERSIONS = ['tether-agent-1.0', 'tether-agent-2.0', 'tether-agent-2.5'] as const
 export type AgentVersion = (typeof AGENT_VERSIONS)[number]
@@ -15,6 +16,8 @@ function isValidAgent(v: unknown): v is AgentVersion {
 export const useAgentPickerStore = defineStore('agentPicker', () => {
   const selectedAgent = ref<AgentVersion>(DEFAULT_AGENT)
   const showByokModal = ref(false)
+  // Holds the pending 2.5 selection while the BYOK modal awaits confirmation.
+  const pendingAgent = ref<AgentVersion | null>(null)
 
   async function fetchPreference(): Promise<void> {
     try {
@@ -30,14 +33,10 @@ export const useAgentPickerStore = defineStore('agentPicker', () => {
     }
   }
 
-  async function setAgent(version: AgentVersion): Promise<void> {
+  /** Persist a version to the backend and update selectedAgent; rollback on failure. */
+  async function _commitAgent(version: AgentVersion): Promise<void> {
     const previous = selectedAgent.value
     selectedAgent.value = version
-
-    if (version === 'tether-agent-2.5') {
-      showByokModal.value = true
-    }
-
     try {
       const resp = await api(`/api/settings/${SETTING_KEY}`, {
         method: 'PUT',
@@ -52,9 +51,53 @@ export const useAgentPickerStore = defineStore('agentPicker', () => {
     }
   }
 
-  function dismissByokModal(): void {
+  /**
+   * Select an agent version.
+   *
+   * For tether-agent-2.5 on free users: opens the BYOK confirmation modal
+   * WITHOUT committing. The selection is only persisted after confirmByokModal().
+   *
+   * For premium users (is_paid) or any other version: commits immediately.
+   */
+  async function setAgent(version: AgentVersion): Promise<void> {
+    const isPremium = useAuthStore().user?.is_paid ?? false
+
+    if (version === 'tether-agent-2.5' && !isPremium) {
+      pendingAgent.value = version
+      showByokModal.value = true
+      return // wait for confirmByokModal() or cancelByokModal()
+    }
+
+    await _commitAgent(version)
+  }
+
+  /** User clicked "Continue" in the BYOK modal — commit the pending selection. */
+  async function confirmByokModal(): Promise<void> {
+    const version = pendingAgent.value
+    pendingAgent.value = null
+    showByokModal.value = false
+    if (version) await _commitAgent(version)
+  }
+
+  /** User clicked "Stay on 2.0" — discard the pending selection, close modal. */
+  function cancelByokModal(): void {
+    pendingAgent.value = null
     showByokModal.value = false
   }
 
-  return { selectedAgent, showByokModal, fetchPreference, setAgent, dismissByokModal }
+  // Keep dismissByokModal as an alias for cancelByokModal for backwards compatibility.
+  function dismissByokModal(): void {
+    cancelByokModal()
+  }
+
+  return {
+    selectedAgent,
+    showByokModal,
+    pendingAgent,
+    fetchPreference,
+    setAgent,
+    confirmByokModal,
+    cancelByokModal,
+    dismissByokModal,
+  }
 })

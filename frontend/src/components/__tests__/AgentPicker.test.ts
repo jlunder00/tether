@@ -143,4 +143,59 @@ describe('AgentPicker', () => {
 
     expect(store.showByokModal).toBe(false)
   })
+
+  // ── Bug 1 regression: trial badge hidden for premium users ──
+
+  it('[Bug 1] trial badge shown for free users (is_paid=false)', async () => {
+    const { useAuthStore } = await import('../../stores/auth')
+    const authStore = useAuthStore()
+    authStore.user = { user_id: 'u1', username: 'test', is_admin: false, is_paid: false }
+
+    const { default: AgentPicker } = await import('../AgentPicker.vue')
+    const wrapper = mount(AgentPicker, { props: { trialMessagesLeft: 7 } })
+    await wrapper.find('button').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('7')
+    expect(wrapper.text()).toContain('trial')
+  })
+
+  it('[Bug 1] trial badge hidden for premium users (is_paid=true)', async () => {
+    const { useAuthStore } = await import('../../stores/auth')
+    const authStore = useAuthStore()
+    authStore.user = { user_id: 'u1', username: 'test', is_admin: false, is_paid: true }
+
+    const { default: AgentPicker } = await import('../AgentPicker.vue')
+    const wrapper = mount(AgentPicker, { props: { trialMessagesLeft: 7 } })
+    await wrapper.find('button').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('trial')
+  })
+
+  // ── Bug 2 regression: "Continue" wired to confirmByokModal ──
+  // DOM click through Teleport content is unreliable in jsdom; test that
+  // store.confirmByokModal() produces correct observable state instead.
+
+  it('[Bug 2] confirmByokModal() commits pending 2.5 and closes modal', async () => {
+    const { api } = await import('../../lib/api')
+    vi.mocked(api).mockResolvedValueOnce({
+      ok: true, status: 200, json: async () => ({ ok: true }),
+    } as any)
+
+    const { useAuthStore } = await import('../../stores/auth')
+    const authStore = useAuthStore()
+    authStore.user = { user_id: 'u1', username: 'test', is_admin: false, is_paid: false }
+
+    const { useAgentPickerStore } = await import('../../stores/agentPicker')
+    const store = useAgentPickerStore()
+    // Simulate state after setAgent('tether-agent-2.5') opened the modal
+    store.pendingAgent = 'tether-agent-2.5'
+    store.showByokModal = true
+
+    await store.confirmByokModal()
+
+    expect(store.showByokModal).toBe(false)
+    expect(store.selectedAgent).toBe('tether-agent-2.5')
+  })
 })

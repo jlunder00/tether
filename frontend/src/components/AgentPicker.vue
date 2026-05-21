@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useAgentPickerStore } from '../stores/agentPicker'
+import { useAuthStore } from '../stores/auth'
 import type { AgentVersion } from '../stores/agentPicker'
 
 withDefaults(defineProps<{
@@ -10,8 +11,12 @@ withDefaults(defineProps<{
 })
 
 const store = useAgentPickerStore()
+const authStore = useAuthStore()
 const open = ref(false)
 const rootEl = ref<HTMLDivElement | null>(null)
+
+// Premium users bypass trial counter and BYOK modal entirely.
+const isPremium = computed(() => authStore.user?.is_paid ?? false)
 
 const AGENTS: Array<{ id: AgentVersion; label: string; sublabel: string }> = [
   { id: 'tether-agent-1.0', label: 'tether-agent-1.0', sublabel: 'Classic · free' },
@@ -28,9 +33,9 @@ async function select(version: AgentVersion) {
   await store.setAgent(version)
 }
 
-async function stayOn20() {
-  store.dismissByokModal()
-  await store.setAgent('tether-agent-2.0')
+// "Stay on 2.0" — cancel the pending 2.5 selection, keep current agent.
+function stayOn20() {
+  store.cancelByokModal()
 }
 
 // Close dropdown when clicking outside the component's root.
@@ -86,9 +91,9 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
           <span>
             <span class="font-medium">{{ agent.label }}</span>
             <span class="ml-1 text-[--fg-4]">· {{ agent.sublabel }}</span>
-            <!-- Trial badge for 2.5 -->
+            <!-- Trial badge for 2.5 — hidden for premium users -->
             <span
-              v-if="agent.id === 'tether-agent-2.5'"
+              v-if="agent.id === 'tether-agent-2.5' && !isPremium"
               class="ml-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-[--accent-veil] text-[--accent]"
             >
               trial: {{ trialMessagesLeft }} left
@@ -130,7 +135,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
             <button
               type="button"
               class="text-xs px-3 py-1.5 rounded-lg bg-[--accent] text-white hover:opacity-90 transition-opacity"
-              @click="store.dismissByokModal()"
+              @click="store.confirmByokModal()"
             >
               Continue
             </button>
