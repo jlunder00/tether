@@ -13,6 +13,22 @@ const authStore = useAuthStore()
 const router = useRouter()
 const { activeMode, setMode } = useTheme()
 
+type NavLink = { to: string; label: string; match: string; exact?: boolean }
+
+const navLinks: NavLink[] = [
+  { to: '/dashboard', label: 'Dashboard', match: '/dashboard' },
+  { to: '/calendar', label: 'Calendar', match: '/calendar' },
+  { to: '/plan/day', label: 'Plan', match: '/plan' },
+  { to: '/context', label: 'Context', match: '/context', exact: true },
+  { to: '/anchors', label: 'Anchors', match: '/anchors', exact: true },
+  { to: '/kanban', label: 'Kanban', match: '/kanban' },
+  { to: '/chat', label: 'Chat', match: '/chat' },
+]
+
+function isActive(link: NavLink, path: string): boolean {
+  return link.exact ? path === link.match : path.startsWith(link.match)
+}
+
 function toggleMode() {
   setMode(activeMode.value === 'dark' ? 'light' : 'dark')
 }
@@ -59,43 +75,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
       <div class="flex items-center gap-6">
         <span class="text-lg font-bold tracking-tight">Tether</span>
         <div class="flex items-center gap-1">
-          <router-link to="/dashboard"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/dashboard') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Dashboard
-          </router-link>
-          <router-link to="/calendar"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/calendar') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Calendar
-          </router-link>
-          <router-link to="/plan/day"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path.startsWith('/plan') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Plan
-          </router-link>
-          <router-link to="/context"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path === '/context' ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Context
-          </router-link>
-          <router-link to="/anchors"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path === '/anchors' ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Anchors
-          </router-link>
-          <router-link to="/kanban"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/kanban') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Kanban
-          </router-link>
-          <router-link to="/chat"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/chat') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Chat
+          <router-link
+            v-for="link in navLinks"
+            :key="link.to"
+            :to="link.to"
+            class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
+            :class="isActive(link, $route.path) ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'"
+          >
+            {{ link.label }}
           </router-link>
         </div>
       </div>
