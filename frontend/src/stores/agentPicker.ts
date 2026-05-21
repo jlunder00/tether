@@ -85,11 +85,6 @@ export const useAgentPickerStore = defineStore('agentPicker', () => {
     showByokModal.value = false
   }
 
-  // Keep dismissByokModal as an alias for cancelByokModal for backwards compatibility.
-  function dismissByokModal(): void {
-    cancelByokModal()
-  }
-
   return {
     selectedAgent,
     showByokModal,
@@ -98,6 +93,5 @@ export const useAgentPickerStore = defineStore('agentPicker', () => {
     setAgent,
     confirmByokModal,
     cancelByokModal,
-    dismissByokModal,
   }
 })

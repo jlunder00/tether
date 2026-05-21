@@ -132,14 +132,14 @@ describe('AgentPicker', () => {
     expect(document.body.textContent).toContain('Stay on 2.0')
   })
 
-  it('store.dismissByokModal() sets showByokModal to false', async () => {
+  it('store.cancelByokModal() sets showByokModal to false', async () => {
     // Teleported modal content is hard to interact with in jsdom;
     // test the store action directly — the component just calls it.
     const { useAgentPickerStore } = await import('../../stores/agentPicker')
     const store = useAgentPickerStore()
     store.showByokModal = true
 
-    store.dismissByokModal()
+    store.cancelByokModal()
 
     expect(store.showByokModal).toBe(false)
   })
