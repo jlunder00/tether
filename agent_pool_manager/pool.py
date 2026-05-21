@@ -10,15 +10,32 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from claude_agent_sdk import ClaudeSDKClient
-from claude_agent_sdk.types import ClaudeAgentOptions, ResultMessage
+from claude_agent_sdk.types import (
+    ClaudeAgentOptions,
+    PermissionResultAllow,
+    PermissionResultDeny,
+    ResultMessage,
+)
 
 from .config import AgentPoolConfig
+from .control import ControlBridge, ControlTimeout
 
 log = logging.getLogger(__name__)
 
 
 class PoolExhausted(Exception):
     """Raised when no warm subprocess becomes available within the timeout."""
+
+
+@dataclass
+class _CallbackContext:
+    """Mutable handle-id slot shared between Subprocess and its can_use_tool callback.
+
+    The callback is set at ClaudeSDKClient construction (before a handle_id
+    exists); the pool fills in ``handle_id`` at acquire() time so the bridge
+    request carries the correct identifier.
+    """
+    handle_id: str = ""
 
 
 def _extract_pid(client: ClaudeSDKClient) -> int | None:
@@ -42,6 +59,7 @@ class Subprocess:
     primed_at: float = field(default_factory=time.monotonic)
     last_used_at: float = field(default_factory=time.monotonic)
     in_use: bool = False
+    callback_ctx: _CallbackContext = field(default_factory=_CallbackContext)
 
     def is_expired(self, max_age_seconds: int) -> bool:
         return (time.monotonic() - self.spawned_at) > max_age_seconds
@@ -65,6 +83,10 @@ class Pool:
         # cached options payload per options_hash (for refill)
         self._options_cache: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        # shared bridge for all control-protocol forwarding
+        self.control_bridge = ControlBridge(
+            timeout_seconds=config.control_response_timeout_seconds
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -120,6 +142,7 @@ class Pool:
             handle_id = str(uuid.uuid4())
             sub.in_use = True
             sub.last_used_at = time.monotonic()
+            sub.callback_ctx.handle_id = handle_id
             async with self._lock:
                 self._active[handle_id] = sub
 
@@ -239,7 +262,11 @@ class Pool:
         self, options_hash: str, options: dict[str, Any]
     ) -> Subprocess:
         """Spawn a ClaudeSDKClient, connect, and send the priming prompt."""
-        sdk_options = self._build_sdk_options(options)
+        ctx = _CallbackContext()
+        sdk_options = self._build_sdk_options(
+            options,
+            can_use_tool=self._make_forwarding_callback(ctx),
+        )
         client = ClaudeSDKClient(options=sdk_options)
         await client.connect()
 
@@ -259,6 +286,7 @@ class Pool:
             options=options,
             spawned_at=now,
             primed_at=now,
+            callback_ctx=ctx,
         )
 
     @staticmethod
@@ -269,11 +297,47 @@ class Pool:
             if isinstance(msg, ResultMessage):
                 break
 
+    def _make_forwarding_callback(self, ctx: _CallbackContext):
+        """Return a can_use_tool callback that forwards decisions over the bridge.
+
+        The callback is bound to ``ctx`` — a mutable context whose ``handle_id``
+        is filled in at acquire() time.  On timeout the callback returns a deny
+        result (fail-closed).
+        """
+        bridge = self.control_bridge
+
+        async def _callback(tool_name: str, tool_input: dict[str, Any], _context: Any):
+            try:
+                response = await bridge.request(
+                    ctx.handle_id,
+                    "can_use_tool",
+                    {"tool_name": tool_name, "tool_input": tool_input},
+                )
+            except ControlTimeout:
+                log.warning(
+                    "can_use_tool timed out for handle=%s tool=%s — denying",
+                    ctx.handle_id, tool_name,
+                )
+                return PermissionResultDeny(message="control_response timeout")
+
+            if response.get("decision") == "allow":
+                return PermissionResultAllow()
+            return PermissionResultDeny(
+                message=response.get("denial_message", "denied by caller")
+            )
+
+        return _callback
+
     @staticmethod
-    def _build_sdk_options(options: dict[str, Any]) -> ClaudeAgentOptions:
+    def _build_sdk_options(
+        options: dict[str, Any],
+        can_use_tool: Any = None,
+    ) -> ClaudeAgentOptions:
         """Convert the options dict to ClaudeAgentOptions, ignoring unknown keys."""
         known = {f for f in dir(ClaudeAgentOptions) if not f.startswith("_")}
         filtered = {k: v for k, v in options.items() if k in known}
+        if can_use_tool is not None:
+            filtered["can_use_tool"] = can_use_tool
         return ClaudeAgentOptions(**filtered)
 
     def _get_or_create_queue(self, options_hash: str) -> asyncio.Queue[Subprocess]:

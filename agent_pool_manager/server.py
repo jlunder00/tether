@@ -1,4 +1,4 @@
-"""Agent pool manager HTTP service — FastAPI app with 5 pool endpoints."""
+"""Agent pool manager HTTP service — FastAPI app with pool endpoints."""
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +43,13 @@ class HintRequest(BaseModel):
     user_id: str
     options_hash: str
     options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ControlResponseRequest(BaseModel):
+    request_id: str
+    subtype: str
+    decision: str  # "allow" | "deny"
+    denial_message: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +108,14 @@ def build_app(
 
     # -----------------------------------------------------------------------
     # POST /handle/{handle_id}/query  — SSE stream
+    #
+    # Runs two concurrent tasks inside the stream generator:
+    #   - SDK receive_response() — may block when can_use_tool fires
+    #   - bridge event queue drain — emits control_request events while
+    #     the SDK callback awaits a control_response
+    #
+    # Callers that ignore control_request events still work: the callback
+    # times out to deny and the stream resumes normally.
     # -----------------------------------------------------------------------
     @app.post("/handle/{handle_id}/query")
     async def query(handle_id: str, req: QueryRequest, request: Request) -> StreamingResponse:
@@ -110,18 +125,51 @@ def build_app(
         if sub is None:
             raise HTTPException(status_code=404, detail="handle not found")
 
+        bridge = the_pool.control_bridge
+
         async def event_stream() -> AsyncIterator[str]:
+            # Register a per-handle SSE queue so bridge.request() can enqueue
+            # control_request events while the SDK callback awaits.
+            ctrl_queue = bridge.register_handle(handle_id)
+            # Unified output queue: both SDK msgs and ctrl events drain here.
+            out: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+            async def _run_sdk() -> None:
+                try:
+                    await sub.proc.query(req.prompt, session_id=req.session_id)
+                    async for msg in sub.proc.receive_response():
+                        await out.put(("msg", msg))
+                finally:
+                    await out.put(("done", None))
+
+            async def _run_ctrl() -> None:
+                """Forward control events from bridge queue → output queue."""
+                while True:
+                    evt = await ctrl_queue.get()
+                    await out.put(("ctrl", evt))
+
+            sdk_task = asyncio.create_task(_run_sdk())
+            ctrl_task = asyncio.create_task(_run_ctrl())
+
             try:
-                await sub.proc.query(req.prompt, session_id=req.session_id)
-                async for msg in sub.proc.receive_response():
-                    payload = json.dumps(_serialise_msg(msg))
-                    yield f"data: {payload}\n\n"
+                while True:
+                    kind, data = await out.get()
+                    if kind == "done":
+                        break
+                    if kind == "ctrl":
+                        yield f"data: {json.dumps(data)}\n\n"
+                    else:
+                        yield f"data: {json.dumps(_serialise_msg(data))}\n\n"
                 yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 yield 'data: {"event": "cancelled"}\n\n'
             except Exception:
                 log.exception("Error streaming query for handle %s", handle_id)
                 yield 'data: {"error": "internal_error"}\n\n'
+            finally:
+                ctrl_task.cancel()
+                sdk_task.cancel()
+                bridge.deregister_handle(handle_id)
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -164,6 +212,29 @@ def build_app(
         the_refill: RefillLoop = request.app.state.refill
         asyncio.create_task(the_refill.hint(req.options_hash, req.options))
         return {"queued": True}
+
+    # -----------------------------------------------------------------------
+    # POST /handle/{handle_id}/control_response
+    #
+    # Resolves a pending can_use_tool permission request.
+    # 204 on success; 404 if request_id unknown or already resolved.
+    # -----------------------------------------------------------------------
+    @app.post("/handle/{handle_id}/control_response", status_code=204)
+    async def control_response(
+        handle_id: str,
+        req: ControlResponseRequest,
+        request: Request,
+    ) -> None:
+        the_pool: Pool = request.app.state.pool
+        payload: dict[str, Any] = {"decision": req.decision}
+        if req.denial_message is not None:
+            payload["denial_message"] = req.denial_message
+        resolved = the_pool.control_bridge.respond(req.request_id, payload)
+        if not resolved:
+            raise HTTPException(
+                status_code=404,
+                detail=f"request_id {req.request_id!r} not found or already resolved",
+            )
 
     return app
 
