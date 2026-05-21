@@ -2,27 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatStore } from '../chat'
 import { setBotTransport } from '../../composables/useBotTransport'
-import type { BotTransport } from '../../composables/useBotTransport'
+import { makeTransport } from './testHelpers'
+import type { WsIncomingEvent } from '../../types/chat'
 
-function makeMockTransport(chunks: string[]): BotTransport {
-  return {
-    async *send(_text: string) {
-      for (const chunk of chunks) {
-        yield chunk
-      }
-    },
-    onHeartbeat(cb) {
-      cb(true)
-      return () => {}
-    },
-    close: vi.fn(),
-  }
+function makeTextEvents(text: string): WsIncomingEvent[] {
+  return [
+    { type: 'agent_text_delta', session_id: 'test', delta: text },
+    { type: 'turn_complete', session_id: 'test', final_text: text },
+  ]
 }
 
 describe('useChatStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    setBotTransport(makeMockTransport(['Hello', ', world']))
+    setBotTransport(makeTransport(makeTextEvents('Hello, world')))
   })
 
   it('starts with empty messages', () => {
@@ -42,7 +35,13 @@ describe('useChatStore', () => {
     await p
   })
 
-  it('send appends bot message that accumulates chunks', async () => {
+  it('send accumulates bot message via agent_text_delta events', async () => {
+    setBotTransport(makeTransport([
+      { type: 'agent_text_delta', session_id: 'test', delta: 'Hello' },
+      { type: 'agent_text_delta', session_id: 'test', delta: ', world' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'Hello, world' },
+    ]))
+    setActivePinia(createPinia())
     const store = useChatStore()
     await store.send('hi')
     expect(store.messages).toHaveLength(2)
@@ -51,27 +50,198 @@ describe('useChatStore', () => {
     expect(bot.content).toBe('Hello, world')
   })
 
-  it('isStreaming is true during send and false after', async () => {
-    // Replace transport with one that yields a single chunk after a tick
-    let resolve!: () => void
-    const slowTransport: BotTransport = {
-      async *send(_text: string) {
-        await new Promise<void>(r => { resolve = r })
-        yield 'chunk'
-      },
-      onHeartbeat(cb) { cb(true); return () => {} },
-      close: vi.fn(),
+  it('send sets isSessionActive true during send, false after', async () => {
+    let resolveEvent!: () => void
+    const slowTransport = makeTransport([
+      { type: 'agent_text_delta', session_id: 'test', delta: 'chunk' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'chunk' },
+    ])
+    // Wrap send to be async
+    const origSend = slowTransport.send.bind(slowTransport)
+    slowTransport.send = async function* (text: string, av: string) {
+      await new Promise<void>(r => { resolveEvent = r })
+      yield* origSend(text, av)
     }
     setBotTransport(slowTransport)
     setActivePinia(createPinia())
-    const store2 = useChatStore()
+    const store = useChatStore()
 
-    const p = store2.send('test')
-    // isStreaming should flip true immediately
-    expect(store2.isStreaming).toBe(true)
+    const p = store.send('test')
+    expect(store.isSessionActive).toBe(true)
+    resolveEvent()
+    await p
+    expect(store.isSessionActive).toBe(false)
+  })
+
+  it('isStreaming is true during send and false after', async () => {
+    let resolve!: () => void
+    const slowTransport = makeTransport([
+      { type: 'agent_text_delta', session_id: 'test', delta: 'chunk' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'chunk' },
+    ])
+    const origSend = slowTransport.send.bind(slowTransport)
+    slowTransport.send = async function* (text: string, av: string) {
+      await new Promise<void>(r => { resolve = r })
+      yield* origSend(text, av)
+    }
+    setBotTransport(slowTransport)
+    setActivePinia(createPinia())
+    const store = useChatStore()
+
+    const p = store.send('test')
+    expect(store.isStreaming).toBe(true)
     resolve()
     await p
-    expect(store2.isStreaming).toBe(false)
+    expect(store.isStreaming).toBe(false)
+  })
+
+  it('send accumulates agent_action pills on bot message', async () => {
+    setBotTransport(makeTransport([
+      { type: 'agent_action', session_id: 'test', action: 'Thinking', tool: 'reason' },
+      { type: 'agent_action', session_id: 'test', action: 'Running', tool: 'bash' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'done' },
+    ]))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    const bot = store.messages[1]
+    expect(bot.actions).toHaveLength(2)
+    expect(bot.actions![0]).toMatchObject({ action: 'Thinking', tool: 'reason' })
+    expect(bot.actions![1]).toMatchObject({ action: 'Running', tool: 'bash' })
+  })
+
+  it('send sets statusMessage from status event, clears on turn_complete', async () => {
+    setBotTransport(makeTransport([
+      { type: 'status', session_id: 'test', message: 'Thinking...' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'done' },
+    ]))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    // After turn_complete, statusMessage should be cleared
+    expect(store.statusMessage).toBe('')
+  })
+
+  it('send sets content = final_text from turn_complete', async () => {
+    setBotTransport(makeTransport([
+      { type: 'agent_text_delta', session_id: 'test', delta: 'partial' },
+      { type: 'turn_complete', session_id: 'test', final_text: 'final answer' },
+    ]))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.messages[1].content).toBe('final answer')
+  })
+
+  it('session_ended terminates loop and sets isSessionActive false', async () => {
+    setBotTransport(makeTransport([
+      { type: 'agent_text_delta', session_id: 'test', delta: 'partial' },
+      { type: 'session_ended', session_id: 'test' },
+    ]))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.isSessionActive).toBe(false)
+  })
+
+  it('permission_request sets pendingPermissionRequest', async () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req1',
+        summary: 'Allow file read',
+        details: [{ label: 'path', value: '/etc/passwd' }],
+      },
+      { type: 'turn_complete', session_id: 'sess1', final_text: '' },
+    ], { sendRaw }))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.pendingPermissionRequest).toMatchObject({
+      request_id: 'req1',
+      summary: 'Allow file read',
+    })
+  })
+
+  it('second permission_request queues behind first', async () => {
+    setBotTransport(makeTransport([
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req1',
+        summary: 'First request',
+        details: [],
+      },
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req2',
+        summary: 'Second request',
+        details: [],
+      },
+      { type: 'turn_complete', session_id: 'sess1', final_text: '' },
+    ]))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.pendingPermissionRequest?.request_id).toBe('req1')
+    expect(store.permissionQueue).toHaveLength(1)
+    expect(store.permissionQueue[0].request_id).toBe('req2')
+  })
+
+  it('respondToPermission calls sendRaw with permission_response', () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([], { sendRaw }))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    // Manually set up a pending permission request
+    store.pendingPermissionRequest = {
+      request_id: 'req1',
+      summary: 'Test',
+      details: [],
+    }
+    store.respondToPermission('req1', true)
+    expect(sendRaw).toHaveBeenCalledWith({
+      type: 'permission_response',
+      request_id: 'req1',
+      approve: true,
+    })
+  })
+
+  it('respondToPermission dequeues next from permissionQueue', () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([], { sendRaw }))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    store.pendingPermissionRequest = { request_id: 'req1', summary: 'First', details: [] }
+    store.permissionQueue = [{ request_id: 'req2', summary: 'Second', details: [] }]
+    store.respondToPermission('req1', false)
+    expect(store.pendingPermissionRequest?.request_id).toBe('req2')
+    expect(store.permissionQueue).toHaveLength(0)
+  })
+
+  it('sendInterrupt calls sendRaw with interrupt and activeSessionId', () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([], { sendRaw }))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    store.activeSessionId = 'sess-abc'
+    store.sendInterrupt()
+    expect(sendRaw).toHaveBeenCalledWith({
+      type: 'interrupt',
+      session_id: 'sess-abc',
+    })
+  })
+
+  it('sendInterrupt is no-op when activeSessionId is null', () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([], { sendRaw }))
+    setActivePinia(createPinia())
+    const store = useChatStore()
+    store.sendInterrupt()
+    expect(sendRaw).not.toHaveBeenCalled()
   })
 
   it('bot message has no streaming field', async () => {
