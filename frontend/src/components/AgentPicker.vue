@@ -78,7 +78,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
     <!-- Dropdown -->
     <div
       v-if="open"
-      class="absolute top-full left-0 mt-1 z-50 min-w-[220px] rounded-lg border border-[--border-1] bg-[--bg-elev-2] shadow-lg py-1"
+      class="absolute bottom-full left-0 mb-1 z-50 min-w-[220px] rounded-lg border border-[--border-1] bg-[--bg-elev-2] shadow-lg py-1"
     >
       <button
         v-for="agent in AGENTS"
