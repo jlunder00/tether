@@ -174,3 +174,30 @@ async def test_turn_increments_turn_count(layer_client, layer):
             pass
 
     assert layer.sessions[sid].turn_count == 1
+
+
+async def test_permission_respond_resolves_future(layer_client, layer):
+    """POST /permission/{id}/respond sets the Future in session.permission_pending."""
+    import asyncio
+    start_resp = await layer_client.post(
+        "/session/start",
+        json={"user_id": "u1", "user_ws_id": "ws1", "agent_version": "v1", "options": {}, "user_message": "x"},
+    )
+    sid = start_resp.json()["session_id"]
+    session = layer.sessions[sid]
+
+    # Manually plant a future
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+    session.permission_pending["req-1"] = fut
+
+    resp = await layer_client.post("/permission/req-1/respond", json={"approve": True})
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    assert fut.done()
+    assert fut.result() is True
+
+
+async def test_permission_respond_not_found(layer_client):
+    resp = await layer_client.post("/permission/no-such-id/respond", json={"approve": False})
+    assert resp.status_code == 404
