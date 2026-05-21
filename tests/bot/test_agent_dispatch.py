@@ -3,16 +3,20 @@
 Tests the dispatch matrix:
 - tether-agent-1.0 → handle_message called, no stub injected
 - tether-agent-2.0 → real LayerClient pipeline; falls back to 1.0 on error or disabled
-- tether-agent-2.5 → stub notice + 1.0 fallback (not yet wired)
-- unknown / None version → treated as tether-agent-2.0 (picker default)
+- tether-agent-2.5 → routes to _dispatch_v25 (M4: paid/admin=premium, free=1.0 fallback)
+- unknown / None version → treated as tether-agent-2.0 (layer pipeline default)
 - vault/status_fn → forwarded transparently to handle_message (1.0 path)
 """
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+
+# Required before any config-loading import.
+os.environ.setdefault("TETHER_JWT_SECRET", "test-secret-for-tests")
 
 
 # ---------------------------------------------------------------------------
@@ -88,28 +92,25 @@ async def test_dispatch_1_0_no_stub():
 
 
 # ---------------------------------------------------------------------------
-# 2.5 path — still stubbed (premium-pipeline-migrator owns this)
+# 2.5 path — _dispatch_v25 (M4: paid/admin=premium, free=1.0 fallback)
 # ---------------------------------------------------------------------------
 
-async def test_dispatch_2_5_stub_then_calls_1_0():
-    """tether-agent-2.5 must prepend a stub mentioning 2.5, then fall back to 1.0."""
-    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response):
+async def test_dispatch_25_routes_to_dispatch_v25():
+    """tether-agent-2.5 must call _dispatch_v25, not the generic stub."""
+    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response), \
+         patch("bot.agent_dispatch._dispatch_v25", AsyncMock()) as mock_v25:
+
         from bot.agent_dispatch import dispatch_message
 
-        sent_parts: list[str] = []
+        sent: list[str] = []
         await dispatch_message(
-            "tether-agent-2.5",
-            "hello",
-            send_fn=sent_parts.append,
-            pool=None,
-            user_id="user1",
+            "tether-agent-2.5", "hello",
+            send_fn=sent.append, pool=None, user_id="user1",
         )
 
-    assert len(sent_parts) == 2, "2.5 path must produce stub + 1.0 response"
-    stub, response = sent_parts
-    assert "2.5" in stub, f"stub must mention 2.5, got: {stub!r}"
-    _assert_not_wired_stub(stub)
-    assert response == "1.0-response"
+    mock_v25.assert_awaited_once()
+    assert not any("not yet wired" in s for s in sent), \
+        "2.5 must not send the generic stub message"
 
 
 # ---------------------------------------------------------------------------

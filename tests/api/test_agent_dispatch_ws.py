@@ -3,7 +3,7 @@
 Verifies the bot_chat WebSocket handler routes messages based on agent_version:
 - tether-agent-1.0 → no stub, chunk contains only the 1.0 response
 - tether-agent-2.0 → real layer pipeline; falls back silently to 1.0 on error
-- tether-agent-2.5 → chunk contains stub + 1.0 response (joined by \\n\\n)
+- tether-agent-2.5 → free user: upgrade notice + 1.0 fallback (M4)
 - agent_version missing → defaults to 2.0 path (layer pipeline / fallback)
 
 Note: The Telegram path (_process_telegram_update) calls handle_message directly
@@ -13,6 +13,11 @@ Deliberate behaviour change (M3): tether-agent-2.0 no longer sends a user-
 visible stub. It runs the real layer pipeline, falling back silently to 1.0
 when the layer is unavailable. This is tested both with a mocked successful
 layer session and with a mocked HTTP failure.
+
+Deliberate behaviour change (M4): tether-agent-2.5 no longer sends the generic
+"not yet wired" stub. Free users see a Pro-plan upgrade notice; paid/admin users
+reach the premium handler. This WS test uses a non-admin, no-DB token so the
+free user path executes.
 """
 from __future__ import annotations
 
@@ -162,15 +167,30 @@ def test_ws_agent_1_0_no_stub():
 
 
 # ---------------------------------------------------------------------------
-# tether-agent-2.5 — stub + 1.0 response in chunk (still wired to stub path)
+# tether-agent-2.5 — M4: free user gets upgrade notice + 1.0 fallback
 # ---------------------------------------------------------------------------
 
-def test_ws_2_5_stub_prepended():
-    """2.5 must include a stub notice before the 1.0 response in a single chunk frame."""
+def test_ws_2_5_free_user_gets_upgrade_notice():
+    """2.5 free user: must see Pro-plan upgrade notice and receive 1.0 response.
+
+    Test uses a non-admin token and no DB pool, so subscription check fails
+    (defaults to free).  _dispatch_v25 must send the upgrade notice then fall
+    back to handle_message (1.0 pipeline).
+    """
     chunk, done = _dispatch_via_ws({"agent_version": "tether-agent-2.5"})
 
+    combined = chunk.get("content", "")
     assert chunk["type"] == "chunk"
-    _assert_stub_present(chunk["content"], "2.5")
+    assert "1.0-response" in combined, "1.0 fallback must be present"
+    combined_lower = combined.lower()
+    assert (
+        "pro plan" in combined_lower
+        or "free plan" in combined_lower
+        or "pro" in combined_lower
+    ), f"upgrade notice must mention Pro/free plan, got: {combined!r}"
+    # Must NOT include the old not-yet-wired generic stub
+    assert "not yet wired" not in combined_lower, \
+        "2.5 must not send the generic 'not yet wired' stub"
     assert done["type"] == "done"
 
 
