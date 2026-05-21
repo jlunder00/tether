@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
 from .fake_client import FakeClient
 from agent_pool_manager.config import AgentPoolConfig
@@ -127,7 +127,6 @@ async def test_ttl_drains_expired_subprocess_on_acquire():
         await pool._inject_warm(HASH_A, OPTIONS_A)
 
     # Force spawned_at to the past
-    import agent_pool_manager.pool as pool_mod
     q = pool._warm[HASH_A]
     items = []
     while not q.empty():

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from .fake_client import FakeClient
 from agent_pool_manager.config import AgentPoolConfig
-from agent_pool_manager.pool import Pool, PoolExhausted
+from agent_pool_manager.pool import Pool
 from agent_pool_manager.refill import RefillLoop
 
 

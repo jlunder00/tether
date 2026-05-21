@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -85,12 +86,11 @@ def build_app(
     @app.post("/acquire")
     async def acquire(request: Request, req: AcquireRequest) -> JSONResponse:
         the_pool: Pool = request.app.state.pool
-        timeout = req.timeout_seconds
         try:
             handle_id, meta = await the_pool.acquire(
                 req.options_hash,
                 req.options,
-                timeout=timeout,
+                timeout=req.timeout_seconds,
             )
         except PoolExhausted:
             return JSONResponse(
@@ -175,12 +175,8 @@ def build_app(
 
 def _serialise_msg(msg: Any) -> dict:
     """Convert an SDK message to a JSON-serialisable dict."""
-    try:
-        import dataclasses
-        if dataclasses.is_dataclass(msg):
-            return dataclasses.asdict(msg)
-    except Exception:
-        pass
+    if dataclasses.is_dataclass(msg):
+        return dataclasses.asdict(msg)
     try:
         return vars(msg)
     except TypeError:

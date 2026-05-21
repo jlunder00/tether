@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import time
 import uuid
@@ -18,6 +19,16 @@ log = logging.getLogger(__name__)
 
 class PoolExhausted(Exception):
     """Raised when no warm subprocess becomes available within the timeout."""
+
+
+def _extract_pid(client: ClaudeSDKClient) -> int | None:
+    """Best-effort PID extraction from the SDK client's transport."""
+    try:
+        transport = client._transport
+        proc = getattr(transport, "_process", None) if transport is not None else None
+        return proc.pid if proc is not None else None
+    except Exception:
+        return None
 
 
 @dataclass
@@ -82,23 +93,21 @@ class Pool:
         deadline = time.monotonic() + timeout
         queue = self._get_or_create_queue(options_hash)
 
+        exhausted = PoolExhausted(
+            f"No warm subprocess for hash {options_hash!r} within {timeout}s"
+        )
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise PoolExhausted(f"No warm subprocess for hash {options_hash!r} within {timeout}s")
+                raise exhausted
 
             try:
                 sub = queue.get_nowait()
             except asyncio.QueueEmpty:
-                # Wait for a warm item to appear
+                # Wait for a warm item to appear, then re-check the deadline.
                 try:
                     sub = await asyncio.wait_for(queue.get(), timeout=min(remaining, 0.1))
                 except asyncio.TimeoutError:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise PoolExhausted(
-                            f"No warm subprocess for hash {options_hash!r} within {timeout}s"
-                        )
                     continue
 
             # Drain expired entries
@@ -114,19 +123,8 @@ class Pool:
             async with self._lock:
                 self._active[handle_id] = sub
 
-            pid: int | None = None
-            try:
-                transport = sub.proc._transport
-                if transport is not None:
-                    proc = getattr(transport, "_process", None)
-                    if proc is not None:
-                        pid = proc.pid
-            except Exception:
-                pass
-
-            import datetime
             meta = {
-                "subprocess_pid": pid,
+                "subprocess_pid": _extract_pid(sub.proc),
                 "ready_at": datetime.datetime.utcnow().isoformat() + "Z",
             }
             return handle_id, meta
@@ -184,23 +182,17 @@ class Pool:
 
     def status(self) -> dict[str, Any]:
         """Pool-wide status snapshot."""
-        partitions: dict[str, dict[str, int]] = {}
-        for h, q in self._warm.items():
-            partitions[h] = {
-                "warm": q.qsize(),
-                "warming": self._warming.get(h, 0),
-            }
-        for h, sub in self._active.items():
-            oh = sub.options_hash
-            if oh not in partitions:
-                partitions[oh] = {"warm": 0, "warming": 0}
-            partitions[oh].setdefault("active", 0)
-            partitions[oh]["active"] = partitions[oh].get("active", 0) + 1
+        partitions: dict[str, dict[str, int]] = {
+            h: {"warm": q.qsize(), "warming": self._warming.get(h, 0)}
+            for h, q in self._warm.items()
+        }
+        for sub in self._active.values():
+            slot = partitions.setdefault(sub.options_hash, {"warm": 0, "warming": 0})
+            slot["active"] = slot.get("active", 0) + 1
 
-        total_warm = sum(p["warm"] for p in partitions.values())
         return {
             "partitions": partitions,
-            "total_warm": total_warm,
+            "total_warm": sum(p["warm"] for p in partitions.values()),
             "total_active": self.active_count(),
             "total_warming": self.warming_count(),
             "capacity_total": self.config.capacity_total,
@@ -214,9 +206,9 @@ class Pool:
         """Spawn, prime, and push one subprocess to the warm queue.
 
         Used directly by RefillLoop and by tests via FakeClient patch.
+        Silently no-ops at capacity.
         """
-        accepted = await self._try_inject_warm(options_hash, options)
-        if not accepted:
+        if not await self._try_inject_warm(options_hash, options):
             log.debug("Capacity full — skipping inject for hash %s", options_hash)
 
     async def _try_inject_warm(self, options_hash: str, options: dict[str, Any]) -> bool:

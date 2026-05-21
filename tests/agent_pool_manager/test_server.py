@@ -1,14 +1,13 @@
 """HTTP integration tests for agent_pool_manager.server — FastAPI TestClient."""
 from __future__ import annotations
 
-import asyncio
 import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch
 from httpx import AsyncClient, ASGITransport
 
 from .fake_client import FakeClient
 from agent_pool_manager.config import AgentPoolConfig
-from agent_pool_manager.pool import Pool, PoolExhausted
+from agent_pool_manager.pool import Pool
 from agent_pool_manager.refill import RefillLoop
 from agent_pool_manager.server import build_app
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import AsyncIterator, Any
-from unittest.mock import AsyncMock
 
 from claude_agent_sdk import ResultMessage
 
