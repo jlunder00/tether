@@ -3,6 +3,9 @@
 M4 wires a real 2.5 path: paid users get the premium session handler;
 free users receive an upgrade notice and fall back to tether-agent-1.0.
 
+M4 hotfix: admin users bypass the subscription check entirely and are
+routed directly to the premium path regardless of subscription row.
+
 All DB and premium-package interactions are fully mocked.
 """
 from __future__ import annotations
@@ -137,6 +140,64 @@ class TestDispatchV25:
 
         # Should have fallen back to 1.0, not crashed
         assert "1.0-response" in sent
+
+    @pytest.mark.asyncio
+    async def test_admin_user_bypasses_subscription_check_and_gets_premium(self):
+        """Admin user with no subscription row must reach premium handler, not 1.0 fallback.
+
+        is_admin=True must short-circuit the paid check entirely — no subscription
+        row is required.  get_user_is_paid returns False (simulates no row), but
+        the admin flag overrides and routes to the premium path.
+        """
+        import sys
+        sent = []
+        mock_premium_handler = AsyncMock(return_value="Premium reply for admin")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=mock_premium_handler)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx(is_paid_return=False)), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=False)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID, is_admin=True)
+
+        mock_premium_handler.assert_awaited_once()
+        assert "Premium reply for admin" in sent
+        # No upgrade/free-plan notice for admins
+        assert not any(
+            "free plan" in s.lower() or "pro plan" in s.lower()
+            for s in sent
+        ), f"Admin must not see free-plan upgrade notice. Got: {sent}"
+        # Must NOT have fallen back to 1.0
+        assert "1.0-response" not in sent, "Admin must not fall back to 1.0"
+
+    @pytest.mark.asyncio
+    async def test_admin_flag_forwarded_from_dispatch_message(self):
+        """dispatch_message passes is_admin through to _dispatch_v25."""
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("bot.agent_dispatch._dispatch_v25", AsyncMock()) as mock_v25:
+
+            from bot.agent_dispatch import dispatch_message
+            await dispatch_message(
+                "tether-agent-2.5", "hello",
+                send_fn=lambda m: None, pool=None, user_id=TEST_USER_ID,
+                is_admin=True,
+            )
+
+        _args, kwargs = mock_v25.call_args
+        assert kwargs.get("is_admin") is True, \
+            f"_dispatch_v25 must receive is_admin=True, got call_args={mock_v25.call_args}"
 
 
 # ---------------------------------------------------------------------------

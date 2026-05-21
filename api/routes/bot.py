@@ -298,6 +298,7 @@ async def bot_chat(websocket: WebSocket,
                     vault=getattr(websocket.app.state, "vault", None),
                     status_fn=status_fn,
                     event_fn=event_fn,
+                    is_admin=websocket.state.is_admin,
                 )
             )
 
