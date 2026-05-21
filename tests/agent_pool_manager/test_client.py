@@ -1,17 +1,16 @@
 """Tests for agent_pool_manager.client — PoolClient HTTP wrapper."""
 from __future__ import annotations
 
-import asyncio
 import pytest
 from unittest.mock import patch
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport
 
 from .fake_client import FakeClient
 from agent_pool_manager.config import AgentPoolConfig
 from agent_pool_manager.pool import Pool
 from agent_pool_manager.refill import RefillLoop
 from agent_pool_manager.server import build_app
-from agent_pool_manager.client import PoolClient
+from agent_pool_manager.client import PoolClient, PoolClientError
 
 
 HASH_A = "abc123"
@@ -45,9 +44,11 @@ async def http_client(pool_and_app):
     """PoolClient backed by an in-process FastAPI app."""
     pool, app = pool_and_app
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        client = PoolClient(base_url="http://test", _transport=transport)
+    client = PoolClient(base_url="http://test", _transport=transport)
+    try:
         yield client, pool
+    finally:
+        await client.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +70,6 @@ async def test_acquire_returns_handle(http_client):
 @pytest.mark.asyncio
 async def test_acquire_raises_on_pool_exhausted(http_client):
     """PoolClient.acquire() raises PoolClientError when pool is exhausted."""
-    from agent_pool_manager.client import PoolClientError
     client, pool = http_client
 
     with pytest.raises(PoolClientError, match="pool_exhausted"):
@@ -121,7 +121,6 @@ async def test_interrupt_active_handle(http_client):
 @pytest.mark.asyncio
 async def test_interrupt_unknown_handle_raises(http_client):
     """PoolClient.interrupt() raises PoolClientError for unknown handle."""
-    from agent_pool_manager.client import PoolClientError
     client, pool = http_client
 
     with pytest.raises(PoolClientError):
@@ -183,7 +182,6 @@ async def test_query_stream_yields_events(http_client):
 @pytest.mark.asyncio
 async def test_query_stream_unknown_handle_raises(http_client):
     """PoolClient.query_stream() raises PoolClientError for unknown handle."""
-    from agent_pool_manager.client import PoolClientError
     client, pool = http_client
 
     with pytest.raises(PoolClientError):

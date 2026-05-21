@@ -42,10 +42,11 @@ class PoolClient:
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            kwargs: dict[str, Any] = {"base_url": self._base_url, "timeout": 30.0}
-            if self._transport is not None:
-                kwargs["transport"] = self._transport
-            self._client = httpx.AsyncClient(**kwargs)
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=30.0,
+                transport=self._transport,
+            )
         return self._client
 
     async def aclose(self) -> None:
