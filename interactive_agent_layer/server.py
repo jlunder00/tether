@@ -93,8 +93,23 @@ def create_app(layer: Layer) -> FastAPI:
         require_session(session_id)
 
         async def event_generator():
-            async for event in layer.run_turn(session_id, body.prompt):
-                yield f"data: {json.dumps(event)}\n\n"
+            try:
+                async for event in layer.run_turn(session_id, body.prompt):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except Exception as exc:
+                # HTTP headers are already committed — we can't change the status
+                # code. Emit a turn_error event so the client gets a parseable
+                # in-band signal instead of an abrupt connection close.
+                import logging as _log
+                _log.getLogger(__name__).exception(
+                    "run_turn failed for session %s: %s", session_id, exc
+                )
+                error_event = {
+                    "type": "turn_error",
+                    "session_id": session_id,
+                    "message": str(exc),
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
 
         return StreamingResponse(
             event_generator(),
