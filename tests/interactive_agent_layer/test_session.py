@@ -1,42 +1,9 @@
 """Tests for Session dataclass and Layer class."""
 from __future__ import annotations
 
-import pathlib
-
 import pytest
-from interactive_agent_layer.session import Session, Layer
-from interactive_agent_layer.translation import TranslationTable
-from interactive_agent_layer.ws_publisher import WSPublisher
 
-
-class _MockPoolClient:
-    async def acquire(self, user_id: str, options_hash: int) -> str:
-        return f"mock-handle-{user_id}"
-
-    async def query(self, handle: str, prompt: str, can_use_tool=None):
-        yield {"type": "text_delta", "delta": "Hello "}
-        yield {"type": "tool_use", "tool_name": "get_anchors", "args": {}}
-        yield {"type": "tool_use", "tool_name": "send_status_update", "args": {"text": "Still working"}}
-        yield {"type": "text_delta", "delta": "world"}
-        yield {"type": "result", "final_text": "Hello world", "tokens_used": 42}
-
-    async def release(self, handle: str, reusable: bool = True) -> None:
-        pass
-
-    async def interrupt(self, handle: str) -> None:
-        pass
-
-
-@pytest.fixture
-def layer():
-    publisher = WSPublisher()
-    pool = _MockPoolClient()
-    yaml_path = pathlib.Path(__file__).parent.parent.parent / "config" / "agent_translations.yaml"
-    return Layer(
-        pool_client=pool,
-        ws_publisher=publisher,
-        translation_table=TranslationTable.from_yaml(yaml_path),
-    )
+from interactive_agent_layer.session import Session
 
 
 def test_session_dataclass_fields():
