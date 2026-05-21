@@ -46,3 +46,13 @@ telegram:
   # Required Fly secrets when using webhook mode:
   #   TELEGRAM_WEBHOOK_URL     — e.g. https://your-app.fly.dev/api/bot/telegram-webhook
   #   TELEGRAM_WEBHOOK_SECRET  — random string shared between Telegram and your server
+
+agent_layer:
+  base_url: "http://127.0.0.1:5003"
+  enabled: true
+  permission_timeout_seconds: 60
+  trial_monthly_quota: 10
+  leaky_providers:
+    - openrouter
+    - openai
+  dev_mode_show_raw_tools: false
