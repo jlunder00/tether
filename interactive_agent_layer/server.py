@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from interactive_agent_layer.session import Layer, Session
@@ -36,8 +36,50 @@ def create_app(layer: Layer) -> FastAPI:
             raise HTTPException(status_code=404, detail="Session not found")
         return session
 
+    async def check_2_5_gates(body: SessionStartRequest) -> JSONResponse | None:
+        """Enforce BYOK-leakage and free-tier trial gates for tether-agent-2.5.
+
+        Returns a 422 JSONResponse if the request is blocked, else None.
+        """
+        # B5b — BYOK leakage gate: block 2.5 on providers that expose prompt content.
+        if layer.provider_fn is not None and layer.leaky_providers is not None:
+            if layer.provider_fn(body.user_id) in layer.leaky_providers:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "error": "provider_unsupported_for_agent",
+                        "alternatives": ["tether-agent-2.0"],
+                    },
+                )
+
+        # B5a — trial counter (skipped entirely for premium users).
+        if layer.trial_counter is None:
+            return None
+
+        is_paid = await layer.is_paid_fn(body.user_id) if layer.is_paid_fn else False
+        if is_paid:
+            return None
+
+        allowed, remaining = await layer.trial_counter.check_and_increment(body.user_id)
+        if not allowed:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "trial_exhausted", "upgrade_url": "/upgrade"},
+            )
+        # Publish live remaining count to the frontend picker.
+        await layer.ws_publisher.push(
+            body.user_ws_id,
+            {"type": "trial_usage_update", "remaining": remaining},
+        )
+        return None
+
     @app.post("/session/start")
-    async def session_start(body: SessionStartRequest) -> dict:
+    async def session_start(body: SessionStartRequest):
+        if body.agent_version == "tether-agent-2.5":
+            blocked = await check_2_5_gates(body)
+            if blocked is not None:
+                return blocked
+
         session = layer.create_session(
             user_id=body.user_id,
             user_ws_id=body.user_ws_id,
