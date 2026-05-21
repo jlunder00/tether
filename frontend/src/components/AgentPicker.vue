@@ -3,7 +3,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useAgentPickerStore } from '../stores/agentPicker'
 import type { AgentVersion } from '../stores/agentPicker'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   trialMessagesLeft?: number
 }>(), {
   trialMessagesLeft: 10,
@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
 
 const store = useAgentPickerStore()
 const open = ref(false)
+const rootEl = ref<HTMLDivElement | null>(null)
 
 const AGENTS: Array<{ id: AgentVersion; label: string; sublabel: string }> = [
   { id: 'tether-agent-1.0', label: 'tether-agent-1.0', sublabel: 'Classic · free' },
@@ -27,10 +28,14 @@ async function select(version: AgentVersion) {
   await store.setAgent(version)
 }
 
-// Close dropdown when clicking outside
+async function stayOn20() {
+  store.dismissByokModal()
+  await store.setAgent('tether-agent-2.0')
+}
+
+// Close dropdown when clicking outside the component's root.
 function onDocumentClick(e: MouseEvent) {
-  const el = document.getElementById('agent-picker-root')
-  if (el && !el.contains(e.target as Node)) {
+  if (rootEl.value && !rootEl.value.contains(e.target as Node)) {
     open.value = false
   }
 }
@@ -40,7 +45,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
 </script>
 
 <template>
-  <div id="agent-picker-root" class="relative">
+  <div ref="rootEl" class="relative">
     <!-- Trigger button -->
     <button
       type="button"
@@ -86,7 +91,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
               v-if="agent.id === 'tether-agent-2.5'"
               class="ml-1 inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-[--accent-veil] text-[--accent]"
             >
-              trial: {{ props.trialMessagesLeft }} left
+              trial: {{ trialMessagesLeft }} left
             </span>
           </span>
         </span>
@@ -118,7 +123,7 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocumentClick)
             <button
               type="button"
               class="text-xs px-3 py-1.5 rounded-lg bg-[--bg-elev-3] text-[--fg-2] hover:bg-[--bg-elev-4] transition-colors"
-              @click="store.dismissByokModal(); store.setAgent('tether-agent-2.0')"
+              @click="stayOn20"
             >
               Stay on 2.0
             </button>

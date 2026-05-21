@@ -2,13 +2,14 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '../lib/api'
 
-export type AgentVersion = 'tether-agent-1.0' | 'tether-agent-2.0' | 'tether-agent-2.5'
+const AGENT_VERSIONS = ['tether-agent-1.0', 'tether-agent-2.0', 'tether-agent-2.5'] as const
+export type AgentVersion = (typeof AGENT_VERSIONS)[number]
 
 const DEFAULT_AGENT: AgentVersion = 'tether-agent-2.0'
 const SETTING_KEY = 'preferred_agent_version'
 
 function isValidAgent(v: unknown): v is AgentVersion {
-  return v === 'tether-agent-1.0' || v === 'tether-agent-2.0' || v === 'tether-agent-2.5'
+  return typeof v === 'string' && (AGENT_VERSIONS as readonly string[]).includes(v)
 }
 
 export const useAgentPickerStore = defineStore('agentPicker', () => {
