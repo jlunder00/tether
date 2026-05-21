@@ -56,6 +56,7 @@ from db.pg_queries import (
 )
 import db.postgres as pg
 import db.pg_auth_queries as pg_auth_queries
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +69,13 @@ PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
 _jinja = Environment(loader=FileSystemLoader(str(PROMPTS_DIR)), trim_blocks=True)
 
-HISTORY_EXCHANGES = 5
+HISTORY_EXCHANGES = int(tether_config.get("pipeline.history_exchanges", 5))
 
 # v2 pipeline constants
-MAX_PLANNING_ROUNDS = 4
-MAX_REPAIR_ATTEMPTS = 3
-MAX_SATISFACTION_RETRIES = 2
+MAX_PLANNING_ROUNDS = int(tether_config.get("pipeline.max_planning_rounds", 4))
+MAX_REPAIR_ATTEMPTS = int(tether_config.get("pipeline.max_repair_attempts", 3))
+MAX_SATISFACTION_RETRIES = int(tether_config.get("pipeline.max_satisfaction_retries", 2))
+_CLASSIFIER_TIMEOUT = 45
 
 # Module-level log context — set once per _run_v2_planning_loop call.
 # Safe because the bot is single-threaded.
@@ -129,7 +131,7 @@ def _format_history(history: list[dict]) -> str:
     lines = []
     for row in history:
         label = "User" if row["role"] == "user" else "Bot"
-        ts = row["ts"][:16] if row["ts"] else ""
+        ts = (row["ts"].strftime("%Y-%m-%d %H:%M") if hasattr(row["ts"], "strftime") else row["ts"][:16]) if row["ts"] else ""
         body = row["body"]
         if len(body) > _HISTORY_BODY_MAX:
             body = body[:_HISTORY_BODY_MAX] + "…"
@@ -792,7 +794,8 @@ async def _classify_message(text: str, current_anchor: dict, today: str) -> str:
         date=today,
     )
     try:
-        raw = await call_claude(prompt, timeout=15, model_role="quick_classifier",
+        _timeout = int(tether_config.get("pipeline.classifier_timeout_seconds", _CLASSIFIER_TIMEOUT))
+        raw = await call_claude(prompt, timeout=_timeout, model_role="quick_classifier",
                           stage="quick_classifier")
         data = _parse_json(raw)
         route = data.get("route", "full")
@@ -924,7 +927,8 @@ def _is_v2_fallback_enabled() -> bool:
 
 async def _handle_v3(text: str, pool, user_id: str, anchors: list[dict],
                current_anchor: dict,
-               skill_commands: list[str] | None = None) -> str:
+               skill_commands: list[str] | None = None,
+               conversation_id: str | None = None) -> str:
     """Run a basic v3 single-shot LLM call. Returns the response text.
 
     Uses AnthropicBackend directly (no LLMRouter, no conversation loop,
@@ -956,6 +960,17 @@ async def _handle_v3(text: str, pool, user_id: str, anchors: list[dict],
         session_notes=None,
         mode=mode,
     )
+
+    # Conversation context injection — appended to system prompt when a
+    # conversation_id with a linked context_node is provided.
+    if conversation_id:
+        try:
+            from bot.conversation_context import build_conversation_context
+            ctx_block = await build_conversation_context(conversation_id, pool, user_id)
+            if ctx_block:
+                system = system + "\n\n" + ctx_block
+        except Exception as _ctx_err:
+            logger.warning("_handle_v3: context injection failed: %s", _ctx_err)
 
     # Skill injection (v3-basic fallback): append skill content to system prompt
     if skill_commands:
@@ -996,7 +1011,7 @@ def _log_preview(text: str, n: int = 120) -> str:
 
 
 async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, user_id: str,
-                               status_fn=None) -> None:
+                               status_fn=None, conversation_id: str | None = None) -> None:
     today = str(date_type.today())
     logger.info("handle_message: entered, text_len=%d", len(text or ""))
     async with pg.get_conn(pool, user_id) as conn:
@@ -1122,7 +1137,8 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
             final = await _handle_v3(text, pool, user_id, anchors, current_anchor,
-                               skill_commands=_skill_commands)
+                               skill_commands=_skill_commands,
+                               conversation_id=conversation_id)
             send_fn(final)
             async with pg.get_conn(pool, user_id) as conn:
                 await insert_conversation_turn(conn, "user", text)
@@ -1189,7 +1205,8 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
 
 
 async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str,
-                         vault=None, status_fn=None) -> None:
+                         vault=None, status_fn=None,
+                         conversation_id: str | None = None) -> None:
     """Public entry point. When a vault is provided, acquires the per-user lock
     and materialises credentials into an env dict that downstream LLM calls
     merge into the spawned claude-code subprocess.
@@ -1210,11 +1227,13 @@ async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_i
             async with vault.materialize(user_id) as env_extras:
                 token = _llm_env_extras.set(dict(env_extras))
                 try:
-                    await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn)
+                    await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn,
+                                               conversation_id=conversation_id)
                 finally:
                     _llm_env_extras.reset(token)
     else:
-        await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn)
+        await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn,
+                                   conversation_id=conversation_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1280,49 @@ async def _init_followup_states(pool, user_id: str, today: str, anchor_id: str, 
             await init_followup_state(conn, today, anchor_id, task_id, now)
 
 
-def run_polling(token: str, chat_id: str) -> None:
+async def _fetch_poll_credentials(pool, fernet: Fernet) -> tuple[str, str, str] | None:
+    """Look up the polling user's bot token and chat_id from the DB.
+
+    Returns (token, chat_id, user_id) for the first user who has a
+    bot_token_encrypted set, or None if no user has registered a bot token.
+
+    Phase 1 assumption: single-user deployment. The LIMIT 1 documents this
+    explicitly so multi-user Phase 5 work is immediately visible.
+    """
+    async with pg.get_conn(pool) as conn:  # no user_id — auth schema, no RLS
+        row = await conn.fetchrow(
+            """
+            SELECT tc.user_id, tc.telegram_chat_id, tc.bot_token_encrypted
+            FROM telegram_connections tc
+            WHERE tc.bot_token_encrypted IS NOT NULL
+            ORDER BY tc.user_id
+            LIMIT 1
+            """
+        )
+    if row is None:
+        return None
+    raw_token = fernet.decrypt(bytes(row["bot_token_encrypted"])).decode()
+    return raw_token, str(row["telegram_chat_id"]) if row["telegram_chat_id"] else "", str(row["user_id"])
+
+
+async def _auto_link_chat(pool, user_id: str, chat_id: str) -> bool:
+    """Bind chat_id to the polling user ONLY when no real binding exists.
+
+    Uses a guarded UPDATE (not UPSERT) so that a legitimate existing binding is
+    never overwritten by a stranger's first message. Returns True if the link
+    was established, False if a real chat_id was already bound.
+    """
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.auto_link_chat_id(conn, user_id, chat_id)
+
+
+async def _bootstrap_last_user(pool) -> dict | None:
+    """Fetch the most recently active telegram-linked user from DB for cold-start."""
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.get_most_recent_telegram_user(conn)
+
+
+def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> None:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     pool = loop.run_until_complete(pg.create_pool())
@@ -1271,6 +1332,15 @@ def run_polling(token: str, chat_id: str) -> None:
     # These get set when a message is processed and remembered for background checks.
     last_user_id: str | None = None
     last_chat_id: str | None = None
+    # Bootstrap last_user_id from DB so followup pings work immediately after restart
+    try:
+        _bootstrap = loop.run_until_complete(_bootstrap_last_user(pool))
+        if _bootstrap:
+            last_user_id = _bootstrap["id"]
+            last_chat_id = _bootstrap.get("telegram_chat_id")
+            logger.info("run_polling: bootstrapped user_id=%s from DB", last_user_id)
+    except Exception as _be:
+        logger.warning("run_polling: failed to bootstrap last_user_id from DB: %s", _be)
     logger.info("Tether bot polling started (offset=%d)", offset)
     # Start premium meeting event listener if available
     try:
@@ -1301,25 +1371,42 @@ def run_polling(token: str, chat_id: str) -> None:
 
                 send = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
 
-                # Handle /start and /link before auth check
-                if text.strip() in ("/start", "/link"):
-                    try:
-                        code = f"{random.randint(0, 999999):06d}"
-                        async def _store_link():
-                            async with pg.get_conn(pool) as conn:  # no user_id — auth table
-                                await pg_auth_queries.store_link_code(conn, code, incoming_chat_id)
-                        loop.run_until_complete(_store_link())
-                        send(f"Your link code is: {code}. Enter this in Tether settings within 5 minutes.")
-                    except Exception as e:
-                        logger.error("Error handling /link: %s", e)
-                        send("[Tether error generating link code]")
-                    continue
-
                 # Resolve user_id from chat_id
                 resolved_user_id = loop.run_until_complete(_resolve_user_id(pool, incoming_chat_id))
+
                 if resolved_user_id is None:
-                    send("I don't recognize you. Link your Tether account at your Tether URL, then use /link to connect.")
-                    continue
+                    # Auto-link: the polling user's personal bot token is what
+                    # we're using, so any first message to this bot belongs to them.
+                    # Guard: only link when no real chat_id is bound yet (guarded
+                    # UPDATE — won't overwrite an existing legitimate binding, so a
+                    # stranger discovering the bot cannot hijack Jason's account).
+                    if poll_user_id is not None:
+                        try:
+                            linked = loop.run_until_complete(
+                                _auto_link_chat(pool, poll_user_id, incoming_chat_id)
+                            )
+                            if linked:
+                                resolved_user_id = poll_user_id
+                                logger.info(
+                                    "Auto-linked chat_id %s to user %s on first message",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                            else:
+                                # A real binding already exists for a different chat_id.
+                                # Reject silently — do not reveal account details.
+                                logger.warning(
+                                    "Rejected message from unrecognized chat_id %s "
+                                    "(user %s already linked to a different chat)",
+                                    incoming_chat_id, poll_user_id,
+                                )
+                                continue
+                        except Exception as e:
+                            logger.error("Auto-link failed for chat_id %s: %s", incoming_chat_id, e)
+                            send("[Tether error: could not link your chat. Please try again.]")
+                            continue
+                    else:
+                        send("I don't recognize you. Contact your Tether administrator to link your account.")
+                        continue
 
                 try:
                     loop.run_until_complete(handle_message(text, send, pool, resolved_user_id))
@@ -1378,9 +1465,39 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     logger.info("log level: %s", level_name)
-    token = tether_config.get("telegram.bot_token")
-    chat_id = str(tether_config.get("telegram.chat_id", ""))
-    run_polling(token, chat_id)
+
+    # Load the vault key and look up the polling user's bot token from DB.
+    # Per Jason's Phase 1 override: no env-var fallback. The token lives in
+    # telegram_connections.bot_token_encrypted only.
+    vault_key_str = tether_config.get("vault.key")
+    if not vault_key_str:
+        logger.error("vault.key not configured — cannot decrypt bot token")
+        import sys
+        sys.exit(1)
+    fernet = Fernet(vault_key_str.encode() if isinstance(vault_key_str, str) else vault_key_str)
+
+    # Soft config: per-user token not yet in DB (migration not yet run).
+    # Loop until the token appears — once the ops migration script runs, the bot
+    # picks it up without supervisord intervention.
+    _startup_loop = asyncio.new_event_loop()
+    _pool = _startup_loop.run_until_complete(pg.create_pool())
+    try:
+        while True:
+            credentials = _startup_loop.run_until_complete(_fetch_poll_credentials(_pool, fernet))
+            if credentials is not None:
+                break
+            logger.warning(
+                "No per-user bot token found in DB. "
+                "Sleeping 30 s — run scripts/migrate_telegram_to_per_user.py to resolve."
+            )
+            time.sleep(30)
+    finally:
+        _startup_loop.run_until_complete(pg.close_pool())
+        _startup_loop.close()
+
+    token, chat_id, poll_user_id = credentials
+    logger.info("Polling as user %s (chat_id=%s)", poll_user_id, chat_id or "<none yet>")
+    run_polling(token, chat_id, poll_user_id=poll_user_id)
 
 
 if __name__ == "__main__":

@@ -186,7 +186,7 @@ const { isOver: isContainerOver, dropHandlers: containerDropHandlers } = useDrop
         ?? eventStore.events.find(e => e.id === p.taskId)
       if (!ev) return
       eventStore.demoteEvent(ev.id, props.anchorId, effectiveDate.value)
-        .then(() => store.fetchPlan(effectiveDate.value))
+        .then(() => store.fetchPlanRange(effectiveDate.value, effectiveDate.value))
       return
     }
     const toIndex = anchorPlan.value.tasks.length

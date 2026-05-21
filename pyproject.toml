@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tether"
-version = "0.0.1"
+version = "0.0.2a2"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
@@ -46,9 +46,14 @@ dev = [
 packages = [
     "bot", "db", "api", "api.routes", "tether_mcp", "shared",
     "sync", "integrations", "integrations.google_calendar", "integrations.ical",
+    "agent_pool_manager",
+    "interactive_agent_layer",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: mark test as requiring a real claude binary",
+]

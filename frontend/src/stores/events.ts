@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { api } from '../lib/api'
 import type { CalendarEvent } from '../types/events'
 import type { RecurrenceEditScope } from '../types/recurrence'
+import { usePlanStore } from './plan'
 
 export const useEventStore = defineStore('events', () => {
   const events = ref<CalendarEvent[]>([])
@@ -30,23 +31,16 @@ export const useEventStore = defineStore('events', () => {
   /**
    * Promote a task to a calendar event (sets start/end time).
    * POST /api/events — creates a calendar event with the given time range.
+   *
+   * True optimistic insert: the event appears in the store immediately (before the
+   * network round-trip) with a temp ID prefixed "optimistic-". On 2xx the temp
+   * entry is replaced with the server-confirmed event (preserving list order). On
+   * any failure the temp entry is removed.
    */
   async function promoteTask(taskId: string, startTime: string, endTime: string, title: string): Promise<CalendarEvent | null> {
-    try {
-      const resp = await api('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_id: taskId, start_time: startTime, end_time: endTime, title }),
-      })
-      if (resp.ok) {
-        const event: CalendarEvent = await resp.json()
-        events.value.push(event)
-        return event
-      }
-    } catch { /* fall through */ }
-    // Optimistic local insert until backend ships
+    const tempId = `optimistic-${crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36))}`
     const optimistic: CalendarEvent = {
-      id: crypto.randomUUID?.() ?? (Math.random().toString(36).slice(2) + Date.now().toString(36)),
+      id: tempId,
       title,
       start_time: startTime,
       end_time: endTime,
@@ -62,7 +56,24 @@ export const useEventStore = defineStore('events', () => {
       context_subject: null,
     }
     events.value.push(optimistic)
-    return optimistic
+
+    try {
+      const resp = await api('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, start_time: startTime, end_time: endTime, title }),
+      })
+      if (resp.ok) {
+        const confirmed: CalendarEvent = await resp.json()
+        const idx = events.value.findIndex(e => e.id === tempId)
+        if (idx !== -1) events.value[idx] = confirmed
+        return confirmed
+      }
+    } catch { /* fall through to cleanup */ }
+
+    // On failure: remove the optimistic entry
+    events.value = events.value.filter(e => e.id !== tempId)
+    return null
   }
 
   /**
@@ -139,7 +150,23 @@ export const useEventStore = defineStore('events', () => {
   /**
    * Demote a calendar event to a plain anchor-bound task.
    * Finds the linked task_id and PATCHes it with null times + anchorId + planDate.
-   * Optimistic: removes the event locally first.
+   *
+   * Optimistic (two-phase):
+   *   1. Remove the event from events.value immediately — calendar hides it at once.
+   *   2. Insert a stub task into planStore SYNCHRONOUSLY (before any await) so the
+   *      task appears in the anchor the moment the event disappears. The stub carries
+   *      the real task id, so fetchPlanRange's subsequent write reconciles by id.
+   *   3. Await the PATCH.
+   *   4. On any failure (thrown error OR non-ok response): remove the stub via
+   *      planStore.removeTaskFromPlans so the UI doesn't show stale phantom data.
+   *      We check resp.ok explicitly (not just catch) because a non-ok response
+   *      is a real failure — a stuck stub is more disorienting than a missing event.
+   *
+   * Note: on failure the event is NOT re-inserted into events.value (matching the
+   * convention of moveEvent/deleteEvent elsewhere in this store). The event will
+   * reappear on the next fetchEvents call. A phantom stub is more confusing than
+   * a temporarily missing event, which is why step 4 removes the stub but leaves
+   * the event removal in place.
    */
   async function demoteEvent(eventId: string, anchorId: string, planDate: string): Promise<void> {
     const ev = events.value.find(e => e.id === eventId)
@@ -147,14 +174,49 @@ export const useEventStore = defineStore('events', () => {
       console.warn('Cannot demote event with no task_id — skipping')
       return
     }
+
+    // Step 1 — optimistically remove event from calendar
     events.value = events.value.filter(e => e.id !== eventId)
+
+    // Step 2 — optimistically insert stub task into plan caches (synchronous, before any await)
+    const planStore = usePlanStore()
+    const stubTask = {
+      id: ev.task_id,
+      text: ev.title,
+      description: null,
+      status: 'pending' as const,
+      position: 0,
+      followup_config: null,
+      blocks: [] as string[],
+      blocked_by: [] as string[],
+      context_subject: ev.context_subject,
+      context_node_id: null,
+      start_time: null,
+      end_time: null,
+      anchor_id: anchorId,
+      plan_date: planDate,
+      rrule: null,
+      is_recurring_master: false,
+      color: ev.color,
+      motif: null,
+    }
+    planStore.insertStubTask(planDate, anchorId, stubTask)
+
+    // Step 3 — PATCH the task on the server
     try {
-      await api(`/api/tasks/${ev.task_id}`, {
+      const resp = await api(`/api/tasks/${ev.task_id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start_time: null, end_time: null, anchor_id: anchorId, plan_date: planDate }),
       })
-    } catch { /* ignore — optimistic update stays */ }
+      // Step 4a — non-ok response: roll back stub
+      if (!resp.ok) {
+        planStore.removeTaskFromPlans(ev.task_id)
+      }
+    } catch {
+      // Step 4b — network error: roll back stub
+      planStore.removeTaskFromPlans(ev.task_id)
+    }
   }
 
   /**

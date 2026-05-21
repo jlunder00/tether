@@ -1,11 +1,12 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, WebSocket, WebSocketDisconnect
 import asyncpg
 from db.pg_queries import get_last_bot_activity
 from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency, ws_auth_dependency
+from bot.agent_dispatch import dispatch_message
 from bot.message_handler import handle_message
 
 router = APIRouter()
@@ -46,6 +47,147 @@ async def bot_health(_auth=Depends(auth_dependency),
         age_min = float("inf")
     status = "ok" if age_min < 5 else "stale" if age_min < 30 else "offline"
     return {"status": status, "last_activity": activity}
+
+
+async def _resolve_user_from_webhook_header(request: Request, pool) -> str | None:
+    """Look up user_id from the X-Telegram-Bot-Api-Secret-Token header.
+
+    Uses hmac.compare_digest for the empty-secret guard (constant time).
+    Returns the user_id string if the secret resolves to a known user, else None.
+    This is a no-RLS auth-schema lookup (telegram_connections has no RLS).
+    """
+    import db.postgres as pg
+    import db.pg_auth_queries as pg_auth_queries
+
+    provided = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not provided:
+        return None
+
+    async with pg.get_conn(pool) as conn:
+        return await pg_auth_queries.get_user_by_webhook_secret(conn, provided)
+
+
+async def _process_telegram_update(
+    update: dict,
+    user_id: str,
+    pool,
+    vault,
+) -> None:
+    """Process a single Telegram Update dict for a known user.
+
+    Called as a BackgroundTask after the webhook endpoint resolves the user from
+    the X-Telegram-Bot-Api-Secret-Token header.
+
+    Non-message updates (edited_message, channel_post, etc.) are silently ignored.
+
+    First-message capture: if the user's telegram_chat_id is NULL, store
+    update.message.chat.id and reply "Connected to Tether." — no further
+    processing (the linking IS the action). Subsequent messages go to
+    handle_message() as normal.
+    """
+    from bot.message_handler import _send_telegram
+    import db.postgres as pg
+    import db.pg_auth_queries as pg_auth_queries
+
+    msg = update.get("message")
+    if not msg:
+        logger.debug("_process_telegram_update: no message field in update, skipping")
+        return
+
+    text = msg.get("text", "").strip()
+    if not text:
+        logger.debug("_process_telegram_update: empty text in message, skipping")
+        return
+
+    incoming_chat_id = str(msg.get("chat", {}).get("id", ""))
+    if not incoming_chat_id:
+        logger.warning("_process_telegram_update: no chat.id in update")
+        return
+
+    # Resolve per-user bot token for outbound messages.
+    # Falls back to None if not set — handle_message handles its own fallbacks.
+    fernet = getattr(vault, "_fernet", None) if vault else None
+    token: str | None = None
+    if fernet is not None:
+        try:
+            async with pg.get_conn(pool) as conn:
+                token = await pg_auth_queries.get_bot_token(conn, user_id, fernet)
+        except Exception as exc:
+            logger.warning(
+                "_process_telegram_update: could not fetch per-user bot token: %s", exc
+            )
+
+    if not token:
+        from config.loader import config as tether_config
+        token = tether_config.get("telegram.bot_token", "")
+
+    send_fn = lambda m, cid=incoming_chat_id: _send_telegram(token, cid, m)
+
+    # First-message capture: when telegram_chat_id is NULL, store it and
+    # reply "Connected to Tether." — simplified linking per Jason's override.
+    # No /link slash command, no 6-digit code needed.
+    try:
+        async with pg.get_conn(pool) as conn:
+            current_chat_id = await pg_auth_queries.get_telegram_chat_id(conn, user_id)
+    except Exception as exc:
+        logger.error(
+            "_process_telegram_update: get_telegram_chat_id failed user_id=%s: %s",
+            user_id, exc, exc_info=True,
+        )
+        return
+
+    if current_chat_id is None:
+        # First message — bind this chat_id to the user.
+        try:
+            async with pg.get_conn(pool) as conn:
+                await pg_auth_queries.auto_link_chat_id(conn, user_id, incoming_chat_id)
+            send_fn("Connected to Tether.")
+            logger.info(
+                "_process_telegram_update: first-message chat_id capture user_id=%s chat_id=%s",
+                user_id, incoming_chat_id,
+            )
+        except Exception as exc:
+            logger.error(
+                "_process_telegram_update: chat_id capture failed user_id=%s: %s",
+                user_id, exc, exc_info=True,
+            )
+        return
+
+    try:
+        await handle_message(text, send_fn=send_fn, pool=pool, user_id=user_id, vault=vault)
+    except Exception as exc:
+        logger.error("_process_telegram_update: handle_message raised: %s", exc, exc_info=True)
+        try:
+            send_fn(f"[Tether error: {exc}]")
+        except Exception:
+            pass
+
+
+@router.post("/bot/telegram-webhook")
+async def telegram_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    """Receive Telegram Update payloads (webhook mode).
+
+    Always responds 200 immediately — Telegram retries on non-200, so we must
+    never return an error status. Unknown/missing secrets are silently discarded.
+
+    Auth: X-Telegram-Bot-Api-Secret-Token header is used to resolve the user.
+    Lookup: SELECT user_id FROM telegram_connections WHERE webhook_secret = $1
+    (no-RLS auth-schema query). Processing happens in a BackgroundTask.
+    """
+    pool = request.app.state.pool
+    vault = getattr(request.app.state, "vault", None)
+
+    user_id = await _resolve_user_from_webhook_header(request, pool)
+    if user_id is None:
+        # Unknown or missing secret — discard silently.
+        return Response(status_code=200)
+
+    update = await request.json()
+    background_tasks.add_task(_process_telegram_update, update, user_id, pool, vault)
+    return Response(status_code=200)
 
 
 @router.websocket("/bot/chat")
@@ -91,6 +233,12 @@ async def bot_chat(websocket: WebSocket,
                 await websocket.send_json({"type": "error", "message": "Missing content"})
                 continue
 
+            # M2: read agent_version and dispatch to the correct pipeline.
+            # 1.0 → existing JSON-mutation pipeline; 2.0/2.5 → stub + 1.0 fallback.
+            # Unknown or missing versions default to tether-agent-2.0 (picker default).
+            agent_version = data.get("agent_version") or "tether-agent-2.0"
+            logger.info("bot_chat: agent_version=%s user_id=%s", agent_version, user_id)
+
             # Async status callback: called by the premium session's
             # send_status_update tool to push real-time progress frames.
             # If the WebSocket has gone away, log and re-raise so the session
@@ -118,7 +266,8 @@ async def bot_chat(websocket: WebSocket,
             # Run the session as a task so we can race it against an incoming
             # stop message without blocking the event loop.
             session_task = asyncio.create_task(
-                handle_message(
+                dispatch_message(
+                    agent_version,
                     content,
                     send_fn=capture_send_fn,
                     pool=pool,

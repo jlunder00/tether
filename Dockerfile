@@ -57,6 +57,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir supervisor
 
 # Application code
+COPY agent_pool_manager/ agent_pool_manager/
 COPY api/ api/
 COPY bot/ bot/
 COPY db/ db/
@@ -64,6 +65,7 @@ COPY shared/ shared/
 COPY tether_mcp/ tether_mcp/
 COPY sync/ sync/
 COPY integrations/ integrations/
+COPY interactive_agent_layer/ interactive_agent_layer/
 COPY config/ config/
 COPY prompts/ prompts/
 COPY cron/ cron/
@@ -83,6 +85,7 @@ COPY --from=frontend-build /build/dist/ frontend/dist/
 # Baked in as an env var so all services can report it at runtime.
 ARG TETHER_VERSION=dev
 ENV TETHER_VERSION=${TETHER_VERSION}
+ENV TETHER_CONFIG_DIR=/home/tether/.tether-config
 
 # ── Optional premium layer ────────────────────────────────
 # PREMIUM_GIT_TOKEN: GitHub PAT with repo access to tether-premium.

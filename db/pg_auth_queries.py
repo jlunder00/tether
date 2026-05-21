@@ -8,6 +8,7 @@ import uuid as _uuid
 from datetime import datetime, timezone
 
 import asyncpg
+from cryptography.fernet import Fernet
 
 
 def _row(row: asyncpg.Record | None) -> dict | None:
@@ -225,3 +226,207 @@ async def verify_and_consume_link_code(
         code,
     )
     return row["telegram_chat_id"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Per-user bot token helpers (Phase 1 — per-user Telegram migration)
+# ---------------------------------------------------------------------------
+
+async def auto_link_chat_id(
+    conn: asyncpg.Connection, user_id: str, chat_id: str
+) -> bool:
+    """Bind chat_id to the polling user ONLY when no real binding exists.
+
+    Unlike set_telegram_connection (UPSERT), this UPDATE only fires when
+    telegram_chat_id is NULL or the empty-string placeholder. This prevents
+    a stranger's inbound message from overwriting a legitimate binding.
+
+    Returns True if the row was updated, False if a binding already existed.
+    """
+    result = await conn.execute(
+        """
+        UPDATE telegram_connections
+        SET telegram_chat_id = $1
+        WHERE user_id = $2
+          AND (telegram_chat_id IS NULL OR telegram_chat_id = '')
+        """,
+        chat_id,
+        _uuid.UUID(user_id),
+    )
+    # result is e.g. "UPDATE 1" or "UPDATE 0"
+    return result.endswith("1")
+
+
+async def store_bot_token(
+    conn: asyncpg.Connection, user_id: str, fernet: Fernet, raw_token: str
+) -> None:
+    """Fernet-encrypt raw_token and store in telegram_connections.bot_token_encrypted.
+
+    Requires the user to already have a row in telegram_connections (inserted
+    when telegram_chat_id is first captured). Uses UPDATE rather than upsert
+    to make it explicit that the caller must have a connection row first.
+    """
+    blob: bytes = fernet.encrypt(raw_token.encode())
+    await conn.execute(
+        "UPDATE telegram_connections SET bot_token_encrypted = $1 WHERE user_id = $2",
+        blob,
+        _uuid.UUID(user_id),
+    )
+
+
+async def get_bot_token(
+    conn: asyncpg.Connection, user_id: str, fernet: Fernet
+) -> str | None:
+    """Fetch and decrypt the per-user bot token.
+
+    Returns None if the user has no telegram_connections row, or if
+    bot_token_encrypted is NULL (user hasn't registered a personal bot yet).
+    """
+    row = await conn.fetchrow(
+        "SELECT bot_token_encrypted FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    if row is None or row["bot_token_encrypted"] is None:
+        return None
+    return fernet.decrypt(bytes(row["bot_token_encrypted"])).decode()
+
+
+async def get_user_by_webhook_secret(
+    conn: asyncpg.Connection, webhook_secret: str
+) -> str | None:
+    """Look up user_id from the webhook_secret stored at bot registration time.
+
+    This is a no-RLS auth-schema query — do NOT pass a scoped connection.
+    Returns the user_id as a plain string (UUID format), or None if not found.
+    """
+    row = await conn.fetchrow(
+        "SELECT user_id FROM telegram_connections WHERE webhook_secret = $1",
+        webhook_secret,
+    )
+    if row is None:
+        return None
+    return str(row["user_id"])
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — bot token registration endpoints
+# ---------------------------------------------------------------------------
+
+async def upsert_telegram_bot_token(
+    conn: asyncpg.Connection,
+    user_id: str,
+    fernet: Fernet,
+    raw_token: str,
+    webhook_secret: str,
+) -> None:
+    """Fernet-encrypt raw_token and upsert into telegram_connections.
+
+    Handles both:
+    - New user who hasn't linked Telegram yet (inserts with NULL telegram_chat_id —
+      requires the d9e0f1a2b3c4 migration making that column nullable).
+    - Existing user updating their bot token (ON CONFLICT preserves chat_id).
+    """
+    blob: bytes = fernet.encrypt(raw_token.encode())
+    await conn.execute(
+        """
+        INSERT INTO telegram_connections (user_id, bot_token_encrypted, webhook_secret)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id) DO UPDATE
+            SET bot_token_encrypted = EXCLUDED.bot_token_encrypted,
+                webhook_secret      = EXCLUDED.webhook_secret
+        """,
+        _uuid.UUID(user_id),
+        blob,
+        webhook_secret,
+    )
+
+
+async def get_telegram_bot_row(
+    conn: asyncpg.Connection, user_id: str
+) -> dict | None:
+    """Return the telegram_connections row for this user, or None if absent."""
+    row = await conn.fetchrow(
+        "SELECT bot_token_encrypted, webhook_secret FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    return _row(row)
+
+
+async def clear_telegram_bot_token(
+    conn: asyncpg.Connection, user_id: str
+) -> None:
+    """Clear bot_token_encrypted and webhook_secret for this user.
+
+    Does nothing (no error) if the user has no telegram_connections row.
+    """
+    await conn.execute(
+        """
+        UPDATE telegram_connections
+           SET bot_token_encrypted = NULL,
+               webhook_secret      = NULL
+         WHERE user_id = $1
+        """,
+        _uuid.UUID(user_id),
+    )
+
+
+async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None:
+    """Return the user with the most recent telegram link or message turn.
+
+    'Most recent' = latest created_at in telegram_connections (for users who have a telegram_chat_id set).
+    Falls back to users ordered by conversation_history recency if available.
+
+    Returns dict with 'id' (str UUID) and 'telegram_chat_id' (str), or None.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT u.id, tc.telegram_chat_id
+        FROM users u
+        JOIN telegram_connections tc ON tc.user_id = u.id
+        WHERE tc.telegram_chat_id IS NOT NULL
+          AND tc.telegram_chat_id != ''
+        ORDER BY tc.created_at DESC NULLS LAST
+        LIMIT 1
+        """
+    )
+    if row is None:
+        return None
+    return {"id": str(row["id"]), "telegram_chat_id": row["telegram_chat_id"]}
+
+
+async def get_users_with_webhook(
+    conn: asyncpg.Connection,
+) -> list[dict]:
+    """Return all users that have both bot_token_encrypted AND webhook_secret set.
+
+    Used at startup to register per-user webhooks with Telegram.
+    Returns a list of dicts with keys: user_id, bot_token_encrypted, webhook_secret.
+    This is a no-RLS auth-schema query — do NOT pass a scoped connection.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT user_id, bot_token_encrypted, webhook_secret
+        FROM telegram_connections
+        WHERE bot_token_encrypted IS NOT NULL
+          AND webhook_secret IS NOT NULL
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_telegram_chat_id(
+    conn: asyncpg.Connection, user_id: str
+) -> str | None:
+    """Return telegram_chat_id for the given user, or None if not set.
+
+    Used by the webhook receive path to check whether this is a first-message
+    (chat_id not yet captured) or a returning user.
+    """
+    row = await conn.fetchrow(
+        "SELECT telegram_chat_id FROM telegram_connections WHERE user_id = $1",
+        _uuid.UUID(user_id),
+    )
+    if row is None:
+        return None
+    chat_id = row["telegram_chat_id"]
+    return chat_id if chat_id else None

@@ -53,7 +53,7 @@
 
 set -euo pipefail
 
-CONFIG_DIR="${TETHER_CONFIG_DIR:-/root/.tether-config}"
+CONFIG_DIR="${TETHER_CONFIG_DIR:-/home/tether/.tether-config}"
 mkdir -p "$CONFIG_DIR"
 
 _fetch() {

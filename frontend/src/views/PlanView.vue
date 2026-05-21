@@ -131,7 +131,11 @@ async function onAnchorDrop(e: DragEvent, anchorId: string) {
         ?? eventStore.events.find(e => e.id === taskId)
       if (!ev) return
       await eventStore.demoteEvent(ev.id, anchorId, activeDate.value)
-      await planStore.fetchPlan(activeDate.value)
+      // Sym 2 fix: fetchPlanRange does not flip loading=true, so PlanView's
+      // v-if="planStore.loading" grid guard is not triggered — no remount/flash.
+      // fetchPlanRange now also syncs plan.value (sym 1 fix in plan.ts), so
+      // AnchorBlocks reading store.plan see the demoted task immediately.
+      await planStore.fetchPlanRange(activeDate.value, activeDate.value)
     } else if (data.type === 'task' && data.taskId && !data.fromStartTime) {
       // Plain task backstop — fires when drop lands on the .anchor-rail gutter or
       // CSS grid gap (areas with no AnchorBlock drop zone). AnchorBlock content-area

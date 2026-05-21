@@ -1,14 +1,22 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted } from 'vue'
 import { useChatStore } from '../stores/chat'
+import { useAgentPickerStore } from '../stores/agentPicker'
 import MessageBubble from './MessageBubble.vue'
+import AgentPicker from './AgentPicker.vue'
+import PermissionModal from './PermissionModal.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
 const chatStore = useChatStore()
+const agentPickerStore = useAgentPickerStore()
 const draft = ref('')
 const scrollEl = ref<HTMLDivElement | null>(null)
 const isAtBottom = ref(true)
+
+onMounted(() => {
+  agentPickerStore.fetchPreference()
+})
 
 async function onSubmit() {
   const text = draft.value.trim()
@@ -47,6 +55,7 @@ function onKeydown(e: KeyboardEvent) {
         title="Bot status"
       />
       <span class="font-semibold text-sm text-[--fg-1]">Tether</span>
+      <AgentPicker class="ml-2" />
       <button
         class="ml-auto text-[--fg-4] hover:text-[--fg-1] transition-colors p-1"
         aria-label="Close chat"
@@ -69,6 +78,9 @@ function onKeydown(e: KeyboardEvent) {
       <p v-if="chatStore.messages.length === 0" class="text-xs text-[--fg-5] text-center pt-8">
         Send a message to start chatting.
       </p>
+      <p v-if="chatStore.statusMessage" class="text-xs text-[--fg-4] text-center animate-pulse">
+        {{ chatStore.statusMessage }}
+      </p>
     </div>
 
     <!-- Composer -->
@@ -84,6 +96,15 @@ function onKeydown(e: KeyboardEvent) {
         @keydown.enter.exact.prevent="onSubmit"
       />
       <button
+        v-if="chatStore.isSessionActive"
+        type="button"
+        aria-label="Interrupt"
+        class="text-xs px-3 rounded-lg bg-[--status-block-fg]/20 text-[--status-block-fg] hover:bg-[--status-block-fg]/30 transition-colors self-end py-2"
+        @click="chatStore.sendInterrupt()"
+      >
+        Stop
+      </button>
+      <button
         type="submit"
         :disabled="chatStore.isStreaming || !draft.trim()"
         class="text-xs px-3 rounded-lg bg-[--bg-elev-2] text-[--fg-2] hover:bg-[--bg-elev-3] disabled:opacity-30 transition-colors self-end py-2"
@@ -91,5 +112,6 @@ function onKeydown(e: KeyboardEvent) {
         Send
       </button>
     </form>
+    <PermissionModal />
   </div>
 </template>

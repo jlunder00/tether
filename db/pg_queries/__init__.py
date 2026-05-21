@@ -73,4 +73,5 @@ from db.pg_queries.beacon import (
 )
 from db.pg_queries.subscriptions import (
     get_user_is_paid,
+    get_user_is_paid_by_id,
 )

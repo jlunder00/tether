@@ -13,10 +13,23 @@ pipeline:
   max_planning_rounds: 4
   max_repair_attempts: 3
   max_satisfaction_retries: 2
+  classifier_timeout_seconds: 45
 
 server:
   api_port: 8000
   mcp_port: 5001
+  pool_port: 5002
+
+agent_pool:
+  target_depth_per_hash: 2      # warm subprocesses per options_hash partition
+  capacity_total: 8             # max subprocesses across all partitions (warm+active+warming)
+  max_age_seconds: 600          # TTL — subprocess drained on next acquire if exceeded
+  refill_poll_interval: 2       # seconds between refill loop checks
+  prime_timeout_seconds: 30     # max seconds to wait for a priming response
+  acquire_default_timeout: 10   # default acquire timeout when caller omits timeout_seconds
+  base_url: "http://127.0.0.1:5002"  # override for remote pool deployments
+  enabled: true                 # false = callers fall back to direct spawn (local dev)
+  control_response_timeout_seconds: 60  # seconds pool waits for control_response before denying
 
 llm:
   use_v3: false
@@ -35,3 +48,24 @@ telegram:
   # local config override dir. Pi deployments override via TETHER_CONFIG_DIR.
   bot_token: "${TELEGRAM_BOT_TOKEN:-}"
   chat_id: "${TELEGRAM_CHAT_ID:-}"
+
+  # Webhook mode (Fly.io / any public HTTPS deployment):
+  # Set TELEGRAM_WEBHOOK_URL to enable webhook mode instead of long-polling.
+  # When set, the API server registers the webhook with Telegram on startup
+  # and the supervisord bot process is replaced with a no-op sleep.
+  # When unset (default), polling mode is used — compatible with Pi / local dev.
+  #
+  # Required Fly secrets when using webhook mode:
+  #   TELEGRAM_WEBHOOK_URL     — e.g. https://your-app.fly.dev/api/bot/telegram-webhook
+  #   TELEGRAM_WEBHOOK_SECRET  — random string shared between Telegram and your server
+
+agent_layer:
+  base_url: "http://127.0.0.1:5003"
+  enabled: true
+  permission_timeout_seconds: 60
+  auto_approve_user_actions: false
+  trial_monthly_quota: 10
+  leaky_providers:
+    - openrouter
+    - openai
+  dev_mode_show_raw_tools: false

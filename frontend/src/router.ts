@@ -36,6 +36,7 @@ const router = createRouter({
     { path: '/context', name: 'context', component: () => import('./components/ContextEditor.vue') },
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
     { path: '/kanban', name: 'kanban', component: () => import('./views/KanbanView.vue') },
+    { path: '/chat', name: 'chat', component: () => import('./views/ChatPageView.vue') },
     { path: '/', redirect: '/dashboard' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],

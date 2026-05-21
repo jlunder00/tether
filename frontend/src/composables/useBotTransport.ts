@@ -1,6 +1,8 @@
 export interface BotTransport {
-  /** Send user text; yields content chunks as they arrive. */
-  send(text: string): AsyncIterable<string>
+  /** Send user text with the selected agent version; yields typed WS events as they arrive. */
+  send(text: string, agentVersion: string): AsyncIterable<import('../types/chat').WsIncomingEvent>
+  /** Send a raw message on the underlying connection (permission_response, interrupt). No-op if closed. */
+  sendRaw(msg: object): void
   /** Subscribe to heartbeat changes. Returns an unsubscribe fn. */
   onHeartbeat(cb: (alive: boolean) => void): () => void
   /** Close any underlying connection. */
@@ -8,8 +10,10 @@ export interface BotTransport {
 }
 
 export function createMockTransport(): BotTransport {
-  async function* send(text: string): AsyncIterable<string> {
-    yield `Echo: ${text}\n\nThis is a **mocked** response.`
+  async function* send(text: string, _agentVersion: string) {
+    const body = `Echo: ${text}\n\nThis is a **mocked** response.`
+    yield { type: 'agent_text_delta' as const, session_id: 'mock', delta: body }
+    yield { type: 'turn_complete' as const, session_id: 'mock', final_text: body }
   }
 
   let aliveCb: ((a: boolean) => void) | null = null
@@ -17,6 +21,7 @@ export function createMockTransport(): BotTransport {
 
   return {
     send,
+    sendRaw(_msg: object) { /* no-op in mock */ },
     onHeartbeat(cb) {
       aliveCb = cb
       cb(true)
@@ -96,7 +101,7 @@ export function createWebSocketTransport(): BotTransport {
   }
 
   return {
-    async *send(text: string) {
+    async *send(text: string, agentVersion: string) {
       // C1: don't send until the socket has opened.
       await openPromise
 
@@ -104,7 +109,7 @@ export function createWebSocketTransport(): BotTransport {
       // sends don't steal each other's chunks via the shared `incoming` queue.
       const localQueue: MessageEvent[] = incoming.splice(0)
 
-      ws.send(JSON.stringify({ type: 'user', content: text }))
+      ws.send(JSON.stringify({ type: 'user', content: text, agent_version: agentVersion }))
 
       // C2: each recv registers both resolve and reject, so onerror/onclose
       // can break us out of this loop.
@@ -116,8 +121,15 @@ export function createWebSocketTransport(): BotTransport {
           pendingReject = reject
         })
         const msg = JSON.parse(evt.data)
-        if (msg.type === 'chunk') yield msg.content
-        if (msg.type === 'done') return
+        yield msg
+        // Terminate the turn on terminal events.
+        if (msg.type === 'turn_complete' || msg.type === 'session_ended') return
+      }
+    },
+
+    sendRaw(msg: object) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg))
       }
     },
 

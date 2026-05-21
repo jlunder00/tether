@@ -7,6 +7,14 @@ Tests cover:
 - Timeout error — user-friendly message, connection kept alive
 - Session error recovery — error+done frame, connection stays open
 - WebSocket disconnect cleanup
+
+All user messages in this file explicitly set agent_version="tether-agent-1.0" so
+they go through the 1.0 path with no stub prepended.  Dispatch routing tests for
+2.0/2.5/missing are in tests/api/test_agent_dispatch_ws.py.
+
+Patches target bot.agent_dispatch.handle_message (the reference used by the
+dispatch layer) rather than api.routes.bot.handle_message (which is only used
+by the Telegram path, not by the WS dispatch layer).
 """
 from __future__ import annotations
 
@@ -30,7 +38,7 @@ TEST_USERNAME = "ws_test_user"
 
 
 class _FakePool:
-    """Minimal pool stub — bot_chat only uses it inside handle_message, which we mock."""
+    """Minimal pool stub — bot_chat only uses it inside dispatch/handle_message, which we mock."""
     pass
 
 
@@ -92,13 +100,13 @@ def test_bot_ws_valid_cookie_accepted():
         send_fn("pong")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "ping"})
+                ws.send_json({"type": "user", "content": "ping", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 assert chunk["content"] == "pong"
@@ -114,13 +122,13 @@ def test_bot_ws_none_response_skips_chunk():
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
         return None  # send_fn not called — empty response
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "hello"})
+                ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
                 done = ws.receive_json()
                 assert done["type"] == "done"
 
@@ -147,13 +155,13 @@ def test_status_messages_pushed_immediately():
         send_fn("final answer")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_with_status):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_with_status):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "plan my day"})
+                ws.send_json({"type": "user", "content": "plan my day", "agent_version": "tether-agent-1.0"})
 
                 status = ws.receive_json()
                 assert status["type"] == "status"
@@ -179,13 +187,13 @@ def test_multiple_status_messages_in_order():
         send_fn("done planning")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_multi_status):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_multi_status):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "plan"})
+                ws.send_json({"type": "user", "content": "plan", "agent_version": "tether-agent-1.0"})
 
                 s1 = ws.receive_json()
                 assert s1 == {"type": "status", "content": "Step 1: Reading tasks"}
@@ -225,13 +233,13 @@ def test_stop_message_cancels_session():
             raise
         return "this should never arrive"
 
-    with patch("api.routes.bot.handle_message", new=fake_long_session):
+    with patch("bot.agent_dispatch.handle_message", new=fake_long_session):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "plan my week"})
+                ws.send_json({"type": "user", "content": "plan my week", "agent_version": "tether-agent-1.0"})
                 ws.send_json({"type": "stop"})
 
                 status = ws.receive_json()
@@ -255,7 +263,7 @@ def test_idle_stop_ignored():
         send_fn("ok")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
@@ -265,7 +273,7 @@ def test_idle_stop_ignored():
                 ws.send_json({"type": "stop"})
 
                 # Now send a real user message — should still work normally
-                ws.send_json({"type": "user", "content": "hello"})
+                ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 done = ws.receive_json()
@@ -285,19 +293,19 @@ def test_missing_content_sends_error_keeps_connection():
         send_fn("ok")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user"})  # missing content
+                ws.send_json({"type": "user"})  # missing content — intentionally no agent_version
                 error = ws.receive_json()
                 assert error["type"] == "error"
                 assert "missing" in error["message"].lower() or "content" in error["message"].lower()
 
                 # Connection must still be alive — can send another message
-                ws.send_json({"type": "user", "content": "retry"})
+                ws.send_json({"type": "user", "content": "retry", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 done = ws.receive_json()
@@ -327,14 +335,14 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
         send_fn("recovered response")
         return None
 
-    with patch("api.routes.bot.handle_message", new=handle_first_timeouts_second_ok):
+    with patch("bot.agent_dispatch.handle_message", new=handle_first_timeouts_second_ok):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
                 # First message — triggers timeout
-                ws.send_json({"type": "user", "content": "plan my week"})
+                ws.send_json({"type": "user", "content": "plan my week", "agent_version": "tether-agent-1.0"})
                 error_msg = ws.receive_json()
                 assert error_msg["type"] == "error"
                 msg_lower = error_msg["message"].lower()
@@ -345,7 +353,7 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
                 assert done["type"] == "done"
 
                 # Second message — proves loop continued (connection still alive)
-                ws.send_json({"type": "user", "content": "try again"})
+                ws.send_json({"type": "user", "content": "try again", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 assert chunk["content"] == "recovered response"
@@ -369,20 +377,20 @@ def test_session_error_sends_error_keeps_connection():
         send_fn("recovered")
         return None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_that_raises):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_that_raises):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "first message"})
+                ws.send_json({"type": "user", "content": "first message", "agent_version": "tether-agent-1.0"})
                 error = ws.receive_json()
                 assert error["type"] == "error"
                 done = ws.receive_json()
                 assert done["type"] == "done"
 
                 # Connection must still be alive — next message works
-                ws.send_json({"type": "user", "content": "second message"})
+                ws.send_json({"type": "user", "content": "second message", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 assert chunk["content"] == "recovered"
@@ -415,13 +423,13 @@ def test_disconnect_cancels_session_task():
             raise
         return "unreachable"
 
-    with patch("api.routes.bot.handle_message", new=fake_long_session):
+    with patch("bot.agent_dispatch.handle_message", new=fake_long_session):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "plan my day"})
+                ws.send_json({"type": "user", "content": "plan my day", "agent_version": "tether-agent-1.0"})
                 # Wait until the session is running before disconnecting
                 session_started.wait(timeout=3)
             # Exiting the `with ws` block closes the WebSocket
@@ -448,13 +456,13 @@ def test_send_fn_response_delivered_as_chunk():
         send_fn("hello from send_fn")
         return None  # real handle_message always returns None
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "ping"})
+                ws.send_json({"type": "user", "content": "ping", "agent_version": "tether-agent-1.0"})
                 chunk = ws.receive_json()
                 assert chunk["type"] == "chunk"
                 assert chunk["content"] == "hello from send_fn"
@@ -470,12 +478,12 @@ def test_no_send_fn_call_skips_chunk():
     async def fake_handle_message(content, send_fn, pool, user_id, vault=None, status_fn=None):
         return None  # never calls send_fn
 
-    with patch("api.routes.bot.handle_message", new=fake_handle_message):
+    with patch("bot.agent_dispatch.handle_message", new=fake_handle_message):
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
                 cookies={"tether_token": token},
             ) as ws:
-                ws.send_json({"type": "user", "content": "hello"})
+                ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
                 done = ws.receive_json()
                 assert done["type"] == "done"
