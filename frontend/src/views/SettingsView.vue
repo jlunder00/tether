@@ -8,6 +8,7 @@ import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
 import ApiKeysSection from '../components/ApiKeysSection.vue'
 import ICalSection from '../components/ICalSection.vue'
+import AgentBehaviorSection from '../components/AgentBehaviorSection.vue'
 
 const auth = useAuthStore()
 
@@ -386,6 +387,9 @@ async function linkTelegram() {
           </p>
         </div>
       </section>
+
+      <!-- Agent Behaviour -->
+      <AgentBehaviorSection />
 
       <!-- LLM Configuration -->
       <section v-if="llmConfig" class="mb-8">
