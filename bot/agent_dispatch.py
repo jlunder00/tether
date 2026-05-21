@@ -80,12 +80,15 @@ async def _dispatch_v2_0(
     user_id: str,
     vault: Any = None,
     status_fn: Any = None,
+    event_fn: Any = None,
 ) -> None:
     """Run the tether-agent-2.0 pipeline via the interactive-agent-layer.
 
-    Starts a layer session, runs one turn, forwards status/action events to the
-    WS client via status_fn, and delivers the final response via send_fn when
-    turn_complete arrives.
+    Starts a layer session, runs one turn, and routes events:
+    - agent_text_delta / unknown event types → event_fn (async, for direct WS
+      forwarding; skips send_fn at turn_complete if any delta was sent)
+    - status / agent_action → status_fn
+    - turn_complete → send_fn(final_text) unless deltas were already streamed
 
     Falls back to handle_message (1.0 pipeline) when:
     - agent_layer.enabled is false in config
@@ -107,6 +110,7 @@ async def _dispatch_v2_0(
     base_url: str = config.get("agent_layer.base_url", "http://127.0.0.1:5003")
     layer = LayerClient(base_url)
     session_id: str | None = None
+    delta_sent = False
 
     try:
         session_id = await layer.start_session(
@@ -121,18 +125,28 @@ async def _dispatch_v2_0(
             etype = event.get("type")
 
             if etype == "turn_complete":
-                send_fn(event.get("final_text", ""))
+                if not delta_sent:
+                    send_fn(event.get("final_text", ""))
                 break
 
-            if status_fn is not None:
-                if etype == "status":
-                    msg = event.get("message", "")
-                    if msg:
-                        await status_fn(msg)
-                elif etype == "agent_action":
-                    action = event.get("action", "")
-                    if action:
-                        await status_fn(action)
+            if etype in ("status", "agent_action"):
+                if status_fn is not None:
+                    if etype == "status":
+                        msg = event.get("message", "")
+                        if msg:
+                            await status_fn(msg)
+                    else:
+                        action = event.get("action", "")
+                        if action:
+                            await status_fn(action)
+                continue
+
+            # agent_text_delta, permission_request, and any future event types
+            # are forwarded via event_fn for direct WS delivery.
+            if event_fn is not None:
+                await event_fn(event)
+                if etype == "agent_text_delta" and event.get("delta"):
+                    delta_sent = True
 
     except asyncio.CancelledError:
         if session_id is not None:
@@ -164,6 +178,7 @@ async def dispatch_message(
     user_id: str,
     vault: Any = None,
     status_fn: Any = None,
+    event_fn: Any = None,
 ) -> None:
     """Dispatch a user message to the correct pipeline based on agent_version.
 
@@ -182,6 +197,8 @@ async def dispatch_message(
         user_id: Authenticated user ID.
         vault: Optional credential vault for per-user LLM auth.
         status_fn: Optional async callback for real-time status pushes.
+        event_fn: Optional async callback for streamed layer events (text deltas,
+            permission requests, etc.) forwarded directly to the WS client.
     """
     version = agent_version if agent_version in _KNOWN_VERSIONS else _DEFAULT_VERSION
     if version != agent_version:
@@ -197,7 +214,10 @@ async def dispatch_message(
         return
 
     if version == "tether-agent-2.0":
-        await _dispatch_v2_0(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+        await _dispatch_v2_0(
+            text, send_fn, pool, user_id,
+            vault=vault, status_fn=status_fn, event_fn=event_fn,
+        )
         return
 
     # tether-agent-2.5 — stub until premium-pipeline-migrator wires the real path

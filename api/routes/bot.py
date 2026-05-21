@@ -254,6 +254,29 @@ async def bot_chat(websocket: WebSocket,
                     )
                     raise  # Let the session task propagate disconnect to the outer handler
 
+            # Async event callback for streamed layer events (text deltas,
+            # permission requests, etc.). agent_text_delta events are sent
+            # immediately as chunk frames so the browser can render them
+            # incrementally. Other event types are forwarded as-is.
+            # When any delta is sent, dispatch skips the final send_fn call
+            # at turn_complete to prevent duplicating the response content.
+            async def event_fn(event: dict) -> None:
+                try:
+                    etype = event.get("type")
+                    if etype == "agent_text_delta":
+                        delta = event.get("delta", "")
+                        if delta:
+                            await websocket.send_json({"type": "chunk", "content": delta})
+                    else:
+                        await websocket.send_json(event)
+                except Exception as e:
+                    logger.debug(
+                        "bot_chat: event_fn send failed (client likely disconnected),"
+                        " user_id=%s: %s",
+                        user_id, e,
+                    )
+                    raise
+
             # Capture responses delivered via send_fn. handle_message always
             # calls send_fn(final) and returns None — the return value is not
             # used for response delivery. This list is local to each message
@@ -274,6 +297,7 @@ async def bot_chat(websocket: WebSocket,
                     user_id=user_id,
                     vault=getattr(websocket.app.state, "vault", None),
                     status_fn=status_fn,
+                    event_fn=event_fn,
                 )
             )
 

@@ -56,7 +56,12 @@ class LayerClient:
         return resp.json()
 
     async def turn(self, session_id: str, prompt: str) -> AsyncIterator[dict]:
-        """Stream SSE events from the layer. Yields parsed dicts."""
+        """Stream SSE events from the layer. Yields parsed dicts incrementally.
+
+        Events are yielded as complete SSE blocks arrive — no full-response
+        buffering. Incomplete blocks are held in the buffer until the next
+        chunk completes them or the stream closes.
+        """
         async with self.client.stream(
             "POST",
             f"{self.base_url}/session/{session_id}/turn",
@@ -66,7 +71,14 @@ class LayerClient:
             buffer = ""
             async for chunk in resp.aiter_text():
                 buffer += chunk
-            for block in buffer.split("\n\n"):
-                for line in block.splitlines():
+                # Drain all complete SSE blocks (separated by blank lines).
+                while "\n\n" in buffer:
+                    block, buffer = buffer.split("\n\n", 1)
+                    for line in block.splitlines():
+                        if line.startswith("data: "):
+                            yield json.loads(line[6:])
+            # Flush any trailing block not terminated by a blank line.
+            if buffer.strip():
+                for line in buffer.splitlines():
                     if line.startswith("data: "):
                         yield json.loads(line[6:])

@@ -88,8 +88,23 @@ def _make_layer_constructor(*, events=None, raise_on_start=None):
 def _dispatch_via_ws(user_message: dict, extra_patches=None) -> tuple[dict, dict]:
     """Run a single user message through bot_chat and return (chunk, done) frames.
 
+    For non-streaming responses only (one chunk + done). Use _dispatch_via_ws_all
+    when testing streaming (multiple chunk frames before done).
+
     extra_patches: list of (target, mock) tuples for additional patch.object calls.
     """
+    frames = _dispatch_via_ws_all(user_message, extra_patches=extra_patches)
+    chunks = [f for f in frames if f["type"] == "chunk"]
+    dones = [f for f in frames if f["type"] == "done"]
+    # Collapse multiple chunks into one for backward compat with existing tests
+    if len(chunks) > 1:
+        combined = "\n\n".join(c["content"] for c in chunks)
+        return {"type": "chunk", "content": combined}, dones[0]
+    return chunks[0] if chunks else {"type": "chunk", "content": ""}, dones[0]
+
+
+def _dispatch_via_ws_all(user_message: dict, extra_patches=None) -> list[dict]:
+    """Run a single user message through bot_chat and return ALL frames received until done."""
     from starlette.testclient import TestClient
 
     app = _make_app()
@@ -110,9 +125,13 @@ def _dispatch_via_ws(user_message: dict, extra_patches=None) -> tuple[dict, dict
                 cookies={"tether_token": token},
             ) as ws:
                 ws.send_json({"type": "user", "content": "hello", **user_message})
-                chunk = ws.receive_json()
-                done = ws.receive_json()
-    return chunk, done
+                frames: list[dict] = []
+                while True:
+                    frame = ws.receive_json()
+                    frames.append(frame)
+                    if frame.get("type") == "done":
+                        break
+    return frames
 
 
 def _assert_stub_present(content: str, version_suffix: str) -> None:
@@ -212,3 +231,63 @@ def test_ws_missing_agent_version_defaults_to_2_0_layer_path():
     assert chunk["content"] == "1.0-response"
     assert "coming soon" not in chunk["content"].lower()
     assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# tether-agent-2.0 — streaming text deltas via event_fn
+# ---------------------------------------------------------------------------
+
+def test_ws_2_0_text_deltas_arrive_as_chunk_frames():
+    """agent_text_delta events must arrive as individual chunk frames before done."""
+    events = [
+        {"type": "agent_text_delta", "session_id": "sid-ws", "delta": "Hello"},
+        {"type": "agent_text_delta", "session_id": "sid-ws", "delta": " world"},
+        {"type": "turn_complete", "session_id": "sid-ws", "final_text": "Hello world", "tokens_used": 5},
+    ]
+    constructor, _client = _make_layer_constructor(events=events)
+    frames = _dispatch_via_ws_all(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    chunk_frames = [f for f in frames if f["type"] == "chunk"]
+    done_frames = [f for f in frames if f["type"] == "done"]
+
+    assert len(chunk_frames) == 2, "two delta events must produce two chunk frames"
+    assert chunk_frames[0]["content"] == "Hello"
+    assert chunk_frames[1]["content"] == " world"
+    assert len(done_frames) == 1
+
+
+def test_ws_2_0_no_duplicate_chunk_after_streaming():
+    """When deltas are streamed, final_text must NOT be sent as an extra chunk frame."""
+    events = [
+        {"type": "agent_text_delta", "session_id": "sid-ws", "delta": "Hi"},
+        {"type": "turn_complete", "session_id": "sid-ws", "final_text": "Hi", "tokens_used": 2},
+    ]
+    constructor, _client = _make_layer_constructor(events=events)
+    frames = _dispatch_via_ws_all(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    chunk_frames = [f for f in frames if f["type"] == "chunk"]
+    # Only one delta chunk — no duplicate final_text chunk
+    assert len(chunk_frames) == 1
+    assert chunk_frames[0]["content"] == "Hi"
+
+
+def test_ws_2_0_non_streaming_still_sends_final_chunk():
+    """When no deltas arrive, final_text must still arrive as a single chunk frame."""
+    events = [
+        {"type": "turn_complete", "session_id": "sid-ws", "final_text": "All at once", "tokens_used": 4},
+    ]
+    constructor, _client = _make_layer_constructor(events=events)
+    frames = _dispatch_via_ws_all(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    chunk_frames = [f for f in frames if f["type"] == "chunk"]
+    assert len(chunk_frames) == 1
+    assert chunk_frames[0]["content"] == "All at once"

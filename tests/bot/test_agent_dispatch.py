@@ -314,6 +314,135 @@ async def test_dispatch_2_0_end_session_called_on_http_error():
 
 
 # ---------------------------------------------------------------------------
+# 2.0 event_fn — text delta streaming
+# ---------------------------------------------------------------------------
+
+async def test_dispatch_2_0_text_deltas_forwarded_via_event_fn():
+    """agent_text_delta events must be forwarded to event_fn."""
+    events = [
+        {"type": "agent_text_delta", "session_id": "sid-1", "delta": "Hello"},
+        {"type": "agent_text_delta", "session_id": "sid-1", "delta": " world"},
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "Hello world", "tokens_used": 5},
+    ]
+    constructor, _client = _make_layer_client(events=events)
+    event_calls: list[dict] = []
+
+    async def fake_event_fn(event: dict) -> None:
+        event_calls.append(event)
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+            event_fn=fake_event_fn,
+        )
+
+    delta_events = [e for e in event_calls if e.get("type") == "agent_text_delta"]
+    assert len(delta_events) == 2, "both text deltas must be forwarded"
+    assert delta_events[0]["delta"] == "Hello"
+    assert delta_events[1]["delta"] == " world"
+
+
+async def test_dispatch_2_0_send_fn_skipped_when_deltas_sent():
+    """When agent_text_delta events are streamed, send_fn must NOT be called at turn_complete."""
+    events = [
+        {"type": "agent_text_delta", "session_id": "sid-1", "delta": "Hi"},
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "Hi", "tokens_used": 2},
+    ]
+    constructor, _client = _make_layer_client(events=events)
+
+    async def noop_event_fn(event: dict) -> None:
+        pass
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+            event_fn=noop_event_fn,
+        )
+
+    assert sent_parts == [], "send_fn must not be called when deltas were already streamed"
+
+
+async def test_dispatch_2_0_send_fn_used_when_no_deltas():
+    """When no agent_text_delta events arrive, send_fn must receive final_text at turn_complete."""
+    events = [
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "All at once", "tokens_used": 5},
+    ]
+    constructor, _client = _make_layer_client(events=events)
+
+    async def noop_event_fn(event: dict) -> None:
+        pass
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+            event_fn=noop_event_fn,
+        )
+
+    assert sent_parts == ["All at once"], "send_fn must be called when no deltas were streamed"
+
+
+async def test_dispatch_2_0_unknown_events_forwarded_via_event_fn():
+    """Events that are neither status/agent_action nor known dispatch types must go via event_fn."""
+    events = [
+        {"type": "permission_request", "session_id": "sid-1", "request_id": "r1", "tool": "delete_tasks"},
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "Done", "tokens_used": 3},
+    ]
+    constructor, _client = _make_layer_client(events=events)
+    event_calls: list[dict] = []
+
+    async def fake_event_fn(event: dict) -> None:
+        event_calls.append(event)
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user1",
+            event_fn=fake_event_fn,
+        )
+
+    forwarded_types = [e["type"] for e in event_calls]
+    assert "permission_request" in forwarded_types, "permission_request must be forwarded via event_fn"
+
+
+# ---------------------------------------------------------------------------
 # Existing 1.0 vault/status_fn forwarding test — unchanged
 # ---------------------------------------------------------------------------
 
