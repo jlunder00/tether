@@ -1,13 +1,6 @@
-// Stub interface — will be replaced by picker-builder's implementation
-// after feature/chat-permission-and-interrupt-ui lands.
 import { ref } from 'vue'
 import { getBotTransport } from './useBotTransport'
 import { useAgentPickerStore } from '../stores/agentPicker'
-
-export interface ConversationChatState {
-  isStreaming: boolean
-  streamingContent: string
-}
 
 export function useConversationChat(_conversationId: string) {
   const isStreaming = ref(false)
@@ -18,9 +11,15 @@ export function useConversationChat(_conversationId: string) {
     streamingContent.value = ''
     try {
       const agentVersion = useAgentPickerStore().selectedAgent
-      for await (const chunk of getBotTransport().send(text, agentVersion)) {
-        streamingContent.value += chunk
-        onChunk(chunk)
+      for await (const event of getBotTransport().send(text, agentVersion)) {
+        if (event.type === 'agent_text_delta') {
+          streamingContent.value += event.delta
+          onChunk(event.delta)
+        } else if (event.type === 'turn_complete') {
+          // Final text already accumulated via deltas; nothing extra needed
+        }
+        // Other event types (agent_action, permission_request, status, etc.)
+        // are handled by picker-builder's full composable — ignored here in stub.
       }
     } finally {
       isStreaming.value = false
@@ -29,7 +28,7 @@ export function useConversationChat(_conversationId: string) {
   }
 
   function interrupt(): void {
-    // stub — picker-builder will wire this to WS interrupt message
+    // stub — full interrupt wired in picker-builder's implementation
   }
 
   return { isStreaming, streamingContent, send, interrupt }
