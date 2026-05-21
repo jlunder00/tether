@@ -1,0 +1,64 @@
+# Channel 1 — background visibility
+# auto-allowed always, never permission-eligible, coalesced
+
+get_anchors:
+  type: background
+  phrase: "Reading your schedule"
+
+get_plan:
+  type: background
+  phrase: "Reading your plan"
+
+search:
+  type: background
+  phrase: "Searching for '{query}'"
+
+# Premium internal tools — kept opaque
+consult_advisor:
+  type: background_hidden
+  phrase: "Working on it"
+
+initiate_meeting_coordination:
+  type: background_hidden
+  phrase: "Coordinating"
+
+session_done:
+  type: background_hidden
+  phrase: "Wrapping up"
+
+spawn_subagent:
+  type: background_hidden
+  phrase: "Working on multiple things"
+
+send_status_update:
+  type: passthrough
+
+# Channel 2 — user-action tools (permission-eligible)
+upsert_tasks:
+  type: user_action
+  phrase_short: "Updating tasks"
+  permission_summary: "Update {count} tasks"
+  permission_detail_field: "tasks"
+
+delete_tasks:
+  type: user_action
+  phrase_short: "Removing tasks"
+  permission_summary: "Delete {count} items"
+  permission_detail_field: "operations"
+
+upsert_context:
+  type: user_action
+  phrase_short: "Updating context"
+  permission_summary: "Update context: {subject}"
+  permission_detail_field: "nodes"
+
+delete_context:
+  type: user_action
+  phrase_short: "Removing context"
+  permission_summary: "Delete context: {subject}"
+  permission_detail_field: "operations"
+
+# Fallback
+_unknown:
+  type: background
+  phrase: "Working"
