@@ -6,6 +6,7 @@ import asyncpg
 from db.pg_queries import get_last_bot_activity
 from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency, ws_auth_dependency
+from bot.agent_dispatch import dispatch_message
 from bot.message_handler import handle_message
 
 router = APIRouter()
@@ -232,9 +233,10 @@ async def bot_chat(websocket: WebSocket,
                 await websocket.send_json({"type": "error", "message": "Missing content"})
                 continue
 
-            # M1: read agent_version for future dispatch wiring (M2-M4).
-            # Does not affect routing yet — existing pipeline runs regardless.
-            agent_version = data.get("agent_version", "tether-agent-2.0")
+            # M2: read agent_version and dispatch to the correct pipeline.
+            # 1.0 → existing JSON-mutation pipeline; 2.0/2.5 → stub + 1.0 fallback.
+            # Unknown or missing versions default to tether-agent-2.0 (picker default).
+            agent_version = data.get("agent_version") or "tether-agent-2.0"
             logger.info("bot_chat: agent_version=%s user_id=%s", agent_version, user_id)
 
             # Async status callback: called by the premium session's
@@ -264,7 +266,8 @@ async def bot_chat(websocket: WebSocket,
             # Run the session as a task so we can race it against an incoming
             # stop message without blocking the event loop.
             session_task = asyncio.create_task(
-                handle_message(
+                dispatch_message(
+                    agent_version,
                     content,
                     send_fn=capture_send_fn,
                     pool=pool,
