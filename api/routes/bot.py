@@ -232,6 +232,11 @@ async def bot_chat(websocket: WebSocket,
                 await websocket.send_json({"type": "error", "message": "Missing content"})
                 continue
 
+            # M1: read agent_version for future dispatch wiring (M2-M4).
+            # Does not affect routing yet — existing pipeline runs regardless.
+            agent_version = data.get("agent_version", "tether-agent-2.0")
+            logger.info("bot_chat: agent_version=%s user_id=%s", agent_version, user_id)
+
             # Async status callback: called by the premium session's
             # send_status_update tool to push real-time progress frames.
             # If the WebSocket has gone away, log and re-raise so the session

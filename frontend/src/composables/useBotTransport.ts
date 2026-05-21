@@ -1,6 +1,6 @@
 export interface BotTransport {
-  /** Send user text; yields content chunks as they arrive. */
-  send(text: string): AsyncIterable<string>
+  /** Send user text with the selected agent version; yields content chunks as they arrive. */
+  send(text: string, agentVersion: string): AsyncIterable<string>
   /** Subscribe to heartbeat changes. Returns an unsubscribe fn. */
   onHeartbeat(cb: (alive: boolean) => void): () => void
   /** Close any underlying connection. */
@@ -8,7 +8,7 @@ export interface BotTransport {
 }
 
 export function createMockTransport(): BotTransport {
-  async function* send(text: string): AsyncIterable<string> {
+  async function* send(text: string, _agentVersion: string): AsyncIterable<string> {
     yield `Echo: ${text}\n\nThis is a **mocked** response.`
   }
 
@@ -96,7 +96,7 @@ export function createWebSocketTransport(): BotTransport {
   }
 
   return {
-    async *send(text: string) {
+    async *send(text: string, agentVersion: string) {
       // C1: don't send until the socket has opened.
       await openPromise
 
@@ -104,7 +104,7 @@ export function createWebSocketTransport(): BotTransport {
       // sends don't steal each other's chunks via the shared `incoming` queue.
       const localQueue: MessageEvent[] = incoming.splice(0)
 
-      ws.send(JSON.stringify({ type: 'user', content: text }))
+      ws.send(JSON.stringify({ type: 'user', content: text, agent_version: agentVersion }))
 
       // C2: each recv registers both resolve and reject, so onerror/onclose
       // can break us out of this loop.

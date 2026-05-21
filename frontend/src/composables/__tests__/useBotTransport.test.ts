@@ -7,7 +7,7 @@ describe('createMockTransport', () => {
     const transport = createMockTransport()
     const text = 'hello'
     const chunks: string[] = []
-    for await (const chunk of transport.send(text)) {
+    for await (const chunk of transport.send(text, 'tether-agent-2.0')) {
       chunks.push(chunk)
     }
     const full = chunks.join('')
@@ -19,7 +19,7 @@ describe('createMockTransport', () => {
   it('send yields exactly one chunk (no streaming simulation)', async () => {
     const transport = createMockTransport()
     const chunks: string[] = []
-    for await (const chunk of transport.send('test')) {
+    for await (const chunk of transport.send('test', 'tether-agent-2.0')) {
       chunks.push(chunk)
     }
     expect(chunks).toHaveLength(1)
