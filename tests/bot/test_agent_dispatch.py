@@ -2,37 +2,26 @@
 
 Tests the dispatch matrix:
 - tether-agent-1.0 → handle_message called, no stub injected
-- tether-agent-2.0/2.5 → stub sent via send_fn first, then handle_message called
-- unknown / None version → defaults to tether-agent-2.0 path (stub + 1.0 fallback)
-- vault/status_fn → forwarded transparently to handle_message
+- tether-agent-2.0 → real LayerClient pipeline; falls back to 1.0 on error or disabled
+- tether-agent-2.5 → stub notice + 1.0 fallback (not yet wired)
+- unknown / None version → treated as tether-agent-2.0 (picker default)
+- vault/status_fn → forwarded transparently to handle_message (1.0 path)
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 async def _fake_handle_1_0_response(text, send_fn, pool, user_id, vault=None, status_fn=None):
     """Fake 1.0 pipeline: delivers a fixed response via send_fn."""
     send_fn("1.0-response")
-
-
-async def _dispatch(version, **kwargs) -> list[str]:
-    """Run dispatch_message under the fake 1.0 pipeline and return captured send_fn parts."""
-    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response):
-        from bot.agent_dispatch import dispatch_message  # import after patch
-
-        sent_parts: list[str] = []
-        await dispatch_message(
-            version,
-            "hello",
-            send_fn=sent_parts.append,
-            pool=None,
-            user_id="user1",
-            **kwargs,
-        )
-    return sent_parts
 
 
 def _assert_not_wired_stub(stub: str) -> None:
@@ -45,35 +34,86 @@ def _assert_not_wired_stub(stub: str) -> None:
     ), f"stub must communicate not-wired status, got: {stub!r}"
 
 
+def _make_layer_client(*, events=None, raise_on_start=None):
+    """Return a mock LayerClient instance and its constructor mock.
+
+    The constructor mock, when called with any args, returns the same instance,
+    so patch("bot.agent_dispatch.LayerClient", constructor) works.
+    """
+    if events is None:
+        events = [
+            {
+                "type": "turn_complete",
+                "session_id": "sid-1",
+                "final_text": "Layer response",
+                "tokens_used": 5,
+            }
+        ]
+
+    async def _turn_gen(session_id, prompt):
+        for event in events:
+            yield event
+
+    client = MagicMock()
+    client.start_session = AsyncMock(return_value="sid-1")
+    client.end_session = AsyncMock()
+    client.interrupt = AsyncMock()
+    client.turn = _turn_gen
+
+    if raise_on_start is not None:
+        client.start_session = AsyncMock(side_effect=raise_on_start)
+
+    constructor = MagicMock(return_value=client)
+    return constructor, client
+
+
 # ---------------------------------------------------------------------------
 # 1.0 path — no stub
 # ---------------------------------------------------------------------------
 
 async def test_dispatch_1_0_no_stub():
     """tether-agent-1.0 must call handle_message without any stub prepended."""
-    sent_parts = await _dispatch("tether-agent-1.0")
+    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-1.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
     assert sent_parts == ["1.0-response"], "1.0 path must not inject any stub message"
 
 
 # ---------------------------------------------------------------------------
-# 2.0 / 2.5 paths — stub + 1.0 fallback
+# 2.5 path — still stubbed (premium-pipeline-migrator owns this)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("version", ["tether-agent-2.0", "tether-agent-2.5"])
-async def test_dispatch_stub_then_calls_1_0(version):
-    """2.0/2.5 must prepend a stub mentioning the version, then fall back to 1.0."""
-    sent_parts = await _dispatch(version)
+async def test_dispatch_2_5_stub_then_calls_1_0():
+    """tether-agent-2.5 must prepend a stub mentioning 2.5, then fall back to 1.0."""
+    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response):
+        from bot.agent_dispatch import dispatch_message
 
-    assert len(sent_parts) == 2, f"{version} path must produce stub + 1.0 response"
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.5",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+
+    assert len(sent_parts) == 2, "2.5 path must produce stub + 1.0 response"
     stub, response = sent_parts
-    version_suffix = version.removeprefix("tether-agent-")
-    assert version_suffix in stub, f"stub must mention {version_suffix}, got: {stub!r}"
+    assert "2.5" in stub, f"stub must mention 2.5, got: {stub!r}"
     _assert_not_wired_stub(stub)
     assert response == "1.0-response"
 
 
 # ---------------------------------------------------------------------------
-# Unknown / None version → defaults to 2.0 path
+# Unknown / None version → defaults to 2.0 path (layer pipeline)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
@@ -82,19 +122,203 @@ async def test_dispatch_stub_then_calls_1_0(version):
     ids=["unknown_version", "none_version"],
 )
 async def test_dispatch_unknown_or_none_defaults_to_2_0_path(version):
-    """Unknown or None agent_version must default to tether-agent-2.0 (stub + 1.0 fallback)."""
-    sent_parts = await _dispatch(version)
-    assert len(sent_parts) == 2, (
-        f"{version!r} must follow 2.0 path (stub + 1.0 fallback)"
-    )
+    """Unknown or None agent_version must default to tether-agent-2.0 (layer pipeline)."""
+    constructor, client = _make_layer_client()
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            version,
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+    # On success, the layer delivers the final text — no stub, no 1.0 fallback
+    assert sent_parts == ["Layer response"]
 
 
 # ---------------------------------------------------------------------------
-# vault and status_fn are forwarded transparently
+# 2.0 real pipeline — happy path
+# ---------------------------------------------------------------------------
+
+async def test_dispatch_2_0_creates_layer_session_with_correct_options():
+    """2.0 dispatch must call start_session with the correct ClaudeAgentOptions."""
+    constructor, client = _make_layer_client()
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message, _V2_0_OPTIONS
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "do something",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user42",
+        )
+
+    constructor.assert_called_once()  # LayerClient instantiated
+    client.start_session.assert_awaited_once()
+    call_kwargs = client.start_session.call_args
+
+    assert call_kwargs.kwargs.get("user_id") == "user42"
+    assert call_kwargs.kwargs.get("agent_version") == "tether-agent-2.0"
+
+    opts = call_kwargs.kwargs.get("options", {})
+    assert opts.get("model") == "haiku-4.5"
+    assert opts.get("max_turns") == 2
+    assert opts.get("permission_mode") == "auto"
+    expected_tools = [
+        "upsert_tasks", "upsert_context", "delete_tasks", "delete_context",
+        "read_context", "read_tasks", "get_plan", "get_anchors", "search",
+    ]
+    assert set(opts.get("allowed_tools", [])) == set(expected_tools)
+
+
+async def test_dispatch_2_0_turn_complete_sends_final_text_and_ends_session():
+    """On turn_complete, send_fn must receive final_text and end_session must be called."""
+    constructor, client = _make_layer_client(events=[
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "Done!", "tokens_used": 3},
+    ])
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+
+    assert sent_parts == ["Done!"]
+    client.end_session.assert_awaited_once_with("sid-1")
+
+
+async def test_dispatch_2_0_status_events_forwarded_via_status_fn():
+    """status and agent_action events must be forwarded to status_fn."""
+    events = [
+        {"type": "status", "session_id": "sid-1", "message": "Thinking..."},
+        {"type": "agent_action", "session_id": "sid-1", "action": "Reading your schedule"},
+        {"type": "turn_complete", "session_id": "sid-1", "final_text": "Here you go", "tokens_used": 8},
+    ]
+    constructor, client = _make_layer_client(events=events)
+    status_calls: list[str] = []
+
+    async def fake_status_fn(msg: str) -> None:
+        status_calls.append(msg)
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user1",
+            status_fn=fake_status_fn,
+        )
+
+    assert "Thinking..." in status_calls
+    assert "Reading your schedule" in status_calls
+
+
+# ---------------------------------------------------------------------------
+# 2.0 fallback paths
+# ---------------------------------------------------------------------------
+
+async def test_dispatch_2_0_layer_disabled_falls_back_to_1_0():
+    """When agent_layer.enabled=false, 2.0 must fall back to 1.0 without a stub message."""
+    constructor, client = _make_layer_client()
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+        patch("bot.agent_dispatch._layer_enabled", return_value=False),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+
+    # Layer not used
+    client.start_session.assert_not_awaited()
+    # 1.0 pipeline delivers response silently (no stub prefix)
+    assert sent_parts == ["1.0-response"]
+
+
+async def test_dispatch_2_0_layer_http_error_falls_back_to_1_0():
+    """When LayerClient raises an httpx error, 2.0 must silently fall back to 1.0."""
+    constructor, client = _make_layer_client(
+        raise_on_start=httpx.ConnectError("refused")
+    )
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+
+    # 1.0 pipeline must have fired, and no stub message
+    assert sent_parts == ["1.0-response"]
+
+
+async def test_dispatch_2_0_end_session_called_on_http_error():
+    """end_session must NOT be called when start_session fails (no session to end)."""
+    constructor, client = _make_layer_client(
+        raise_on_start=httpx.ConnectError("refused")
+    )
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0", "hi", send_fn=lambda m: None, pool=None, user_id="u1"
+        )
+
+    client.end_session.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Existing 1.0 vault/status_fn forwarding test — unchanged
 # ---------------------------------------------------------------------------
 
 async def test_dispatch_forwards_vault_and_status_fn():
-    """dispatch_message must pass vault and status_fn through to handle_message."""
+    """dispatch_message must pass vault and status_fn through to handle_message (1.0 path)."""
     received: dict = {}
 
     async def capture_kwargs(text, send_fn, pool, user_id, vault=None, status_fn=None):

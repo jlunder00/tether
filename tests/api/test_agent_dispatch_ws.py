@@ -2,17 +2,23 @@
 
 Verifies the bot_chat WebSocket handler routes messages based on agent_version:
 - tether-agent-1.0 → no stub, chunk contains only the 1.0 response
-- tether-agent-2.0/2.5 → chunk contains stub + 1.0 response (joined by \\n\\n)
-- agent_version missing → defaults to 2.0 path (stub + 1.0 response)
+- tether-agent-2.0 → real layer pipeline; falls back silently to 1.0 on error
+- tether-agent-2.5 → chunk contains stub + 1.0 response (joined by \\n\\n)
+- agent_version missing → defaults to 2.0 path (layer pipeline / fallback)
 
 Note: The Telegram path (_process_telegram_update) calls handle_message directly
 and is intentionally excluded from dispatch routing — it has no picker UI.
+
+Deliberate behaviour change (M3): tether-agent-2.0 no longer sends a user-
+visible stub. It runs the real layer pipeline, falling back silently to 1.0
+when the layer is unavailable. This is tested both with a mocked successful
+layer session and with a mocked HTTP failure.
 """
 from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -51,14 +57,53 @@ async def _fake_handle_message(text, send_fn, pool, user_id, vault=None, status_
     send_fn("1.0-response")
 
 
-def _dispatch_via_ws(user_message: dict) -> tuple[dict, dict]:
-    """Run a single user message through bot_chat and return (chunk, done) frames."""
+def _make_layer_constructor(*, events=None, raise_on_start=None):
+    """Return a LayerClient constructor mock yielding the given events on turn()."""
+    if events is None:
+        events = [
+            {
+                "type": "turn_complete",
+                "session_id": "sid-ws",
+                "final_text": "Layer WS response",
+                "tokens_used": 5,
+            }
+        ]
+
+    async def _turn_gen(session_id, prompt):
+        for event in events:
+            yield event
+
+    client = MagicMock()
+    if raise_on_start:
+        client.start_session = AsyncMock(side_effect=raise_on_start)
+    else:
+        client.start_session = AsyncMock(return_value="sid-ws")
+    client.end_session = AsyncMock()
+    client.interrupt = AsyncMock()
+    client.turn = _turn_gen
+
+    return MagicMock(return_value=client), client
+
+
+def _dispatch_via_ws(user_message: dict, extra_patches=None) -> tuple[dict, dict]:
+    """Run a single user message through bot_chat and return (chunk, done) frames.
+
+    extra_patches: list of (target, mock) tuples for additional patch.object calls.
+    """
     from starlette.testclient import TestClient
 
     app = _make_app()
     token = _valid_token()
+    patches = extra_patches or []
 
-    with patch("bot.agent_dispatch.handle_message", new=_fake_handle_message):
+    ctx = [patch("bot.agent_dispatch.handle_message", new=_fake_handle_message)]
+    for target, new in patches:
+        ctx.append(patch(target, new))
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in ctx:
+            stack.enter_context(p)
         with TestClient(app, raise_server_exceptions=False) as client:
             with client.websocket_connect(
                 "/api/bot/chat",
@@ -98,16 +143,52 @@ def test_ws_agent_1_0_no_stub():
 
 
 # ---------------------------------------------------------------------------
-# tether-agent-2.0 / 2.5 — stub + 1.0 response in chunk
+# tether-agent-2.5 — stub + 1.0 response in chunk (still wired to stub path)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("version", ["tether-agent-2.0", "tether-agent-2.5"])
-def test_ws_stub_prepended_for_2x(version):
-    """2.0/2.5 must include a stub notice before the 1.0 response in a single chunk frame."""
-    chunk, done = _dispatch_via_ws({"agent_version": version})
+def test_ws_2_5_stub_prepended():
+    """2.5 must include a stub notice before the 1.0 response in a single chunk frame."""
+    chunk, done = _dispatch_via_ws({"agent_version": "tether-agent-2.5"})
 
     assert chunk["type"] == "chunk"
-    _assert_stub_present(chunk["content"], version.removeprefix("tether-agent-"))
+    _assert_stub_present(chunk["content"], "2.5")
+    assert done["type"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# tether-agent-2.0 — real layer pipeline
+# ---------------------------------------------------------------------------
+
+def test_ws_2_0_layer_delivers_response():
+    """2.0 real pipeline: layer turn_complete final_text must arrive as the chunk."""
+    constructor, client = _make_layer_constructor()
+    chunk, done = _dispatch_via_ws(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    assert chunk["type"] == "chunk"
+    assert chunk["content"] == "Layer WS response"
+    assert done["type"] == "done"
+
+
+def test_ws_2_0_layer_unavailable_falls_back_silently():
+    """2.0 path: when layer is unavailable, fall back to 1.0 — no stub in chunk."""
+    import httpx
+    constructor, _client = _make_layer_constructor(
+        raise_on_start=httpx.ConnectError("refused")
+    )
+    chunk, done = _dispatch_via_ws(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    assert chunk["type"] == "chunk"
+    # No stub — silent fallback, user just gets the 1.0 response
+    assert chunk["content"] == "1.0-response"
+    content_lower = chunk["content"].lower()
+    assert "coming soon" not in content_lower
+    assert "not yet" not in content_lower
     assert done["type"] == "done"
 
 
@@ -115,17 +196,19 @@ def test_ws_stub_prepended_for_2x(version):
 # Missing agent_version — defaults to 2.0 path
 # ---------------------------------------------------------------------------
 
-def test_ws_missing_agent_version_defaults_to_2_0():
-    """Omitting agent_version must follow the 2.0 path (stub + 1.0 response)."""
-    chunk, done = _dispatch_via_ws({})  # agent_version intentionally omitted
+def test_ws_missing_agent_version_defaults_to_2_0_layer_path():
+    """Omitting agent_version defaults to 2.0 (real layer pipeline / silent fallback)."""
+    import httpx
+    constructor, _client = _make_layer_constructor(
+        raise_on_start=httpx.ConnectError("refused")
+    )
+    chunk, done = _dispatch_via_ws(
+        {},  # agent_version intentionally omitted
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
 
     assert chunk["type"] == "chunk"
-    content = chunk["content"]
-    assert "1.0-response" in content
-    content_lower = content.lower()
-    assert (
-        "coming soon" in content_lower
-        or "not yet" in content_lower
-        or "falling back" in content_lower
-    ), f"missing version must follow 2.0 path (stub present), got chunk: {content!r}"
+    # 2.0 fallback: 1.0-response, no stub
+    assert chunk["content"] == "1.0-response"
+    assert "coming soon" not in chunk["content"].lower()
     assert done["type"] == "done"
