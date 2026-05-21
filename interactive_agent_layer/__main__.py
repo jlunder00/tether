@@ -5,7 +5,7 @@ import argparse
 
 import uvicorn
 
-from interactive_agent_layer.pool_client import StubPoolClient
+from interactive_agent_layer.pool_client import PoolClient
 from interactive_agent_layer.server import create_app
 from interactive_agent_layer.session import Layer
 from interactive_agent_layer.ws_publisher import WSPublisher
@@ -18,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     publisher = WSPublisher()
-    pool = StubPoolClient()  # replaced with real pool client in follow-up PR
+    pool = PoolClient()
     layer = Layer(pool_client=pool, ws_publisher=publisher)
     app = create_app(layer)
 
