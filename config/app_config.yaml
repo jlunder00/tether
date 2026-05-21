@@ -29,6 +29,7 @@ agent_pool:
   acquire_default_timeout: 10   # default acquire timeout when caller omits timeout_seconds
   base_url: "http://127.0.0.1:5002"  # override for remote pool deployments
   enabled: true                 # false = callers fall back to direct spawn (local dev)
+  control_response_timeout_seconds: 60  # seconds pool waits for control_response before denying
 
 llm:
   use_v3: false

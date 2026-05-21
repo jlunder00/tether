@@ -163,6 +163,48 @@ class PoolClient:
         _raise_for_status(resp)
         return resp.json()
 
+    async def send_control_response(
+        self,
+        handle_id: str,
+        *,
+        request_id: str,
+        subtype: str,
+        decision: str,
+        denial_message: str | None = None,
+    ) -> None:
+        """Respond to a ``control_request`` SSE event from the pool service.
+
+        Resolves the pending ``can_use_tool`` callback on the pool side.
+        Raises :exc:`PoolClientError` (404) if the ``request_id`` is unknown
+        or has already been resolved (e.g. timed out).
+
+        Parameters
+        ----------
+        handle_id:
+            The active handle the control_request was emitted on.
+        request_id:
+            The ``request_id`` from the ``control_request`` SSE event.
+        subtype:
+            Control subtype (currently always ``"can_use_tool"``).
+        decision:
+            ``"allow"`` or ``"deny"``.
+        denial_message:
+            Optional human-readable reason shown when decision is ``"deny"``.
+        """
+        payload: dict[str, Any] = {
+            "request_id": request_id,
+            "subtype": subtype,
+            "decision": decision,
+        }
+        if denial_message is not None:
+            payload["denial_message"] = denial_message
+
+        resp = await self._get_client().post(
+            f"/handle/{handle_id}/control_response",
+            json=payload,
+        )
+        _raise_for_status(resp)
+
 
 # ---------------------------------------------------------------------------
 # Helper

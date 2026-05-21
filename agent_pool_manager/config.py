@@ -36,6 +36,9 @@ class AgentPoolConfig:
     enabled: bool = True
     """False → callers fall back to direct ClaudeSDKClient spawn (for local dev)."""
 
+    control_response_timeout_seconds: float = 60.0
+    """Seconds the pool waits for a control_response before denying the tool call."""
+
 
 _FIELD_NAMES = {f.name for f in fields(AgentPoolConfig)}
 
