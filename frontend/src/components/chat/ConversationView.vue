@@ -31,11 +31,7 @@ const hasMore = computed(() =>
 let chat: ReturnType<typeof useConversationChat> | null = null
 
 watch(selectedId, (id) => {
-  if (id) {
-    chat = useConversationChat(id)
-  } else {
-    chat = null
-  }
+  chat = id ? useConversationChat(id) : null
 }, { immediate: true })
 
 function onScroll() {
@@ -80,7 +76,7 @@ async function onSend() {
   })
 
   // Finalize streaming bubble as assistant message
-  if (streamingBubble.value !== null && streamingBubble.value.length > 0) {
+  if (streamingBubble.value) {
     const assistantMsg: ConversationMessage = {
       id: `local-assistant-${Date.now()}`,
       role: 'assistant',

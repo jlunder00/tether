@@ -17,11 +17,7 @@ const filters = [
 
 async function setFilter(f: 'all' | 'open' | 'closed') {
   activeFilter.value = f
-  if (f === 'all') {
-    await store.refresh()
-  } else {
-    await store.refresh({ state: f })
-  }
+  await store.refresh(f === 'all' ? undefined : { state: f })
 }
 
 function formatRelativeTime(iso: string): string {

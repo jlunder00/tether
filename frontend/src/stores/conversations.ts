@@ -63,24 +63,27 @@ export const useConversationsStore = defineStore('conversations', () => {
     }
   }
 
+  function setMessages(id: string, msgs: ConversationMessage[]): void {
+    messagesById.value = new Map(messagesById.value).set(id, msgs)
+  }
+
+  function setHasMore(id: string, value: boolean): void {
+    hasMoreById.value = new Map(hasMoreById.value).set(id, value)
+  }
+
   async function loadMessages(id: string): Promise<void> {
     const res = await api(`/api/conversations/${id}/messages?limit=50`)
     if (!res.ok) return
     const page: MessagesPage = await res.json()
     // API returns newest-first; reverse for display (oldest-first)
-    const newMap = new Map(messagesById.value)
-    newMap.set(id, [...page.messages].reverse())
-    messagesById.value = newMap
-    const hasMoreMap = new Map(hasMoreById.value)
-    hasMoreMap.set(id, page.has_more)
-    hasMoreById.value = hasMoreMap
+    setMessages(id, [...page.messages].reverse())
+    setHasMore(id, page.has_more)
   }
 
   async function loadMessagesOlder(conversationId: string): Promise<void> {
-    const current = messagesById.value.get(conversationId) ?? []
     if (!hasMoreById.value.get(conversationId)) return
+    const current = messagesById.value.get(conversationId) ?? []
     // Oldest message currently shown = current[0] (after reversing)
-    // But API sorted newest-first, so oldest displayed = last received = current[0].id
     const beforeId = current[0]?.id
     if (!beforeId) return
     const qs = new URLSearchParams({ limit: '50', before_id: beforeId })
@@ -88,19 +91,13 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (!res.ok) return
     const page: MessagesPage = await res.json()
     const older = [...page.messages].reverse()
-    const newMap = new Map(messagesById.value)
-    newMap.set(conversationId, [...older, ...current])
-    messagesById.value = newMap
-    const hasMoreMap = new Map(hasMoreById.value)
-    hasMoreMap.set(conversationId, page.has_more)
-    hasMoreById.value = hasMoreMap
+    setMessages(conversationId, [...older, ...current])
+    setHasMore(conversationId, page.has_more)
   }
 
   function appendMessage(conversationId: string, msg: ConversationMessage): void {
     const msgs = messagesById.value.get(conversationId) ?? []
-    const newMap = new Map(messagesById.value)
-    newMap.set(conversationId, [...msgs, msg])
-    messagesById.value = newMap
+    setMessages(conversationId, [...msgs, msg])
   }
 
   return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage }
