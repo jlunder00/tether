@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from interactive_agent_layer.session import Layer
+from interactive_agent_layer.session import Layer, Session
 
 
 class SessionStartRequest(BaseModel):
@@ -27,10 +26,15 @@ def create_app(layer: Layer) -> FastAPI:
     app = FastAPI(title="Interactive Agent Layer")
     app.state.layer = layer
 
+    def require_session(session_id: str) -> Session:
+        session = layer.get_session(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session
+
     @app.post("/session/start")
-    async def session_start(body: SessionStartRequest, request: Request) -> dict:
-        lyr: Layer = request.app.state.layer
-        session = lyr.create_session(
+    async def session_start(body: SessionStartRequest) -> dict:
+        session = layer.create_session(
             user_id=body.user_id,
             user_ws_id=body.user_ws_id,
             agent_version=body.agent_version,
@@ -39,15 +43,11 @@ def create_app(layer: Layer) -> FastAPI:
         return {"session_id": session.session_id}
 
     @app.post("/session/{session_id}/turn")
-    async def session_turn(
-        session_id: str, body: TurnRequest, request: Request
-    ) -> StreamingResponse:
-        lyr: Layer = request.app.state.layer
-        if lyr.get_session(session_id) is None:
-            raise HTTPException(status_code=404, detail="Session not found")
+    async def session_turn(session_id: str, body: TurnRequest) -> StreamingResponse:
+        require_session(session_id)
 
         async def event_generator():
-            async for event in lyr.run_turn(session_id, body.prompt):
+            async for event in layer.run_turn(session_id, body.prompt):
                 yield f"data: {json.dumps(event)}\n\n"
 
         return StreamingResponse(
@@ -60,27 +60,20 @@ def create_app(layer: Layer) -> FastAPI:
         )
 
     @app.post("/session/{session_id}/interrupt")
-    async def session_interrupt(session_id: str, request: Request) -> dict:
-        lyr: Layer = request.app.state.layer
-        if lyr.get_session(session_id) is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        await lyr.interrupt(session_id)
+    async def session_interrupt(session_id: str) -> dict:
+        require_session(session_id)
+        await layer.interrupt(session_id)
         return {"status": "interrupted"}
 
     @app.post("/session/{session_id}/end")
-    async def session_end(session_id: str, request: Request) -> dict:
-        lyr: Layer = request.app.state.layer
-        if lyr.get_session(session_id) is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        lyr.end_session(session_id)
+    async def session_end(session_id: str) -> dict:
+        require_session(session_id)
+        layer.end_session(session_id)
         return {"status": "ended"}
 
     @app.get("/session/{session_id}/status")
-    async def session_status(session_id: str, request: Request) -> dict:
-        lyr: Layer = request.app.state.layer
-        session = lyr.get_session(session_id)
-        if session is None:
-            raise HTTPException(status_code=404, detail="Session not found")
+    async def session_status(session_id: str) -> dict:
+        session = require_session(session_id)
         return {
             "session_id": session.session_id,
             "user_id": session.user_id,

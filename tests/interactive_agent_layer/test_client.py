@@ -1,33 +1,11 @@
 """Tests for LayerClient (contracts 7-8)."""
 from __future__ import annotations
 
-import json
-
-import pytest
 import httpx
-from httpx import AsyncClient, ASGITransport
+import pytest
+from httpx import ASGITransport
 
 from interactive_agent_layer.client import LayerClient
-
-
-@pytest.fixture
-async def server_app(layer):
-    from interactive_agent_layer.server import create_app
-    return create_app(layer)
-
-
-@pytest.fixture
-async def client_pair(server_app):
-    """Returns (LayerClient, underlying httpx client sharing the same ASGI transport)."""
-    transport = ASGITransport(app=server_app)
-    # We use the transport directly in a real httpx.AsyncClient
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as _http:
-        layer_client = LayerClient.__new__(LayerClient)
-        layer_client.base_url = "http://test"
-        layer_client._client = _http
-        yield layer_client, _http
 
 
 @pytest.fixture

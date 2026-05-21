@@ -93,8 +93,4 @@ def _translate_event(session_id: str, sdk_event: dict) -> dict:
             "final_text": sdk_event.get("final_text", ""),
             "tokens_used": sdk_event.get("tokens_used", 0),
         }
-    return {
-        "type": "status",
-        "session_id": session_id,
-        "message": str(sdk_event),
-    }
+    return {"type": "status", "session_id": session_id, "message": str(sdk_event)}
