@@ -1,14 +1,21 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted } from 'vue'
 import { useChatStore } from '../stores/chat'
+import { useAgentPickerStore } from '../stores/agentPicker'
 import MessageBubble from './MessageBubble.vue'
+import AgentPicker from './AgentPicker.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
 const chatStore = useChatStore()
+const agentPickerStore = useAgentPickerStore()
 const draft = ref('')
 const scrollEl = ref<HTMLDivElement | null>(null)
 const isAtBottom = ref(true)
+
+onMounted(() => {
+  agentPickerStore.fetchPreference()
+})
 
 async function onSubmit() {
   const text = draft.value.trim()
@@ -47,6 +54,7 @@ function onKeydown(e: KeyboardEvent) {
         title="Bot status"
       />
       <span class="font-semibold text-sm text-[--fg-1]">Tether</span>
+      <AgentPicker class="ml-2" />
       <button
         class="ml-auto text-[--fg-4] hover:text-[--fg-1] transition-colors p-1"
         aria-label="Close chat"

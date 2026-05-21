@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { ChatMessage } from '../types/chat'
 import { getBotTransport } from '../composables/useBotTransport'
+import { useAgentPickerStore } from './agentPicker'
 
 function makeId(): string {
   if (location.protocol === 'https:') return crypto.randomUUID()
@@ -30,7 +31,8 @@ export const useChatStore = defineStore('chat', () => {
     try {
       // Always call getBotTransport() at send time — not a cached reference —
       // so we use whichever transport is current (mock → real WS after auth).
-      for await (const chunk of getBotTransport().send(text)) {
+      const agentVersion = useAgentPickerStore().selectedAgent
+      for await (const chunk of getBotTransport().send(text, agentVersion)) {
         messages.value[botMsgIndex].content += chunk
       }
     } finally {

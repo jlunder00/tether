@@ -65,6 +65,7 @@ COPY shared/ shared/
 COPY tether_mcp/ tether_mcp/
 COPY sync/ sync/
 COPY integrations/ integrations/
+COPY interactive_agent_layer/ interactive_agent_layer/
 COPY config/ config/
 COPY prompts/ prompts/
 COPY cron/ cron/
