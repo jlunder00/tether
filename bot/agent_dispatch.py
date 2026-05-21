@@ -5,7 +5,7 @@ requested agent_version:
 
   tether-agent-1.0 → existing JSON-mutation pipeline (handle_message)
   tether-agent-2.0 → real LayerClient pipeline; 1.0 fallback on error/disabled
-  tether-agent-2.5 → stub notice + 1.0 fallback (premium-pipeline-migrator owns this)
+  tether-agent-2.5 → premium session for paid/admin users; 1.0 fallback for free
   unknown / None   → treated as tether-agent-2.0 (picker default)
 
 The 2.0 pipeline calls the interactive-agent-layer service, which handles
@@ -13,9 +13,13 @@ streaming, tool-use translation, and permission gating. SSE events from the
 layer are forwarded to the WS client via status_fn; the final response is
 delivered via send_fn when turn_complete arrives.
 
-Fallback behaviour: if the layer is disabled (config) or unreachable (HTTP
-error), dispatch silently falls back to handle_message so users always get
-a response.
+The 2.5 pipeline routes paid users and admin users to the premium handler
+(Session + Beacon + RAG). Free users receive an upgrade notice and fall back
+to tether-agent-1.0. Admin users bypass the subscription check entirely.
+
+Fallback behaviour: if the 2.0 layer is disabled (config) or unreachable
+(HTTP error), dispatch silently falls back to handle_message so users always
+get a response.
 
 Note: The Telegram polling path (bot/message_handler.py) calls handle_message
 directly — it bypasses this dispatcher (Telegram has no picker UI).
@@ -170,23 +174,95 @@ async def _dispatch_v2_0(
                 await layer.end_session(session_id)
 
 
+async def _dispatch_v25(
+    text: str,
+    send_fn: Callable[[str], None],
+    pool: Any,
+    user_id: str,
+    *,
+    vault: Any = None,
+    status_fn: Any = None,
+    is_admin: bool = False,
+) -> None:
+    """Handle tether-agent-2.5: premium session for paid/admin users, 1.0 fallback for free.
+
+    Paid users and admin users are routed to the premium handler (Session + Beacon + RAG).
+    Admin users bypass the subscription check entirely — no subscription row required.
+    Free users (non-admin, non-paid) receive an upgrade notice and fall back to tether-agent-1.0.
+    If tether-premium is not installed, paid/admin users also fall back to 1.0.
+
+    This function is a clean boundary that maps to a future HTTP endpoint in the
+    self-hosted premium access plan (phase P1+).
+    """
+    import db.postgres as pg
+    from db.pg_queries.subscriptions import get_user_is_paid
+
+    is_paid = False
+    if not is_admin:
+        # Admin users skip the subscription DB check entirely.
+        try:
+            async with pg.get_conn(pool, user_id) as conn:
+                is_paid = await get_user_is_paid(conn)
+        except Exception:
+            logger.warning(
+                "dispatch_v25: subscription check failed for user_id=%s — defaulting to free",
+                user_id,
+            )
+
+    if is_admin or is_paid:
+        try:
+            from tether_premium.register import get_premium_handler
+            from db.pg_queries import get_anchors
+            from bot.handler_utils import get_current_anchor
+
+            async with pg.get_conn(pool, user_id) as conn:
+                anchors = await get_anchors(conn)
+            current_anchor = get_current_anchor(anchors)
+
+            response = await get_premium_handler()(
+                text, pool, user_id, anchors, current_anchor,
+                send_fn=send_fn, status_fn=status_fn,
+            )
+            if response:
+                send_fn(response)
+            return
+        except (ImportError, NotImplementedError):
+            logger.warning(
+                "dispatch_v25: premium not available for user_id=%s — falling back to 1.0",
+                user_id,
+            )
+        except Exception:
+            logger.exception(
+                "dispatch_v25: premium handler raised for user_id=%s — falling back to 1.0",
+                user_id,
+            )
+    else:
+        send_fn(
+            "tether-agent-2.5 is available on the Pro plan — you're currently on "
+            "the free plan. Routing to tether-agent-1.0 for this message."
+        )
+
+    await handle_message(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+
+
 async def dispatch_message(
     agent_version: str | None,
     text: str,
     send_fn: Callable[[str], None],
     pool: Any,
     user_id: str,
+    *,
     vault: Any = None,
     status_fn: Any = None,
     event_fn: Any = None,
+    is_admin: bool = False,
 ) -> None:
     """Dispatch a user message to the correct pipeline based on agent_version.
 
     For tether-agent-1.0, delegates directly to handle_message with no stub.
     For tether-agent-2.0, calls the interactive-agent-layer real pipeline with
     a silent fallback to 1.0 on error or when the layer is disabled.
-    For tether-agent-2.5 (not yet wired), sends a stub notice and falls back
-    to the 1.0 pipeline so the user still gets a response.
+    For tether-agent-2.5, routes to _dispatch_v25 (paid/admin = premium; free = 1.0 fallback).
     Unknown or None versions default to tether-agent-2.0 and log a warning.
 
     Args:
@@ -199,6 +275,8 @@ async def dispatch_message(
         status_fn: Optional async callback for real-time status pushes.
         event_fn: Optional async callback for streamed layer events (text deltas,
             permission requests, etc.) forwarded directly to the WS client.
+        is_admin: When True, bypass subscription check for 2.5 dispatch (admin users
+                  have no subscription row but must reach the premium handler).
     """
     version = agent_version if agent_version in _KNOWN_VERSIONS else _DEFAULT_VERSION
     if version != agent_version:
@@ -220,7 +298,14 @@ async def dispatch_message(
         )
         return
 
-    # tether-agent-2.5 — stub until premium-pipeline-migrator wires the real path
+    if version == "tether-agent-2.5":
+        await _dispatch_v25(
+            text, send_fn, pool, user_id,
+            vault=vault, status_fn=status_fn, is_admin=is_admin,
+        )
+        return
+
+    # Catch-all for any future known versions not yet wired
     send_fn(_stub_message(version))
     logger.warning(
         "dispatch_message: %s not yet wired — stub sent, falling back to 1.0 user_id=%s",
