@@ -77,7 +77,7 @@ export const useChatStore = defineStore('chat', () => {
             isSessionActive.value = false
             return
           case 'trial_usage_update':
-            // handled elsewhere (trial counter UI)
+            useAgentPickerStore().setTrialRemaining(event.remaining)
             break
         }
       }
