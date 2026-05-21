@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 import { loadPremiumThemes, unloadPremiumThemes } from './composables/usePremiumThemes'
-import BotChat from './components/BotChat.vue'
+import SideChatPanel from './components/SideChatPanel.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 import ThemeDrawer from './components/ThemeDrawer.vue'
+import PermissionModal from './components/PermissionModal.vue'
 import { useTheme } from './composables/useTheme'
 
 const authStore = useAuthStore()
@@ -38,6 +39,16 @@ async function logout() {
   await authStore.logout()
   router.push({ name: 'login' })
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+    e.preventDefault()
+    chatOpen.value = !chatOpen.value
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
@@ -80,6 +91,11 @@ async function logout() {
                        class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
                        :class="$route.path.startsWith('/kanban') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
             Kanban
+          </router-link>
+          <router-link to="/chat"
+                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
+                       :class="$route.path.startsWith('/chat') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
+            Chat
           </router-link>
         </div>
       </div>
@@ -145,7 +161,7 @@ async function logout() {
           v-if="chatOpen"
           class="w-[420px] flex-shrink-0 border-l border-[--border-1] bg-[--bg-canvas] flex flex-col"
         >
-          <BotChat @close="chatOpen = false" />
+          <SideChatPanel @close="chatOpen = false" />
         </aside>
       </Transition>
     </div>
@@ -158,6 +174,9 @@ async function logout() {
 
     <!-- Global theme picker drawer -->
     <ThemeDrawer v-if="authStore.isAuthenticated" v-model="themeDrawerOpen" />
+
+    <!-- Global permission modal -->
+    <PermissionModal v-if="authStore.isAuthenticated" />
   </div>
 </template>
 
