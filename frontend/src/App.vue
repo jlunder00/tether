@@ -1,16 +1,33 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from './stores/auth'
 import { useRouter } from 'vue-router'
 import { loadPremiumThemes, unloadPremiumThemes } from './composables/usePremiumThemes'
-import BotChat from './components/BotChat.vue'
+import SideChatPanel from './components/SideChatPanel.vue'
 import SlideOverStack from './components/SlideOverStack.vue'
 import ThemeDrawer from './components/ThemeDrawer.vue'
+import PermissionModal from './components/PermissionModal.vue'
 import { useTheme } from './composables/useTheme'
 
 const authStore = useAuthStore()
 const router = useRouter()
 const { activeMode, setMode } = useTheme()
+
+type NavLink = { to: string; label: string; match: string; exact?: boolean }
+
+const navLinks: NavLink[] = [
+  { to: '/dashboard', label: 'Dashboard', match: '/dashboard' },
+  { to: '/calendar', label: 'Calendar', match: '/calendar' },
+  { to: '/plan/day', label: 'Plan', match: '/plan' },
+  { to: '/context', label: 'Context', match: '/context', exact: true },
+  { to: '/anchors', label: 'Anchors', match: '/anchors', exact: true },
+  { to: '/kanban', label: 'Kanban', match: '/kanban' },
+  { to: '/chat', label: 'Chat', match: '/chat' },
+]
+
+function isActive(link: NavLink, path: string): boolean {
+  return link.exact ? path === link.match : path.startsWith(link.match)
+}
 
 function toggleMode() {
   setMode(activeMode.value === 'dark' ? 'light' : 'dark')
@@ -38,6 +55,16 @@ async function logout() {
   await authStore.logout()
   router.push({ name: 'login' })
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+    e.preventDefault()
+    chatOpen.value = !chatOpen.value
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 </script>
 
 <template>
@@ -48,38 +75,14 @@ async function logout() {
       <div class="flex items-center gap-6">
         <span class="text-lg font-bold tracking-tight">Tether</span>
         <div class="flex items-center gap-1">
-          <router-link to="/dashboard"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/dashboard') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Dashboard
-          </router-link>
-          <router-link to="/calendar"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/calendar') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Calendar
-          </router-link>
-          <router-link to="/plan/day"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path.startsWith('/plan') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Plan
-          </router-link>
-          <router-link to="/context"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path === '/context' ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Context
-          </router-link>
-          <router-link to="/anchors"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       active-class="bg-[--bg-elev-4] text-[--fg-1]"
-                       :class="$route.path === '/anchors' ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Anchors
-          </router-link>
-          <router-link to="/kanban"
-                       class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
-                       :class="$route.path.startsWith('/kanban') ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'">
-            Kanban
+          <router-link
+            v-for="link in navLinks"
+            :key="link.to"
+            :to="link.to"
+            class="px-3 py-1.5 rounded-lg text-sm transition-colors hover:bg-[--bg-elev-3]"
+            :class="isActive(link, $route.path) ? 'bg-[--bg-elev-4] text-[--fg-1]' : 'text-[--fg-3]'"
+          >
+            {{ link.label }}
           </router-link>
         </div>
       </div>
@@ -145,7 +148,7 @@ async function logout() {
           v-if="chatOpen"
           class="w-[420px] flex-shrink-0 border-l border-[--border-1] bg-[--bg-canvas] flex flex-col"
         >
-          <BotChat @close="chatOpen = false" />
+          <SideChatPanel @close="chatOpen = false" />
         </aside>
       </Transition>
     </div>
@@ -158,6 +161,9 @@ async function logout() {
 
     <!-- Global theme picker drawer -->
     <ThemeDrawer v-if="authStore.isAuthenticated" v-model="themeDrawerOpen" />
+
+    <!-- Global permission modal -->
+    <PermissionModal v-if="authStore.isAuthenticated" />
   </div>
 </template>
 
