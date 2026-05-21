@@ -85,6 +85,10 @@ class _ForgivingMap(dict):
         return f"{{{key}}}"
 
 
+# Public alias for external use (e.g. permissions.py).
+ForgivingMap = _ForgivingMap
+
+
 def _parse_entry(data: dict) -> TranslationEntry:
     t = data["type"]
     if t == "background":

@@ -21,6 +21,7 @@ class Session:
     active_handles: list = dataclasses.field(default_factory=list)
     turn_count: int = 0
     created_at: float = dataclasses.field(default_factory=time.time)
+    permission_pending: dict = dataclasses.field(default_factory=dict)
 
 
 class Layer:
