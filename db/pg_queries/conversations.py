@@ -202,3 +202,110 @@ async def update_conversation(
             state,
             conversation_id,
         )
+
+
+# ---------------------------------------------------------------------------
+# List
+# ---------------------------------------------------------------------------
+
+
+async def list_conversations(
+    conn: asyncpg.Connection,
+    *,
+    state: str | None = None,
+    context_node_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict]:
+    """Return conversations for the current RLS user, newest first.
+
+    LEFT JOINs context_nodes so that folder_name is included in each row.
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if state is not None:
+        params.append(state)
+        conditions.append(f"c.state = ${len(params)}")
+    if context_node_id is not None:
+        params.append(context_node_id)
+        conditions.append(f"c.context_node_id = ${len(params)}::uuid")
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    params.extend([limit, offset])
+    limit_p = len(params) - 1
+    offset_p = len(params)
+
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            c.id::text        AS id,
+            c.user_id::text   AS user_id,
+            c.name,
+            c.type,
+            c.priority,
+            c.state,
+            c.context_node_id::text AS context_node_id,
+            cn.name           AS folder_name,
+            c.thread_key,
+            c.is_system,
+            c.created_at,
+            c.last_message_at
+        FROM conversations c
+        LEFT JOIN context_nodes cn ON cn.id = c.context_node_id
+        {where}
+        ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+        LIMIT ${limit_p} OFFSET ${offset_p}
+        """,
+        *params,
+    )
+    return [dict(r) for r in rows]
+
+
+async def list_conversation_messages(
+    conn: asyncpg.Connection,
+    conversation_id: str,
+    *,
+    limit: int = 50,
+    before_id: str | None = None,
+) -> dict:
+    """Return messages for a conversation, newest first, with cursor pagination.
+
+    Uses `before_id` cursor: returns rows with id < before_id so callers can
+    paginate backwards through history. Returns {"items": [...], "has_more": bool}.
+
+    Note: `before_id` is an integer-typed primary key on conversation_history —
+    this cursor approach is stable under concurrent inserts, unlike offset-based
+    pagination. See PR description for rationale.
+    """
+    # Fetch limit+1 to determine has_more without a separate COUNT query.
+    fetch_limit = limit + 1
+    params: list = [conversation_id, fetch_limit]
+
+    before_clause = ""
+    if before_id is not None:
+        params.append(int(before_id))
+        before_clause = f"AND ch.id < ${len(params)}"
+
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            ch.id::text           AS id,
+            ch.role,
+            ch.body               AS content,
+            ch.conversation_id::text AS conversation_id,
+            ch.ts                 AS created_at,
+            ch.source,
+            ch.channel
+        FROM conversation_history ch
+        WHERE ch.conversation_id = $1::uuid
+          {before_clause}
+        ORDER BY ch.id DESC
+        LIMIT $2
+        """,
+        *params,
+    )
+
+    has_more = len(rows) > limit
+    items = [dict(r) for r in rows[:limit]]
+    return {"items": items, "has_more": has_more}

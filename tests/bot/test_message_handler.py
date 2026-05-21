@@ -252,7 +252,7 @@ async def test_handle_message_stop_calls_premium_stop(monkeypatch):
     """/stop message must call premium stop_session and reply with Stopped."""
     sent: list[str] = []
 
-    async def fake_body(text, send_fn, pool, user_id, status_fn=None):
+    async def fake_body(text, send_fn, pool, user_id, status_fn=None, conversation_id=None):
         # Simulate the /stop path calling send_fn
         pass
 

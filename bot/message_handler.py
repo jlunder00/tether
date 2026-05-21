@@ -927,7 +927,8 @@ def _is_v2_fallback_enabled() -> bool:
 
 async def _handle_v3(text: str, pool, user_id: str, anchors: list[dict],
                current_anchor: dict,
-               skill_commands: list[str] | None = None) -> str:
+               skill_commands: list[str] | None = None,
+               conversation_id: str | None = None) -> str:
     """Run a basic v3 single-shot LLM call. Returns the response text.
 
     Uses AnthropicBackend directly (no LLMRouter, no conversation loop,
@@ -959,6 +960,17 @@ async def _handle_v3(text: str, pool, user_id: str, anchors: list[dict],
         session_notes=None,
         mode=mode,
     )
+
+    # Conversation context injection — appended to system prompt when a
+    # conversation_id with a linked context_node is provided.
+    if conversation_id:
+        try:
+            from bot.conversation_context import build_conversation_context
+            ctx_block = await build_conversation_context(conversation_id, pool, user_id)
+            if ctx_block:
+                system = system + "\n\n" + ctx_block
+        except Exception as _ctx_err:
+            logger.warning("_handle_v3: context injection failed: %s", _ctx_err)
 
     # Skill injection (v3-basic fallback): append skill content to system prompt
     if skill_commands:
@@ -999,7 +1011,7 @@ def _log_preview(text: str, n: int = 120) -> str:
 
 
 async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, user_id: str,
-                               status_fn=None) -> None:
+                               status_fn=None, conversation_id: str | None = None) -> None:
     today = str(date_type.today())
     logger.info("handle_message: entered, text_len=%d", len(text or ""))
     async with pg.get_conn(pool, user_id) as conn:
@@ -1125,7 +1137,8 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
         # Basic v3 single-shot (community edition — no tools, no sessions)
         try:
             final = await _handle_v3(text, pool, user_id, anchors, current_anchor,
-                               skill_commands=_skill_commands)
+                               skill_commands=_skill_commands,
+                               conversation_id=conversation_id)
             send_fn(final)
             async with pg.get_conn(pool, user_id) as conn:
                 await insert_conversation_turn(conn, "user", text)
@@ -1192,7 +1205,8 @@ async def _handle_message_body(text: str, send_fn: Callable[[str], None], pool, 
 
 
 async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_id: str,
-                         vault=None, status_fn=None) -> None:
+                         vault=None, status_fn=None,
+                         conversation_id: str | None = None) -> None:
     """Public entry point. When a vault is provided, acquires the per-user lock
     and materialises credentials into an env dict that downstream LLM calls
     merge into the spawned claude-code subprocess.
@@ -1213,11 +1227,13 @@ async def handle_message(text: str, send_fn: Callable[[str], None], pool, user_i
             async with vault.materialize(user_id) as env_extras:
                 token = _llm_env_extras.set(dict(env_extras))
                 try:
-                    await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn)
+                    await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn,
+                                               conversation_id=conversation_id)
                 finally:
                     _llm_env_extras.reset(token)
     else:
-        await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn)
+        await _handle_message_body(text, send_fn, pool, user_id, status_fn=status_fn,
+                                   conversation_id=conversation_id)
 
 
 # ---------------------------------------------------------------------------
