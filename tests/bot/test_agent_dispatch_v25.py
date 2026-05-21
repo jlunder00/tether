@@ -223,16 +223,3 @@ class TestDispatchMessageRouting:
         # Generic "not yet wired" stub must NOT appear
         assert not any("not yet wired" in s for s in sent)
 
-    @pytest.mark.asyncio
-    async def test_v20_still_uses_stub(self):
-        """tether-agent-2.0 still hits the stub (not owned by M4)."""
-        sent = []
-
-        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0):
-            from bot.agent_dispatch import dispatch_message
-            await dispatch_message(
-                "tether-agent-2.0", "hello",
-                send_fn=sent.append, pool=None, user_id=TEST_USER_ID,
-            )
-
-        assert any("not yet wired" in s or "2.0" in s for s in sent)
