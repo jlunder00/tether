@@ -22,5 +22,5 @@ async def list_settings(request: Request, _auth=Depends(auth_dependency),
 async def put_setting(key: str, body: SetSettingBody, request: Request,
                       _auth=Depends(auth_dependency),
                       conn: asyncpg.Connection = Depends(get_db_conn)):
-    await set_user_setting(conn, request.state.user_id, key, body.value)
+    await set_user_setting(conn, key, body.value)
     return {"ok": True}
