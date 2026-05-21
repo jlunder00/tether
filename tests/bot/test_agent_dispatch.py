@@ -444,6 +444,70 @@ async def test_dispatch_2_0_unknown_events_forwarded_via_event_fn():
 
 
 # ---------------------------------------------------------------------------
+# turn_error event — layer-side failure surfaced via SSE
+# ---------------------------------------------------------------------------
+
+async def test_dispatch_2_0_turn_error_falls_back_to_1_0(caplog):
+    """When the layer yields turn_error, dispatch must fall back to 1.0 and log the real message."""
+    import logging
+    events = [
+        {"type": "turn_error", "session_id": "sid-1", "message": "pool_exhausted — retry after 5s"},
+    ]
+    constructor, _client = _make_layer_client(events=events)
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+        caplog.at_level(logging.WARNING, logger="bot.agent_dispatch"),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        sent_parts: list[str] = []
+        await dispatch_message(
+            "tether-agent-2.0",
+            "hello",
+            send_fn=sent_parts.append,
+            pool=None,
+            user_id="user1",
+        )
+
+    # 1.0 fallback fires
+    assert sent_parts == ["1.0-response"], "turn_error must trigger 1.0 fallback"
+    # Log must reference the actual pool error, not the generic "layer unavailable"
+    assert any("pool_exhausted" in r.message for r in caplog.records), (
+        "WARNING log must include the pool error message from turn_error"
+    )
+    assert not any("layer unavailable" in r.message for r in caplog.records), (
+        "turn_error path must not log the misleading 'layer unavailable' message"
+    )
+
+
+async def test_dispatch_2_0_transport_error_logs_turn_transport_error(caplog):
+    """Raw httpx transport errors must log 'layer turn transport error', not 'layer unavailable'."""
+    import logging
+    constructor, client = _make_layer_client(
+        raise_on_start=httpx.ConnectError("refused")
+    )
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+        caplog.at_level(logging.WARNING, logger="bot.agent_dispatch"),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0", "hi", send_fn=lambda m: None, pool=None, user_id="u1"
+        )
+
+    # The improved log message must say "layer unreachable" or similar, not the old "unavailable"
+    assert any(
+        "layer unreachable" in r.message or "layer turn transport error" in r.message
+        for r in caplog.records
+    ), "transport error log must use improved message, not 'layer unavailable'"
+
+
+# ---------------------------------------------------------------------------
 # Existing 1.0 vault/status_fn forwarding test — unchanged
 # ---------------------------------------------------------------------------
 

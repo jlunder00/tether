@@ -133,6 +133,20 @@ async def _dispatch_v2_0(
                     send_fn(event.get("final_text", ""))
                 break
 
+            if etype == "turn_error":
+                # Layer emitted an in-band error (e.g. pool exhausted) — log the
+                # real cause and fall back to 1.0 so the user still gets a response.
+                logger.warning(
+                    "dispatch_v2_0: layer turn error, falling back to 1.0"
+                    " user_id=%s: %s",
+                    user_id,
+                    event.get("message", "unknown"),
+                )
+                await handle_message(
+                    text, send_fn, pool, user_id, vault=vault, status_fn=status_fn
+                )
+                return
+
             if etype in ("status", "agent_action"):
                 if status_fn is not None:
                     if etype == "status":
@@ -159,10 +173,12 @@ async def _dispatch_v2_0(
         raise
 
     except httpx.HTTPError as exc:
-        # Covers both start_session and turn() failures. If session_id is set,
-        # the finally block cleans it up; otherwise there is nothing to end.
+        # Raw transport failure (layer unreachable, connection reset mid-stream,
+        # etc.) — distinct from turn_error which is an in-band error from a
+        # running layer. Both fall back to 1.0 so the user still gets a response.
         logger.warning(
-            "dispatch_v2_0: layer unavailable, falling back to 1.0 user_id=%s: %s",
+            "dispatch_v2_0: layer turn transport error, falling back to 1.0"
+            " user_id=%s: %s",
             user_id,
             exc,
         )
