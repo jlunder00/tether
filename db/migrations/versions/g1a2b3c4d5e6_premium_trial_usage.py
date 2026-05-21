@@ -1,7 +1,7 @@
 """Add premium_trial_usage table for tether-agent-2.5 free-trial counter.
 
 Revision ID: g1a2b3c4d5e6
-Revises: f5a6b7c8d9e0
+Revises: d9e0f1a2b3c4
 Create Date: 2026-05-21
 """
 from typing import Sequence, Union
@@ -9,7 +9,7 @@ from typing import Sequence, Union
 from alembic import op
 
 revision: str = "g1a2b3c4d5e6"
-down_revision: Union[str, Sequence[str], None] = "f5a6b7c8d9e0"
+down_revision: Union[str, Sequence[str], None] = "d9e0f1a2b3c4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
