@@ -5,6 +5,7 @@ import dataclasses
 import json
 import time
 import uuid
+from collections.abc import Callable
 from typing import AsyncIterator, Any
 
 from interactive_agent_layer.coalescing import CoalescingBuffer
@@ -41,11 +42,21 @@ class Layer:
         pool_client: PoolClient,
         ws_publisher: WSPublisher,
         translation_table: TranslationTable | None = None,
+        *,
+        trial_counter: Any = None,
+        is_paid_fn: Callable[..., Any] | None = None,
+        provider_fn: Callable[[str], str] | None = None,
+        leaky_providers: list[str] | None = None,
     ) -> None:
         self.sessions: dict[str, Session] = {}
         self.pool_client = pool_client
         self.ws_publisher = ws_publisher
         self.translation_table = translation_table or TranslationTable.from_yaml()
+        # Gate dependencies — None means no gate enforcement
+        self.trial_counter = trial_counter
+        self.is_paid_fn = is_paid_fn
+        self.provider_fn = provider_fn
+        self.leaky_providers = leaky_providers
 
     def create_session(
         self,
