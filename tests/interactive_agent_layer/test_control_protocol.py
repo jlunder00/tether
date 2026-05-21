@@ -13,17 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport
 
-import pytest
-
-from interactive_agent_layer.permissions import PermissionResultAllow, PermissionResultDeny
 from interactive_agent_layer.session import Layer, Session
 from interactive_agent_layer.ws_publisher import WSPublisher
 
