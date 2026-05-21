@@ -57,6 +57,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir supervisor
 
 # Application code
+COPY agent_pool_manager/ agent_pool_manager/
 COPY api/ api/
 COPY bot/ bot/
 COPY db/ db/

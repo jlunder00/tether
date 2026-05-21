@@ -18,6 +18,17 @@ pipeline:
 server:
   api_port: 8000
   mcp_port: 5001
+  pool_port: 5002
+
+agent_pool:
+  target_depth_per_hash: 2      # warm subprocesses per options_hash partition
+  capacity_total: 8             # max subprocesses across all partitions (warm+active+warming)
+  max_age_seconds: 600          # TTL — subprocess drained on next acquire if exceeded
+  refill_poll_interval: 2       # seconds between refill loop checks
+  prime_timeout_seconds: 30     # max seconds to wait for a priming response
+  acquire_default_timeout: 10   # default acquire timeout when caller omits timeout_seconds
+  base_url: "http://127.0.0.1:5002"  # override for remote pool deployments
+  enabled: true                 # false = callers fall back to direct spawn (local dev)
 
 llm:
   use_v3: false
