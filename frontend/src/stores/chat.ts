@@ -42,29 +42,26 @@ export const useChatStore = defineStore('chat', () => {
             activeSessionId.value = event.session_id
             messages.value[botMsgIndex].content += event.delta
             break
-          case 'agent_action':
+          case 'agent_action': {
             activeSessionId.value = event.session_id
-            if (!messages.value[botMsgIndex].actions) {
-              messages.value[botMsgIndex].actions = []
-            }
-            messages.value[botMsgIndex].actions!.push({ action: event.action, tool: event.tool })
+            const bot = messages.value[botMsgIndex]
+            ;(bot.actions ??= []).push({ action: event.action, tool: event.tool })
             break
-          case 'permission_request':
+          }
+          case 'permission_request': {
             activeSessionId.value = event.session_id
+            const req: PermissionRequest = {
+              request_id: event.request_id,
+              summary: event.summary,
+              details: event.details,
+            }
             if (!pendingPermissionRequest.value) {
-              pendingPermissionRequest.value = {
-                request_id: event.request_id,
-                summary: event.summary,
-                details: event.details,
-              }
+              pendingPermissionRequest.value = req
             } else {
-              permissionQueue.value.push({
-                request_id: event.request_id,
-                summary: event.summary,
-                details: event.details,
-              })
+              permissionQueue.value.push(req)
             }
             break
+          }
           case 'status':
             activeSessionId.value = event.session_id
             statusMessage.value = event.message
@@ -92,11 +89,7 @@ export const useChatStore = defineStore('chat', () => {
 
   function respondToPermission(requestId: string, approve: boolean): void {
     getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, approve })
-    if (permissionQueue.value.length > 0) {
-      pendingPermissionRequest.value = permissionQueue.value.shift()!
-    } else {
-      pendingPermissionRequest.value = null
-    }
+    pendingPermissionRequest.value = permissionQueue.value.shift() ?? null
   }
 
   function sendInterrupt(): void {

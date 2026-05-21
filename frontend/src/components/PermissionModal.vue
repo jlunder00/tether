@@ -36,18 +36,10 @@ watch(
 
 onUnmounted(() => clearTimer())
 
-function approve() {
+function respond(approve: boolean) {
   clearTimer()
-  if (chatStore.pendingPermissionRequest) {
-    chatStore.respondToPermission(chatStore.pendingPermissionRequest.request_id, true)
-  }
-}
-
-function deny() {
-  clearTimer()
-  if (chatStore.pendingPermissionRequest) {
-    chatStore.respondToPermission(chatStore.pendingPermissionRequest.request_id, false)
-  }
+  const req = chatStore.pendingPermissionRequest
+  if (req) chatStore.respondToPermission(req.request_id, approve)
 }
 </script>
 
@@ -84,14 +76,14 @@ function deny() {
           <button
             type="button"
             class="px-4 py-1.5 text-xs rounded-lg bg-[--bg-elev-2] text-[--fg-2] hover:bg-[--bg-elev-3] transition-colors"
-            @click="deny"
+            @click="respond(false)"
           >
             Deny
           </button>
           <button
             type="button"
             class="px-4 py-1.5 text-xs rounded-lg bg-[--accent] text-[--accent-fg] hover:opacity-90 transition-opacity"
-            @click="approve"
+            @click="respond(true)"
           >
             Approve
           </button>

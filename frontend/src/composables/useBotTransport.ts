@@ -121,12 +121,9 @@ export function createWebSocketTransport(): BotTransport {
           pendingReject = reject
         })
         const msg = JSON.parse(evt.data)
-        // Yield the full typed event; terminate on turn_complete or session_ended
-        if (msg.type === 'turn_complete' || msg.type === 'session_ended') {
-          yield msg
-          return
-        }
         yield msg
+        // Terminate the turn on terminal events.
+        if (msg.type === 'turn_complete' || msg.type === 'session_ended') return
       }
     },
 
