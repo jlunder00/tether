@@ -212,18 +212,20 @@ async def update_conversation(
 async def list_conversations(
     conn: asyncpg.Connection,
     *,
+    user_id: str,
     state: str | None = None,
     context_node_id: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    """Return conversations for the current RLS user, newest first.
+    """Return conversations for the given user, newest first.
 
     LEFT JOINs context_nodes so that folder_name is included in each row.
+    Filters explicitly by user_id as defense-in-depth alongside RLS.
     """
-    # $1 = limit, $2 = offset; optional filters appended as $3, $4...
-    params: list = [limit, offset]
-    conditions: list[str] = []
+    # $1 = limit, $2 = offset, $3 = user_id; optional filters appended as $4, $5...
+    params: list = [limit, offset, user_id]
+    conditions: list[str] = ["c.user_id = $3::uuid"]
 
     if state is not None:
         params.append(state)
@@ -232,7 +234,7 @@ async def list_conversations(
         params.append(context_node_id)
         conditions.append(f"c.context_node_id = ${len(params)}::uuid")
 
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    where = f"WHERE {' AND '.join(conditions)}"
 
     rows = await conn.fetch(
         f"""

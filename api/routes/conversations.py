@@ -89,6 +89,7 @@ async def _attach_folder_name(conn, conv: dict) -> dict:
 
 @router.get("/conversations")
 async def list_convs(
+    request: Request,
     state: str | None = Query(None),
     context_node_id: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -100,6 +101,7 @@ async def list_convs(
     # so no _attach_folder_name pass is needed here (avoids N+1).
     return await list_conversations(
         conn,
+        user_id=request.state.user_id,
         state=state,
         context_node_id=context_node_id,
         limit=limit,
@@ -141,11 +143,12 @@ async def create_conv(
 @router.get("/conversations/{conversation_id}")
 async def get_conv(
     conversation_id: str,
+    request: Request,
     _auth=Depends(auth_dependency),
     conn=Depends(get_db_conn),
 ):
     conv = await get_conversation(conn, conversation_id)
-    if conv is None:
+    if conv is None or conv["user_id"] != request.state.user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return await _attach_folder_name(conn, conv)
 
@@ -159,11 +162,12 @@ async def get_conv(
 async def patch_conv(
     conversation_id: str,
     body: ConversationPatch,
+    request: Request,
     _auth=Depends(auth_dependency),
     conn=Depends(get_db_conn),
 ):
     conv = await get_conversation(conn, conversation_id)
-    if conv is None:
+    if conv is None or conv["user_id"] != request.state.user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     await update_conversation(
         conn,
@@ -185,13 +189,14 @@ async def patch_conv(
 @router.get("/conversations/{conversation_id}/messages")
 async def get_messages(
     conversation_id: str,
+    request: Request,
     limit: int = Query(50, ge=1, le=200),
     before_id: str | None = Query(None),
     _auth=Depends(auth_dependency),
     conn=Depends(get_db_conn),
 ):
     conv = await get_conversation(conn, conversation_id)
-    if conv is None:
+    if conv is None or conv["user_id"] != request.state.user_id:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return await list_conversation_messages(
         conn,
