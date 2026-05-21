@@ -119,10 +119,9 @@ def build_app(
                 yield "data: [DONE]\n\n"
             except asyncio.CancelledError:
                 yield 'data: {"event": "cancelled"}\n\n'
-            except Exception as exc:
+            except Exception:
                 log.exception("Error streaming query for handle %s", handle_id)
-                payload = json.dumps({"error": str(exc)})
-                yield f"data: {payload}\n\n"
+                yield 'data: {"error": "internal_error"}\n\n'
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
