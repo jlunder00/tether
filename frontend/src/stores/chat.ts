@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { ChatMessage } from '../types/chat'
+import type { ChatMessage, PermissionRequest } from '../types/chat'
 import { getBotTransport } from '../composables/useBotTransport'
 import { useAgentPickerStore } from './agentPicker'
 
@@ -13,6 +13,11 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
   const heartbeat = ref(false)
+  const activeSessionId = ref<string | null>(null)
+  const isSessionActive = ref(false)
+  const statusMessage = ref('')
+  const pendingPermissionRequest = ref<PermissionRequest | null>(null)
+  const permissionQueue = ref<PermissionRequest[]>([])
 
   // Register heartbeat via a stable wrapper so it always reflects the current
   // transport, even after setBotTransport() replaces it post-auth.
@@ -28,17 +33,81 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push({ id: makeId(), role: 'bot', content: '', ts: Date.now() })
 
     isStreaming.value = true
+    isSessionActive.value = true
     try {
-      // Always call getBotTransport() at send time — not a cached reference —
-      // so we use whichever transport is current (mock → real WS after auth).
       const agentVersion = useAgentPickerStore().selectedAgent
-      for await (const chunk of getBotTransport().send(text, agentVersion)) {
-        messages.value[botMsgIndex].content += chunk
+      for await (const event of getBotTransport().send(text, agentVersion)) {
+        switch (event.type) {
+          case 'agent_text_delta':
+            activeSessionId.value = event.session_id
+            messages.value[botMsgIndex].content += event.delta
+            break
+          case 'agent_action': {
+            activeSessionId.value = event.session_id
+            const bot = messages.value[botMsgIndex]
+            ;(bot.actions ??= []).push({ action: event.action, tool: event.tool })
+            break
+          }
+          case 'permission_request': {
+            activeSessionId.value = event.session_id
+            const req: PermissionRequest = {
+              request_id: event.request_id,
+              summary: event.summary,
+              details: event.details,
+            }
+            if (!pendingPermissionRequest.value) {
+              pendingPermissionRequest.value = req
+            } else {
+              permissionQueue.value.push(req)
+            }
+            break
+          }
+          case 'status':
+            activeSessionId.value = event.session_id
+            statusMessage.value = event.message
+            break
+          case 'turn_complete':
+            // final_text is canonical — overwrite accumulated deltas
+            messages.value[botMsgIndex].content = event.final_text
+            statusMessage.value = ''
+            isSessionActive.value = false
+            return
+          case 'session_ended':
+            statusMessage.value = ''
+            isSessionActive.value = false
+            return
+          case 'trial_usage_update':
+            // handled elsewhere (trial counter UI)
+            break
+        }
       }
     } finally {
       isStreaming.value = false
+      isSessionActive.value = false
     }
   }
 
-  return { messages, isStreaming, heartbeat, send }
+  function respondToPermission(requestId: string, approve: boolean): void {
+    getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, approve })
+    pendingPermissionRequest.value = permissionQueue.value.shift() ?? null
+  }
+
+  function sendInterrupt(): void {
+    if (!activeSessionId.value) return
+    getBotTransport().sendRaw({ type: 'interrupt', session_id: activeSessionId.value })
+  }
+
+  return {
+    messages,
+    isStreaming,
+    heartbeat,
+    activeSessionId,
+    isSessionActive,
+    statusMessage,
+    pendingPermissionRequest,
+    permissionQueue,
+    send,
+    respondToPermission,
+    sendInterrupt,
+  }
 })
