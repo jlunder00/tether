@@ -9,10 +9,11 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import AgentPoolConfig, load_pool_config
+from .metrics import PoolMetrics
 from .pool import Pool, PoolExhausted
 from .refill import RefillLoop
 
@@ -32,6 +33,10 @@ class AcquireRequest(BaseModel):
 
 class ReleaseRequest(BaseModel):
     reusable: bool = False
+    # Optional token tracking — passed by the layer after a turn completes
+    user_id: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class QueryRequest(BaseModel):
@@ -53,23 +58,63 @@ class ControlResponseRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Token usage async write — no-op if DB pool unavailable
+# ---------------------------------------------------------------------------
+
+# Strong references to in-flight token-write tasks prevent GC from silently
+# dropping them before they complete (asyncio creates a weak reference only).
+_token_write_tasks: set[asyncio.Task] = set()
+
+
+def write_token_usage_async(user_id: str, input_tokens: int, output_tokens: int) -> None:
+    """Fire-and-forget token usage DB write.
+
+    Creates an asyncio task to write token counts to the ``token_usage`` table.
+    The task is intentionally not awaited — callers on the hot path (release
+    endpoint) must not block on the DB write.
+
+    A strong reference is kept in ``_token_write_tasks`` until the task
+    completes, preventing the GC from silently dropping in-flight writes.
+
+    If the event loop is not running or the DB layer is unavailable, the
+    failure is logged at WARNING level (not silently swallowed).
+    """
+    try:
+        from db.pg_queries.token_usage import record_token_usage
+        task = asyncio.create_task(
+            record_token_usage(user_id, input_tokens, output_tokens),
+            name=f"token-usage-{user_id}",
+        )
+        _token_write_tasks.add(task)
+        task.add_done_callback(_token_write_tasks.discard)
+    except RuntimeError as exc:
+        # RuntimeError: no running event loop — should not happen in an async
+        # handler but log at warning so it's visible, not silently dropped.
+        log.warning("write_token_usage_async: no event loop — token write dropped: %s", exc)
+    except Exception:
+        log.warning("write_token_usage_async: failed to schedule token write", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
 def build_app(
     pool: Pool | None = None,
     refill: RefillLoop | None = None,
+    metrics: PoolMetrics | None = None,
 ) -> FastAPI:
     """Build the FastAPI app.
 
-    ``pool`` and ``refill`` may be injected for testing; if omitted they are
-    constructed from the TetherConfig at startup.
+    ``pool``, ``refill``, and ``metrics`` may be injected for testing; if
+    omitted they are constructed from the TetherConfig at startup.
     """
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if pool is not None:
             app.state.pool = pool
             app.state.refill = refill or RefillLoop(pool)
+            app.state.metrics = metrics or PoolMetrics()
         else:
             try:
                 from config.loader import TetherConfig
@@ -78,6 +123,11 @@ def build_app(
                 cfg = AgentPoolConfig()
             app.state.pool = Pool(cfg)
             app.state.refill = RefillLoop(app.state.pool)
+            app.state.metrics = PoolMetrics()
+
+        # Wire metrics into pool so acquire/release/refill events are recorded
+        app.state.pool._metrics = app.state.metrics
+        app.state.metrics.attach_pool(app.state.pool)
 
         app.state.refill.start()
         log.info("Agent pool manager started")
@@ -98,6 +148,7 @@ def build_app(
                 req.options_hash,
                 req.options,
                 timeout=req.timeout_seconds,
+                user_id=req.user_id,
             )
         except PoolExhausted:
             return JSONResponse(
@@ -196,6 +247,10 @@ def build_app(
             raise HTTPException(status_code=404, detail="handle not found")
         await the_pool.release(handle_id, reusable=req.reusable)
 
+        # Fire-and-forget token write when the caller reports usage
+        if req.user_id and req.input_tokens is not None and req.output_tokens is not None:
+            write_token_usage_async(req.user_id, req.input_tokens, req.output_tokens)
+
     # -----------------------------------------------------------------------
     # GET /status
     # -----------------------------------------------------------------------
@@ -203,6 +258,20 @@ def build_app(
     async def status(request: Request) -> dict:
         the_pool: Pool = request.app.state.pool
         return the_pool.status()
+
+    # -----------------------------------------------------------------------
+    # GET /metrics  — Prometheus text exposition format
+    # -----------------------------------------------------------------------
+    @app.get("/metrics")
+    async def metrics_endpoint(request: Request) -> PlainTextResponse:
+        """Expose pool metrics in Prometheus text format.
+
+        Counters, histograms, and pool size gauges are included.
+        Scrape with Prometheus or read directly for debugging.
+        """
+        the_metrics: PoolMetrics = request.app.state.metrics
+        text = the_metrics.render_text()
+        return PlainTextResponse(content=text, media_type="text/plain; version=0.0.4")
 
     # -----------------------------------------------------------------------
     # POST /hint

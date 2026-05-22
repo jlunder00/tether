@@ -7,7 +7,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from claude_agent_sdk import ClaudeSDKClient
 from claude_agent_sdk.types import (
@@ -19,6 +19,9 @@ from claude_agent_sdk.types import (
 
 from .config import AgentPoolConfig
 from .control import ControlBridge, ControlTimeout
+
+if TYPE_CHECKING:
+    from .metrics import PoolMetrics
 
 log = logging.getLogger(__name__)
 
@@ -87,6 +90,8 @@ class Pool:
         self.control_bridge = ControlBridge(
             timeout_seconds=config.control_response_timeout_seconds
         )
+        # optional metrics instance — attach via pool._metrics = metrics
+        self._metrics: "PoolMetrics | None" = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,6 +102,7 @@ class Pool:
         options_hash: str,
         options: dict[str, Any],
         timeout: float | None = None,
+        user_id: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """Hand out a warm subprocess for the given options_hash.
 
@@ -111,46 +117,75 @@ class Pool:
         if timeout is None:
             timeout = self.config.acquire_default_timeout
 
+        t_start = time.monotonic()
         self._options_cache[options_hash] = options
-        deadline = time.monotonic() + timeout
+        deadline = t_start + timeout
         queue = self._get_or_create_queue(options_hash)
 
         exhausted = PoolExhausted(
             f"No warm subprocess for hash {options_hash!r} within {timeout}s"
         )
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise exhausted
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise exhausted
 
-            try:
-                sub = queue.get_nowait()
-            except asyncio.QueueEmpty:
-                # Wait for a warm item to appear, then re-check the deadline.
                 try:
-                    sub = await asyncio.wait_for(queue.get(), timeout=min(remaining, 0.1))
-                except asyncio.TimeoutError:
+                    sub = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    # Wait for a warm item to appear, then re-check the deadline.
+                    try:
+                        sub = await asyncio.wait_for(queue.get(), timeout=min(remaining, 0.1))
+                    except asyncio.TimeoutError:
+                        continue
+
+                # Drain expired entries
+                if sub.is_expired(self.config.max_age_seconds):
+                    latency_ms = (time.monotonic() - t_start) * 1000
+                    log.info(
+                        "pool.expire options_hash=%s user_id=%s age_s=%.1f latency_ms=%.1f",
+                        options_hash, user_id,
+                        time.monotonic() - sub.spawned_at, latency_ms,
+                    )
+                    if self._metrics:
+                        self._metrics.expire_total.inc()
+                    asyncio.create_task(self._terminate(sub))
                     continue
 
-            # Drain expired entries
-            if sub.is_expired(self.config.max_age_seconds):
-                log.debug("Draining expired subprocess for hash %s", options_hash)
-                asyncio.create_task(self._terminate(sub))
-                continue
+                # Hand it out
+                handle_id = str(uuid.uuid4())
+                sub.in_use = True
+                sub.last_used_at = time.monotonic()
+                sub.callback_ctx.handle_id = handle_id
+                async with self._lock:
+                    self._active[handle_id] = sub
 
-            # Hand it out
-            handle_id = str(uuid.uuid4())
-            sub.in_use = True
-            sub.last_used_at = time.monotonic()
-            sub.callback_ctx.handle_id = handle_id
-            async with self._lock:
-                self._active[handle_id] = sub
+                latency_s = time.monotonic() - t_start
+                latency_ms = latency_s * 1000
+                log.info(
+                    "pool.acquire handle_id=%s user_id=%s options_hash=%s latency_ms=%.1f",
+                    handle_id, user_id, options_hash, latency_ms,
+                )
+                if self._metrics:
+                    self._metrics.acquire_total.inc()
+                    self._metrics.acquire_latency_seconds.observe(latency_s)
 
-            meta = {
-                "subprocess_pid": _extract_pid(sub.proc),
-                "ready_at": datetime.datetime.utcnow().isoformat() + "Z",
-            }
-            return handle_id, meta
+                meta = {
+                    "subprocess_pid": _extract_pid(sub.proc),
+                    "ready_at": datetime.datetime.utcnow().isoformat() + "Z",
+                }
+                return handle_id, meta
+
+        except PoolExhausted:
+            latency_ms = (time.monotonic() - t_start) * 1000
+            log.info(
+                "pool.acquire_timeout options_hash=%s user_id=%s timeout_s=%.2f latency_ms=%.1f",
+                options_hash, user_id, timeout, latency_ms,
+            )
+            if self._metrics:
+                self._metrics.acquire_timeout_total.inc()
+            raise
 
     async def release(self, handle_id: str, reusable: bool = False) -> None:
         """Release a handle.
@@ -165,6 +200,13 @@ class Pool:
 
         sub.in_use = False
         sub.last_used_at = time.monotonic()
+
+        log.info(
+            "pool.release handle_id=%s options_hash=%s reusable=%s",
+            handle_id, sub.options_hash, reusable,
+        )
+        if self._metrics:
+            self._metrics.release_total.inc()
 
         if reusable and not sub.is_expired(self.config.max_age_seconds):
             queue = self._get_or_create_queue(sub.options_hash)
@@ -255,7 +297,9 @@ class Pool:
         queue = self._get_or_create_queue(options_hash)
         await queue.put(sub)
         self._options_cache[options_hash] = options
-        log.debug("Primed subprocess ready for hash %s", options_hash)
+        log.info("pool.refill options_hash=%s warm_depth=%d", options_hash, queue.qsize())
+        if self._metrics:
+            self._metrics.refill_total.inc()
         return True
 
     async def _spawn_and_prime(
