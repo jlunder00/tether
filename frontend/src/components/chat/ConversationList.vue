@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
+import type { ConversationDetail } from '../../types/conversations'
 import PriorityPill from './PriorityPill.vue'
 import NewConversationModal from './NewConversationModal.vue'
+
+const props = withDefaults(defineProps<{
+  activeNodeId?: string | null
+}>(), {
+  activeNodeId: null,
+})
 
 const store = useConversationsStore()
 
@@ -17,8 +24,22 @@ const filters = [
 
 async function setFilter(f: 'all' | 'open' | 'closed') {
   activeFilter.value = f
-  await store.refresh(f === 'all' ? undefined : { state: f })
+  await store.refresh(buildRefreshParams())
 }
+
+function buildRefreshParams(): { state?: string; context_node_id?: string } | undefined {
+  const params: { state?: string; context_node_id?: string } = {}
+  if (activeFilter.value !== 'all') params.state = activeFilter.value
+  if (props.activeNodeId) params.context_node_id = props.activeNodeId
+  return Object.keys(params).length > 0 ? params : undefined
+}
+
+watch(
+  () => props.activeNodeId,
+  () => {
+    store.refresh(buildRefreshParams())
+  }
+)
 
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime()
@@ -30,8 +51,12 @@ function formatRelativeTime(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
+function onDragStart(conv: ConversationDetail, evt: DragEvent) {
+  evt.dataTransfer?.setData('text/plain', JSON.stringify({ conversationId: conv.id }))
+}
+
 onMounted(() => {
-  store.refresh()
+  store.refresh(buildRefreshParams())
 })
 </script>
 
@@ -75,9 +100,11 @@ onMounted(() => {
           v-for="conv in store.list"
           :key="conv.id"
           data-testid="conversation-row"
+          draggable="true"
           class="flex flex-col px-4 py-3 border-b border-[--border-1] cursor-pointer hover:bg-[--bg-2] transition-colors"
           :class="store.selectedId === conv.id ? 'bg-[--bg-2]' : ''"
           @click="store.select(conv.id)"
+          @dragstart="onDragStart(conv, $event)"
         >
           <div class="flex items-center gap-2 min-w-0">
             <span class="font-medium text-sm text-[--fg-1] truncate flex-1">{{ conv.name }}</span>
@@ -98,6 +125,7 @@ onMounted(() => {
     <NewConversationModal
       :open="showModal"
       :context-nodes="[]"
+      :default-node-id="activeNodeId"
       @close="showModal = false"
       @created="showModal = false"
     />
