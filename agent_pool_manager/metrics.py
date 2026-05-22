@@ -73,6 +73,9 @@ class Histogram:
             self._sum += value
             self._total_count += 1.0
             self._inf_count += 1.0
+            # _counts[i] stores the *cumulative* count of observations <= bound[i].
+            # Every observation increments all buckets whose bound it fits within.
+            # render_text() emits _counts[i] directly — no re-accumulation needed.
             for i, bound in enumerate(self._buckets):
                 if value <= bound:
                     self._counts[i] += 1.0
@@ -82,10 +85,10 @@ class Histogram:
             f"# HELP {self.name} {self.help_text}",
             f"# TYPE {self.name} histogram",
         ]
-        cumulative = 0.0
+        # _counts[i] is already the cumulative count for le=bound[i] —
+        # emit directly without re-accumulating (which would double-count).
         for i, bound in enumerate(self._buckets):
-            cumulative += self._counts[i]
-            lines.append(f'{self.name}_bucket{{le="{bound}"}} {cumulative}')
+            lines.append(f'{self.name}_bucket{{le="{bound}"}} {self._counts[i]}')
         lines.append(f'{self.name}_bucket{{le="+Inf"}} {self._inf_count}')
         lines.append(f"{self.name}_sum {self._sum}")
         lines.append(f"{self.name}_count {self._total_count}")

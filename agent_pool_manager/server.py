@@ -61,6 +61,11 @@ class ControlResponseRequest(BaseModel):
 # Token usage async write — no-op if DB pool unavailable
 # ---------------------------------------------------------------------------
 
+# Strong references to in-flight token-write tasks prevent GC from silently
+# dropping them before they complete (asyncio creates a weak reference only).
+_token_write_tasks: set[asyncio.Task] = set()
+
+
 def write_token_usage_async(user_id: str, input_tokens: int, output_tokens: int) -> None:
     """Fire-and-forget token usage DB write.
 
@@ -68,16 +73,26 @@ def write_token_usage_async(user_id: str, input_tokens: int, output_tokens: int)
     The task is intentionally not awaited — callers on the hot path (release
     endpoint) must not block on the DB write.
 
-    If no pg_pool is wired into app state the write is silently skipped.
+    A strong reference is kept in ``_token_write_tasks`` until the task
+    completes, preventing the GC from silently dropping in-flight writes.
+
+    If the event loop is not running or the DB layer is unavailable, the
+    failure is logged at WARNING level (not silently swallowed).
     """
     try:
         from db.pg_queries.token_usage import record_token_usage
-        asyncio.create_task(
+        task = asyncio.create_task(
             record_token_usage(user_id, input_tokens, output_tokens),
             name=f"token-usage-{user_id}",
         )
+        _token_write_tasks.add(task)
+        task.add_done_callback(_token_write_tasks.discard)
+    except RuntimeError as exc:
+        # RuntimeError: no running event loop — should not happen in an async
+        # handler but log at warning so it's visible, not silently dropped.
+        log.warning("write_token_usage_async: no event loop — token write dropped: %s", exc)
     except Exception:
-        log.debug("token_usage write skipped — DB not available")
+        log.warning("write_token_usage_async: failed to schedule token write", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

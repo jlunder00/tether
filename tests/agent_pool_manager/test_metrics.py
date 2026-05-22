@@ -79,6 +79,32 @@ def test_metrics_histogram_observe():
     assert 'pool_acquire_latency_seconds_bucket{le="0.1"}' in text
 
 
+def test_metrics_histogram_cumulative_counts_are_monotonic_and_correct():
+    """Histogram bucket cumulative values are correct — not double-counted.
+
+    Prometheus requires cumulative semantics: each le=X bucket reports the
+    count of ALL observations with value <= X. Verify exact values for a
+    known set of observations to catch double-counting bugs.
+    """
+    m = PoolMetrics()
+    # observe: 0.07 (fits ≤ 0.1), 0.3 (fits ≤ 0.5), 1.5 (fits ≤ 2.5)
+    m.acquire_latency_seconds.observe(0.07)
+    m.acquire_latency_seconds.observe(0.3)
+    m.acquire_latency_seconds.observe(1.5)
+    text = m.render_text()
+
+    # Cumulative: le=0.025: 0, le=0.1: 1, le=0.5: 2, le=2.5: 3, +Inf: 3
+    assert 'pool_acquire_latency_seconds_bucket{le="0.025"} 0.0' in text
+    assert 'pool_acquire_latency_seconds_bucket{le="0.1"} 1.0' in text
+    assert 'pool_acquire_latency_seconds_bucket{le="0.5"} 2.0' in text
+    assert 'pool_acquire_latency_seconds_bucket{le="2.5"} 3.0' in text
+    assert 'pool_acquire_latency_seconds_bucket{le="+Inf"} 3.0' in text
+
+    assert "pool_acquire_latency_seconds_count 3.0" in text
+    # sum: 0.07 + 0.3 + 1.5 = 1.87
+    assert "pool_acquire_latency_seconds_sum 1.87" in text
+
+
 def test_metrics_timeout_counter():
     """acquire_timeout_total increments on timeout."""
     m = PoolMetrics()
