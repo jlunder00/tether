@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { setActivePinia, createPinia } from 'pinia'
-import { defineComponent, ref, computed, reactive } from 'vue'
+import { computed, reactive } from 'vue'
 
 // Mock both stores
 vi.mock('../../../stores/context', () => ({

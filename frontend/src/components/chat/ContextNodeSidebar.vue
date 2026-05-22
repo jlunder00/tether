@@ -4,7 +4,7 @@ import { useContextStore } from '../../stores/context'
 import type { ContextNode } from '../../stores/context'
 import { useConversationsStore } from '../../stores/conversations'
 
-const props = defineProps<{ activeNodeId: string | null }>()
+defineProps<{ activeNodeId: string | null }>()
 const emit = defineEmits<{ 'update:activeNodeId': [id: string | null] }>()
 
 const contextStore = useContextStore()
