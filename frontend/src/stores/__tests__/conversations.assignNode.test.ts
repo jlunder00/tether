@@ -22,10 +22,7 @@ describe('useConversationsStore.assignNode()', () => {
   })
 
   it('calls PATCH /api/conversations/{id} with context_node_id', async () => {
-    // First call: PATCH, second call: refresh GET
-    mockApi
-      .mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
-      .mockResolvedValueOnce(mockResponse([], true, 200))
+    mockApi.mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
 
     const store = useConversationsStore()
     await store.assignNode('conv-1', 'node-abc')
@@ -39,9 +36,7 @@ describe('useConversationsStore.assignNode()', () => {
   })
 
   it('calls PATCH with context_node_id: null when nodeId is null', async () => {
-    mockApi
-      .mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
-      .mockResolvedValueOnce(mockResponse([], true, 200))
+    mockApi.mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
 
     const store = useConversationsStore()
     await store.assignNode('conv-1', null)
@@ -52,19 +47,24 @@ describe('useConversationsStore.assignNode()', () => {
     expect(body).toEqual({ context_node_id: null })
   })
 
-  it('calls refresh() after successful PATCH', async () => {
-    mockApi
-      .mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
-      .mockResolvedValueOnce(mockResponse([{ id: 'conv-1', name: 'Test' }], true, 200))
+  it('updates context_node_id in-place on the list after successful PATCH', async () => {
+    mockApi.mockResolvedValueOnce(mockResponse({ id: 'conv-1' }, true, 200))
 
     const store = useConversationsStore()
+    // Seed the list with a conversation
+    store.list.push({
+      id: 'conv-1', name: 'Test', type: 'interactive', priority: 'normal',
+      state: 'open', context_node_id: null, thread_key: null, is_system: false,
+      created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:01:00Z',
+      folder_name: null,
+    } as any)
+
     await store.assignNode('conv-1', 'node-abc')
 
-    // refresh() makes a GET call — should be the second api call
-    expect(mockApi).toHaveBeenCalledTimes(2)
-    const refreshCall = mockApi.mock.calls[1]
-    expect((refreshCall[0] as string)).toContain('/api/conversations')
-    expect(refreshCall[1]).toBeUndefined() // GET has no init options
+    // Only one API call (no refresh)
+    expect(mockApi).toHaveBeenCalledTimes(1)
+    // Local list updated in-place
+    expect(store.list[0].context_node_id).toBe('node-abc')
   })
 
   it('throws when API returns non-ok response', async () => {

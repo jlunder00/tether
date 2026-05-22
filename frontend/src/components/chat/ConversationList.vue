@@ -24,7 +24,7 @@ const filters = [
 
 async function setFilter(f: 'all' | 'open' | 'closed') {
   activeFilter.value = f
-  await store.refresh(f === 'all' ? undefined : { state: f })
+  await store.refresh(buildRefreshParams())
 }
 
 function buildRefreshParams(): { state?: string; context_node_id?: string } | undefined {
@@ -36,12 +36,8 @@ function buildRefreshParams(): { state?: string; context_node_id?: string } | un
 
 watch(
   () => props.activeNodeId,
-  (nodeId) => {
-    if (nodeId) {
-      store.refresh({ context_node_id: nodeId })
-    } else {
-      store.refresh(undefined)
-    }
+  () => {
+    store.refresh(buildRefreshParams())
   }
 )
 

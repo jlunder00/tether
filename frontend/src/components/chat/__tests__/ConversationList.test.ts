@@ -77,7 +77,7 @@ describe('ConversationList', () => {
     expect(nodeCall).toBeTruthy()
   })
 
-  it('calls store.refresh when activeNodeId prop changes', async () => {
+  it('calls store.refresh with context_node_id when activeNodeId prop changes to a node', async () => {
     const store = makeStore()
     mockUseConversationsStore.mockReturnValue(store as any)
 
@@ -90,10 +90,11 @@ describe('ConversationList', () => {
     await wrapper.setProps({ activeNodeId: 'node-xyz' })
     await flushPromises()
 
+    // buildRefreshParams composes both filters; with activeFilter='all', only context_node_id is set
     expect(store.refresh).toHaveBeenCalledWith({ context_node_id: 'node-xyz' })
   })
 
-  it('calls store.refresh with no args when activeNodeId changes to null', async () => {
+  it('calls store.refresh without context_node_id when activeNodeId changes back to null', async () => {
     const store = makeStore()
     mockUseConversationsStore.mockReturnValue(store as any)
 
@@ -106,6 +107,7 @@ describe('ConversationList', () => {
     await wrapper.setProps({ activeNodeId: null })
     await flushPromises()
 
+    // With no active state filter and no node filter, buildRefreshParams returns undefined
     expect(store.refresh).toHaveBeenCalledWith(undefined)
   })
 

@@ -107,7 +107,9 @@ export const useConversationsStore = defineStore('conversations', () => {
       body: JSON.stringify({ context_node_id: nodeId }),
     })
     if (!res.ok) throw new Error(`assignNode: HTTP ${res.status}`)
-    await refresh()
+    // Update local list in-place (avoids resetting active filter state)
+    const idx = list.value.findIndex(c => c.id === conversationId)
+    if (idx !== -1) list.value[idx].context_node_id = nodeId
   }
 
   return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode }
