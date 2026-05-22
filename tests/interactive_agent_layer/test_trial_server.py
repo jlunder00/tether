@@ -183,7 +183,7 @@ async def test_session_start_2_5_publishes_trial_usage_update():
     """Successful 2.5 session start publishes trial_usage_update WS event with remaining count."""
     layer, _, _, ws_publisher = _make_layer(is_paid=False, trial_allowed=True, trial_remaining=7)
     published: list[dict] = []
-    ws_publisher.push = AsyncMock(side_effect=lambda ws_id, event: published.append(event))
+    ws_publisher.push = AsyncMock(side_effect=lambda ws_id, event, **_: published.append(event))
 
     async with _client_for(layer) as client:
         await client.post("/session/start", json=_start_body(user_id="user-trial"))
