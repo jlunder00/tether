@@ -100,5 +100,15 @@ export const useConversationsStore = defineStore('conversations', () => {
     setMessages(conversationId, [...msgs, msg])
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage }
+  async function assignNode(conversationId: string, nodeId: string | null): Promise<void> {
+    const res = await api(`/api/conversations/${conversationId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context_node_id: nodeId }),
+    })
+    if (!res.ok) throw new Error(`assignNode: HTTP ${res.status}`)
+    await refresh()
+  }
+
+  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode }
 })
