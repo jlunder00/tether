@@ -41,6 +41,27 @@ from interactive_agent_layer.client import LayerClient
 logger = logging.getLogger(__name__)
 
 _DEFAULT_VERSION = "tether-agent-2.0"
+
+
+class _SendTracker:
+    """Wraps a send_fn callback to record whether it was ever called.
+
+    Used by _dispatch_v25 to detect whether the premium handler streamed
+    any output before raising an exception.  If it did, we skip the 1.0
+    fallback (handle_message) entirely to avoid double-send: the user has
+    already received premium output and calling handle_message would splice
+    a second, unrelated response on top of it.
+    """
+
+    def __init__(self, fn: Callable[[str], None]) -> None:
+        self._fn = fn
+        self.called: bool = False
+
+    def __call__(self, text: str) -> None:
+        self.called = True
+        self._fn(text)
+
+
 _KNOWN_VERSIONS: frozenset[str] = frozenset(
     {"tether-agent-1.0", "tether-agent-2.0", "tether-agent-2.5"}
 )
@@ -220,12 +241,22 @@ async def _dispatch_v25(
             async with pg.get_conn(pool, user_id) as conn:
                 is_paid = await get_user_is_paid(conn)
         except Exception:
+            # Intentional fail-closed policy: on transient DB errors, treat the user
+            # as free-tier rather than granting premium access.  Fail-open (granting
+            # access on error) was explicitly rejected as a security/billing risk.
+            # Sending a neutral "try again" message was also rejected because it
+            # gives users no actionable path.  The 1.0 fallback ensures a response.
             logger.warning(
                 "dispatch_v25: subscription check failed for user_id=%s — defaulting to free",
                 user_id,
             )
 
     if is_admin or is_paid:
+        # Wrap send_fn so we can detect whether the premium handler streamed
+        # any output before raising.  If it did, we must NOT run handle_message
+        # (1.0 fallback) — doing so would splice a second response on top of
+        # partial premium output the user has already received.
+        tracked_send = _SendTracker(send_fn)
         try:
             from tether_premium.register import get_premium_handler
             from db.pg_queries import get_anchors
@@ -237,10 +268,10 @@ async def _dispatch_v25(
 
             response = await get_premium_handler()(
                 text, pool, user_id, anchors, current_anchor,
-                send_fn=send_fn, status_fn=status_fn,
+                send_fn=tracked_send, status_fn=status_fn,
             )
             if response:
-                send_fn(response)
+                tracked_send(response)
             return
         except (ImportError, NotImplementedError):
             logger.warning(
@@ -252,6 +283,18 @@ async def _dispatch_v25(
                 "dispatch_v25: premium handler raised for user_id=%s — falling back to 1.0",
                 user_id,
             )
+
+        if tracked_send.called:
+            # Premium already streamed output to the user.  Skip handle_message to
+            # avoid double-send.  Running handle_message here would also risk DB
+            # side effects (task mutations etc.) on a message that premium already
+            # partially handled.
+            logger.warning(
+                "dispatch_v25: premium handler streamed then raised for user_id=%s"
+                " — suppressing 1.0 fallback to avoid double-send",
+                user_id,
+            )
+            return
     else:
         send_fn(
             "tether-agent-2.5 is available on the Pro plan — you're currently on "

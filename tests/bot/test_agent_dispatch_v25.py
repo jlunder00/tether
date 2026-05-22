@@ -223,3 +223,98 @@ class TestDispatchMessageRouting:
         # Generic "not yet wired" stub must NOT appear
         assert not any("not yet wired" in s for s in sent)
 
+
+# ---------------------------------------------------------------------------
+# _SendTracker / double-send guard
+# ---------------------------------------------------------------------------
+
+class TestDoubleSendGuard:
+    """Tests for the _SendTracker double-send protection.
+
+    When a premium handler streams output via send_fn and then raises an
+    exception, the 1.0 fallback path must NOT run (no double-send).
+    When the premium handler raises without ever calling send_fn, the 1.0
+    fallback MUST run so the user always gets a response.
+    """
+
+    @pytest.mark.asyncio
+    async def test_premium_streams_then_raises_skips_fallback(self):
+        """Premium handler streams partial output then raises → exactly one message, no 1.0 fallback.
+
+        This is the core double-send regression: previously, the exception
+        handler fell through to handle_message even after premium had already
+        called send_fn, producing spliced output (premium partial + 1.0 response).
+        """
+        import sys
+        sent = []
+
+        async def _streaming_then_crashing(
+            text, pool, user_id, anchors, current_anchor, *, send_fn, status_fn=None
+        ):
+            send_fn("premium-partial")  # streams something first
+            raise RuntimeError("handler crashed mid-stream")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_streaming_then_crashing)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        assert "premium-partial" in sent, f"Premium output must be delivered. Got: {sent}"
+        assert "1.0-response" not in sent, (
+            f"Double-send: handle_message ran after premium already streamed. Got: {sent}"
+        )
+        assert sent.count("premium-partial") == 1, \
+            f"Premium output must appear exactly once. Got: {sent}"
+
+    @pytest.mark.asyncio
+    async def test_premium_raises_without_streaming_still_runs_fallback(self):
+        """Premium handler raises before sending anything → 1.0 fallback runs normally.
+
+        This is the regression guard: the double-send fix must NOT suppress
+        the fallback when premium never actually sent any output.
+        """
+        import sys
+        sent = []
+
+        async def _crashing_immediately(
+            text, pool, user_id, anchors, current_anchor, *, send_fn, status_fn=None
+        ):
+            raise RuntimeError("handler failed before sending anything")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_crashing_immediately)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        assert "1.0-response" in sent, \
+            f"Fallback must run when premium never sent output. Got: {sent}"
+        assert "premium-partial" not in sent
+
