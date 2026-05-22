@@ -39,8 +39,9 @@ async function toggleExpand(node: ContextNode, evt: Event) {
 }
 
 function hasChildren(node: ContextNode): boolean {
-  // Show chevron if children_count is set and > 0, OR if undefined (unknown, optimistically show)
-  if (node.children_count === undefined) return false
+  // children_count is only set on single-node fetches, not list fetches.
+  // When undefined (list fetch), optimistically show chevron; fetchChildren returns [] if none.
+  if (node.children_count === undefined) return true
   return node.children_count > 0
 }
 

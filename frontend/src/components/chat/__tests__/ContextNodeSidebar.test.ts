@@ -139,6 +139,34 @@ describe('ContextNodeSidebar', () => {
     expect(chevron.exists()).toBe(true)
   })
 
+  it('shows expand chevron for node with children_count undefined (list fetch)', () => {
+    // children_count is absent from list-fetch responses — show chevron optimistically
+    const node = makeNode({ id: 'node-1', name: 'Parent' })
+    delete (node as any).children_count
+    mockUseContextStore.mockReturnValue(makeContextStore([node]) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper.find('[data-testid="expand-chevron-node-1"]')
+    expect(chevron.exists()).toBe(true)
+  })
+
+  it('does not show expand chevron for node with children_count === 0', () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Leaf', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper.find('[data-testid="expand-chevron-node-1"]')
+    expect(chevron.exists()).toBe(false)
+  })
+
   it('clicking expand chevron calls contextStore.fetchChildren(nodeId)', async () => {
     const contextStore = makeContextStore([
       makeNode({ id: 'node-1', name: 'Parent', children_count: 2 }),
