@@ -67,9 +67,12 @@ def create_app(layer: Layer) -> FastAPI:
                 content={"error": "trial_exhausted", "upgrade_url": "/upgrade"},
             )
         # Publish live remaining count to the frontend picker.
+        # Pass user_id so the Redis channel is keyed on the stable JWT claim,
+        # not the per-connection user_ws_id.
         await layer.ws_publisher.push(
             body.user_ws_id,
             {"type": "trial_usage_update", "remaining": remaining},
+            user_id=body.user_id,
         )
         return None
 

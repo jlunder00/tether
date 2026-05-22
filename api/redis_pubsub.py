@@ -44,14 +44,9 @@ import logging
 import os
 from typing import Any
 
+from shared.redis_channels import channel_for  # noqa: F401 — re-exported for API consumers
+
 logger = logging.getLogger(__name__)
-
-_CHANNEL_PREFIX = "user"
-
-
-def channel_for(user_id: str) -> str:
-    """Return the Redis channel name for a user's events."""
-    return f"{_CHANNEL_PREFIX}:{user_id}:events"
 
 
 def get_redis_url() -> str | None:

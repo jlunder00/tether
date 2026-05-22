@@ -2,10 +2,16 @@
 
 When a Redis client is provided, push() dual-writes: in-process queues
 for same-process consumers (tests, co-located scenarios) AND a Redis
-PUBLISH to user:{user_ws_id}:events for cross-process delivery to the
+PUBLISH to user:{user_id}:events for cross-process delivery to the
 API's WS subscription task.
 
-Channel key: user:{user_ws_id}:events
+Channel key: user:{user_id}:events  (keyed on the stable JWT user_id)
+
+The Redis channel uses ``user_id`` (stable across connections) rather
+than ``user_ws_id`` (per-connection) so the API subscriber can derive
+the correct channel from the JWT alone.  Pass ``user_id`` explicitly
+to push(); it falls back to ``user_ws_id`` only when omitted (backward
+compat / tests).
 
 Redis errors are suppressed with contextlib.suppress so a Redis outage
 never breaks in-process delivery or the layer's normal turn flow.
@@ -22,6 +28,8 @@ import json
 import logging
 from typing import Any
 
+from shared.redis_channels import channel_for
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,7 +40,7 @@ class WSPublisher:
     ----------
     redis_client:
         Optional async Redis client (e.g. redis.asyncio.Redis). When set,
-        push() also publishes to ``user:{user_ws_id}:events`` so the API
+        push() also publishes to ``user:{user_id}:events`` so the API
         process can forward events to connected browser WebSockets.
         Pass ``None`` (the default) for in-process-only operation.
     """
@@ -55,18 +63,29 @@ class WSPublisher:
         except ValueError:
             pass
 
-    async def push(self, user_ws_id: str, event: dict) -> None:
+    async def push(
+        self,
+        user_ws_id: str,
+        event: dict,
+        *,
+        user_id: str | None = None,
+    ) -> None:
         """Fan out event to all in-process subscribers and cross-process via Redis.
 
-        In-process delivery is always attempted first. Redis publish is
-        fire-and-forget: errors are logged at DEBUG and suppressed so a
-        Redis outage never prevents in-process delivery.
+        In-process delivery is keyed on ``user_ws_id`` (per-connection).
+        Redis publish is keyed on ``user_id`` (stable JWT claim) so the
+        API subscriber can identify the correct channel from the JWT alone.
+        When ``user_id`` is omitted, ``user_ws_id`` is used for the Redis
+        channel as a fallback (maintains backward compat until all callers
+        pass the stable ID).
+
+        Redis publish is fire-and-forget: errors are logged at DEBUG and
+        suppressed so a Redis outage never prevents in-process delivery.
         """
         for q in self._queues.get(user_ws_id, []):
             await q.put(event)
 
         if self._redis is not None:
+            redis_channel = channel_for(user_id if user_id is not None else user_ws_id)
             with contextlib.suppress(Exception):
-                await self._redis.publish(
-                    f"user:{user_ws_id}:events", json.dumps(event)
-                )
+                await self._redis.publish(redis_channel, json.dumps(event))
