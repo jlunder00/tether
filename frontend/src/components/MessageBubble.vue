@@ -40,6 +40,8 @@ const priorityIcon = computed(() => PRIORITY_ICON[systemPriority.value])
       class="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-lg"
       :class="systemPriority === 'urgent' ? 'system-bubble-urgent' : 'system-bubble-important'"
     >
+      <!-- sr-only prefix conveys priority to screen readers without visual duplication -->
+      <span class="sr-only">{{ systemPriority === 'urgent' ? 'Urgent:' : 'Important:' }} </span>
       <span aria-hidden="true">{{ priorityIcon }}</span>
       {{ msg.content }}
     </span>

@@ -80,23 +80,5 @@ describe('SuppressionsView', () => {
   })
 })
 
-// ── Suppressions store 404 handling ──────────────────────────────────────────
-describe('useSuppressionsStore — 404 graceful handling', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-    vi.resetModules()
-  })
-
-  it('returns empty array and no error on 404', async () => {
-    const { api } = await import('../../lib/api')
-    vi.mocked(api).mockResolvedValue(new Response('Not Found', { status: 404 }) as Response)
-
-    // Import real (non-mocked) store for this test
-    const { useSuppressionsStore: realStore } = await import('../../stores/suppressions')
-    setActivePinia(createPinia())
-    const store = realStore()
-    await store.fetch()
-    expect(store.suppressions).toEqual([])
-    expect(store.error).toBeNull()
-  })
-})
+// Store-level tests (404 handling, 200, network error) are in:
+// stores/__tests__/suppressions.test.ts — isolated to avoid vi.mock hoisting interference.
