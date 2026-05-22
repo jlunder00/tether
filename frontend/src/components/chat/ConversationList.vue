@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
-import type { ConversationDetail } from '../../types/conversations'
+import type { ConversationDetail, ConversationState } from '../../types/conversations'
 import PriorityPill from './PriorityPill.vue'
 import NewConversationModal from './NewConversationModal.vue'
 
@@ -13,16 +13,18 @@ const props = withDefaults(defineProps<{
 
 const store = useConversationsStore()
 
-const activeFilter = ref<'all' | 'open' | 'closed'>('all')
+const activeFilter = ref<'all' | ConversationState>('all')
 const showModal = ref(false)
 
-const filters = [
-  { label: 'All', value: 'all' as const },
-  { label: 'Open', value: 'open' as const },
-  { label: 'Closed', value: 'closed' as const },
+const filters: Array<{ label: string; value: 'all' | ConversationState }> = [
+  { label: 'All',      value: 'all' },
+  { label: 'Open',     value: 'open' },
+  { label: 'Closed',   value: 'closed' },
+  { label: 'Pending',  value: 'pending' },
+  { label: 'Rejected', value: 'rejected' },
 ]
 
-async function setFilter(f: 'all' | 'open' | 'closed') {
+async function setFilter(f: 'all' | ConversationState) {
   activeFilter.value = f
   await store.refresh(buildRefreshParams())
 }
@@ -75,7 +77,7 @@ onMounted(() => {
     </div>
 
     <!-- Filter chips -->
-    <div class="flex gap-1 px-4 py-2 border-b border-[--border-1] flex-shrink-0">
+    <div class="flex flex-wrap gap-1 px-4 py-2 border-b border-[--border-1] flex-shrink-0">
       <button
         v-for="f in filters"
         :key="f.value"
@@ -101,14 +103,31 @@ onMounted(() => {
           :key="conv.id"
           data-testid="conversation-row"
           draggable="true"
+          :data-state="conv.state"
           class="flex flex-col px-4 py-3 border-b border-[--border-1] cursor-pointer hover:bg-[--bg-2] transition-colors"
-          :class="store.selectedId === conv.id ? 'bg-[--bg-2]' : ''"
+          :class="[
+            store.selectedId === conv.id ? 'bg-[--bg-2]' : '',
+            conv.state === 'rejected' ? 'opacity-50' : '',
+          ]"
           @click="store.select(conv.id)"
           @dragstart="onDragStart(conv, $event)"
         >
           <div class="flex items-center gap-2 min-w-0">
-            <span class="font-medium text-sm text-[--fg-1] truncate flex-1">{{ conv.name }}</span>
-            <PriorityPill :priority="conv.priority" />
+            <span
+              class="font-medium text-sm truncate flex-1"
+              :class="conv.state === 'rejected' ? 'text-[--fg-4]' : 'text-[--fg-1]'"
+            >
+              {{ conv.name }}
+            </span>
+            <!-- Pending badge: "awaiting reply" indicator -->
+            <span
+              v-if="conv.state === 'pending'"
+              data-pending-badge
+              class="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full bg-[--status-important-bg] text-[--status-important-fg] font-medium flex-shrink-0"
+            >
+              ⏳ Awaiting
+            </span>
+            <PriorityPill v-else :priority="conv.priority" />
           </div>
           <div class="flex items-center gap-2 mt-0.5">
             <span v-if="conv.folder_name" class="text-xs text-[--fg-4] truncate">
