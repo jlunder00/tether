@@ -37,6 +37,7 @@ const router = createRouter({
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
     { path: '/kanban', name: 'kanban', component: () => import('./views/KanbanView.vue') },
     { path: '/chat', name: 'chat', component: () => import('./views/ChatPageView.vue') },
+    { path: '/beacon/suppressions', name: 'beacon-suppressions', component: () => import('./views/SuppressionsView.vue') },
     { path: '/', redirect: '/dashboard' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],

@@ -1,11 +1,18 @@
 export type ChatRole = 'user' | 'bot' | 'system'
 
+// Beacon-driven priority for system messages (§3.2 of beacon-notification-system spec).
+// Distinct from ConversationDetail.priority (4-level conversation ranking).
+// Only rendered on system role messages — ignored on user/bot.
+export type SystemMessagePriority = 'normal' | 'important' | 'urgent'
+
 export interface ChatMessage {
   id: string
   role: ChatRole
   content: string
   ts: number     // epoch ms
   actions?: Array<{ action: string; tool?: string }>
+  // Optional: Beacon-assigned priority for system messages. Absent = 'normal'.
+  priority?: SystemMessagePriority
 }
 
 export interface PermissionDetail {

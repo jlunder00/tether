@@ -510,6 +510,24 @@ async function linkTelegram() {
           </p>
         </div>
       </section>
+
+      <!-- Beacon (premium) -->
+      <section class="mb-8" data-section="beacon">
+        <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Beacon</h2>
+        <div class="bg-[--bg-elev-1] rounded-xl p-4 space-y-3">
+          <p class="text-sm text-[--fg-3]">
+            Beacon is Tether's intelligent notification system. It decides when to ping you —
+            and when to stay quiet.
+          </p>
+          <router-link
+            to="/beacon/suppressions"
+            class="flex items-center justify-between text-sm text-[--fg-2] hover:text-[--fg-1] transition-colors py-1"
+          >
+            <span>Suppression history</span>
+            <span class="text-[--fg-5]">→</span>
+          </router-link>
+        </div>
+      </section>
     </div>
   </div>
 </template>
