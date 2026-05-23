@@ -136,11 +136,15 @@ def upgrade() -> None:
         )
         """
     )
+    # Note: the spec suggested a partial index predicate of
+    # "WHERE expires_at IS NULL OR expires_at > now()" but Postgres requires
+    # index predicates to use only IMMUTABLE functions. now() is STABLE, not
+    # IMMUTABLE, so it cannot appear in a WHERE clause of an index definition.
+    # The index covers all rows; runtime queries filter by expires_at as needed.
     op.execute(
         """
         CREATE INDEX beacon_suppressions_lookup
             ON beacon_suppressions (user_id, scope_key)
-            WHERE expires_at IS NULL OR expires_at > now()
         """
     )
     op.execute("ALTER TABLE beacon_suppressions ENABLE ROW LEVEL SECURITY")
