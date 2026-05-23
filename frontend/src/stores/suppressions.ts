@@ -7,6 +7,13 @@ export interface BeaconSuppression {
   scope_key: string
   reason: string | null
   source: 'user_rejection' | 'beacon_decision' | 'system'
+  /**
+   * Checkpoint type that triggered this suppression (e.g. 'anchor_transition',
+   * 'task_overdue'). Added to the type in wave 7 to support client-side
+   * filter chips in SuppressionsView. Backend will echo this field when
+   * Phase 5 suppression endpoint ships.
+   */
+  checkpoint_type?: string | null
   created_at: string
   expires_at: string | null
 }

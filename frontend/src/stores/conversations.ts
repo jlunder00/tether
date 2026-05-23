@@ -100,6 +100,29 @@ export const useConversationsStore = defineStore('conversations', () => {
     setMessages(conversationId, [...msgs, msg])
   }
 
+  /**
+   * Discard a conversation: transitions state → 'rejected'.
+   *
+   * ⚠️  KNOWN DEBT — Option A implementation:
+   * This call transitions conversation state to `rejected` but does NOT write a
+   * `beacon_suppressions` row (the table doesn't exist yet — landing in
+   * pool-builder's Beacon Phase 3 PR 1). When that PR merges, a follow-up PR
+   * will upgrade this to call `POST /api/conversations/{id}/discard`, which
+   * atomically writes state + suppression row. Until then, dismissals from this
+   * period will not be recorded as suppressions; Beacon (when Phase 5 ships)
+   * may re-dispatch the same checkpoint patterns the user already dismissed.
+   *
+   * TODO (Phase 5): replace with:
+   *   const res = await api(`/api/conversations/${conversationId}/discard`, { method: 'POST' })
+   *   if (!res.ok) return false
+   *   const idx = list.value.findIndex(c => c.id === conversationId)
+   *   if (idx !== -1) list.value[idx].state = 'rejected'
+   *   return true
+   */
+  async function discard(conversationId: string): Promise<boolean> {
+    return patch(conversationId, { state: 'rejected' })
+  }
+
   async function assignNode(conversationId: string, nodeId: string | null): Promise<void> {
     const res = await api(`/api/conversations/${conversationId}`, {
       method: 'PATCH',
@@ -125,5 +148,5 @@ export const useConversationsStore = defineStore('conversations', () => {
     return conv
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
+  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, discard, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
 })

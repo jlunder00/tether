@@ -7,6 +7,7 @@ import { useConnectionsStore } from '../../stores/connections'
 import AgentPicker from '../AgentPicker.vue'
 import PriorityPill from './PriorityPill.vue'
 import StateToggle from './StateToggle.vue'
+import ConversationStateActions from './ConversationStateActions.vue'
 import type { ConversationMessage, ConversationPriority, ConversationState } from '../../types/conversations'
 
 const store = useConversationsStore()
@@ -238,6 +239,40 @@ async function onStateChange(s: ConversationState) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pending / rejected state actions (D1)
+// ---------------------------------------------------------------------------
+
+async function onApprove(convId: string) {
+  if (patchingState.value) return
+  patchingState.value = true
+  try {
+    await store.patch(convId, { state: 'open' })
+  } finally {
+    patchingState.value = false
+  }
+}
+
+async function onDismiss(convId: string) {
+  if (patchingState.value) return
+  patchingState.value = true
+  try {
+    await store.discard(convId)
+  } finally {
+    patchingState.value = false
+  }
+}
+
+async function onRestore(convId: string) {
+  if (patchingState.value) return
+  patchingState.value = true
+  try {
+    await store.patch(convId, { state: 'open' })
+  } finally {
+    patchingState.value = false
+  }
+}
+
 async function loadOlder() {
   if (!selectedId.value || !scrollEl.value) return
   const firstMsgId = messages.value[0]?.id
@@ -308,10 +343,23 @@ function renderBody(body: string): string {
           {{ selected.folder_name }}
         </span>
 
+        <!-- Open/closed toggle — only shown for open & closed states.
+             Pending/rejected use ConversationStateActions instead. -->
         <StateToggle
+          v-if="selected.state === 'open' || selected.state === 'closed'"
           :state="selected.state"
           :loading="patchingState"
           @change="onStateChange"
+        />
+
+        <!-- Pending / rejected actions + open overflow (D1) -->
+        <ConversationStateActions
+          :conv-id="selected.id"
+          :state="selected.state"
+          :loading="patchingState"
+          @approve="onApprove"
+          @dismiss="onDismiss"
+          @restore="onRestore"
         />
       </div>
 
