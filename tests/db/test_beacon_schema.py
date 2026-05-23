@@ -282,6 +282,28 @@ class TestBeaconMemory:
             USER_B,
         )
 
+    async def test_rls_write_side_cannot_insert_for_other_user(self, conn_a):
+        """RLS WITH CHECK: connection scoped to USER_A cannot INSERT a row owned by USER_B.
+
+        FOR ALL USING (...) policies auto-set WITH CHECK = USING, so writes of
+        cross-user rows are blocked. This test verifies that the write-side
+        protection actually fires — it would pass even if policy was FOR SELECT
+        only, which would be a security gap. We test here rather than for every
+        table since beacon_memory is the highest-churn write surface.
+        """
+        with pytest.raises(Exception) as exc_info:
+            await conn_a.execute(
+                "INSERT INTO beacon_memory (user_id, key, value) VALUES ($1::uuid, 'attack/key', 'stolen')",
+                USER_B,  # USER_B id while connected as USER_A
+            )
+        # asyncpg raises either InsufficientPrivilegeError (RLS policy violation)
+        # or a generic PostgresError with "new row violates row-level security"
+        assert "row-level security" in str(exc_info.value).lower() or \
+               "insufficient_privilege" in str(exc_info.value).lower() or \
+               type(exc_info.value).__name__ in (
+                   "InsufficientPrivilegeError", "RaiseError"
+               ), f"Expected RLS violation, got: {exc_info.value}"
+
 
 # ===========================================================================
 # beacon_durable_memory (L3)
