@@ -33,7 +33,8 @@ const router = createRouter({
       component: () => import('./views/PlanView.vue'),
       props: route => ({ view: 'month', date: route.params.date }),
     },
-    { path: '/context', redirect: '/chat' },   // legacy redirect
+    // Legacy redirect: preserves query string (e.g. ?panels=task:abc) and hash
+    { path: '/context', redirect: (to) => ({ path: '/chat', query: to.query, hash: to.hash }) },
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
     { path: '/kanban', name: 'kanban', component: () => import('./views/KanbanView.vue') },
     {

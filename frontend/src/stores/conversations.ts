@@ -112,5 +112,18 @@ export const useConversationsStore = defineStore('conversations', () => {
     if (idx !== -1) list.value[idx].context_node_id = nodeId
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode }
+  /** Fetch a single conversation by id. Used for deep-link hydration when the
+   *  conversation may not be in the paginated list (>50 conversations case). */
+  async function fetchOne(conversationId: string): Promise<ConversationDetail | null> {
+    const res = await api(`/api/conversations/${conversationId}`)
+    if (!res.ok) return null
+    const conv: ConversationDetail = await res.json()
+    // Upsert into list so subsequent lookups by id work
+    const idx = list.value.findIndex(c => c.id === conv.id)
+    if (idx === -1) list.value.push(conv)
+    else list.value[idx] = conv
+    return conv
+  }
+
+  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
 })

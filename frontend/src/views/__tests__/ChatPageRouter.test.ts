@@ -22,12 +22,25 @@ vi.mock('../../stores/auth', () => ({
 }))
 
 describe('router — /context legacy redirect', () => {
-  it('has a /context → /chat redirect', async () => {
+  it('has a /context redirect entry pointing at /chat', async () => {
     const { default: router } = await import('../../router')
-    const routes = (router as any).routes as Array<{ path: string; redirect?: string }>
+    const routes = (router as any).routes as Array<{ path: string; redirect?: any }>
     const contextRoute = routes.find(r => r.path === '/context')
     expect(contextRoute).toBeDefined()
-    expect(contextRoute?.redirect).toBe('/chat')
+    expect(contextRoute?.redirect).toBeDefined()
+    // Function-form redirect (so query params can be preserved)
+    expect(typeof contextRoute?.redirect).toBe('function')
+  })
+
+  it('redirect function preserves query params and hash', async () => {
+    const { default: router } = await import('../../router')
+    const routes = (router as any).routes as Array<{ path: string; redirect?: any }>
+    const contextRoute = routes.find(r => r.path === '/context')
+    const redirectFn = contextRoute?.redirect as (to: any) => any
+    const result = redirectFn({ query: { panels: 'task:abc' }, hash: '#sec' })
+    expect(result.path).toBe('/chat')
+    expect(result.query).toEqual({ panels: 'task:abc' })
+    expect(result.hash).toBe('#sec')
   })
 })
 

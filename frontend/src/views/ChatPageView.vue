@@ -33,10 +33,11 @@ onMounted(async () => {
   if (route.name === 'chat-node' && route.params.nodeId) {
     activeNodeId.value = route.params.nodeId as string
   } else if (route.name === 'chat-conversation' && route.params.convId) {
-    convStore.select(route.params.convId as string)
-    // also set activeNodeId from the conversation's context_node_id
-    await convStore.refresh()
-    const conv = convStore.list.find(c => c.id === route.params.convId)
+    const convId = route.params.convId as string
+    convStore.select(convId)
+    // Fetch the conversation directly by id (avoids the >50-conversation pagination
+    // hole where refresh() wouldn't include this conv in its first page).
+    const conv = await convStore.fetchOne(convId)
     if (conv?.context_node_id) activeNodeId.value = conv.context_node_id
   }
 })
@@ -64,6 +65,7 @@ function onSelectConversation(convId: string) {
       <ContextNodeSidebar
         :active-node-id="activeNodeId"
         @update:active-node-id="onSelectNode"
+        @open-conversation="onSelectConversation"
         @collapse="leftOpen = false"
       />
     </template>

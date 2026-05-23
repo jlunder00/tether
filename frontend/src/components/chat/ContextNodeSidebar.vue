@@ -8,6 +8,7 @@ import type { ConversationDetail } from '../../types/conversations'
 defineProps<{ activeNodeId: string | null }>()
 const emit = defineEmits<{
   'update:activeNodeId': [id: string | null]
+  'open-conversation': [convId: string]
   'collapse': []
 }>()
 
@@ -147,7 +148,7 @@ function startNewChat(nodeId: string) {
           class="flex items-center gap-1 px-3 py-2 cursor-pointer hover:bg-[--bg-2] transition-colors"
           :class="[
             activeNodeId === node.id ? 'bg-[--bg-elev-3] font-medium' : '',
-            dragOverNodeId === node.id ? 'ring-2 ring-blue-400/50' : '',
+            dragOverNodeId === node.id ? 'drag-over' : '',
           ]"
           @dragover="onDragOver(node.id, $event)"
           @dragleave="onDragLeave(node.id)"
@@ -194,7 +195,7 @@ function startNewChat(nodeId: string) {
             class="flex items-center gap-1 pl-8 pr-3 py-2 cursor-pointer hover:bg-[--bg-2] transition-colors"
             :class="[
               activeNodeId === child.id ? 'bg-[--bg-elev-3] font-medium' : '',
-              dragOverNodeId === child.id ? 'ring-2 ring-blue-400/50' : '',
+              dragOverNodeId === child.id ? 'drag-over' : '',
             ]"
             @dragover="onDragOver(child.id, $event)"
             @dragleave="onDragLeave(child.id)"
@@ -217,7 +218,7 @@ function startNewChat(nodeId: string) {
             class="tree-conv-item"
             :class="conversationsStore.selectedId === conv.id ? 'tree-conv-item--active' : ''"
             draggable="true"
-            @click="emit('update:activeNodeId', null); conversationsStore.select(conv.id)"
+            @click="emit('open-conversation', conv.id)"
             @dragstart="onConvLeafDragStart(conv, $event)"
           >
             <span class="tree-conv-dot" />
@@ -274,4 +275,11 @@ function startNewChat(nodeId: string) {
   transition: background 150ms, color 150ms;
 }
 .sidebar-icon-btn:hover { background: var(--bg-elev-3); color: var(--fg-2); }
+
+/* Drag-over highlight on folder drop zones — themed via tokens */
+.drag-over {
+  outline: 1px solid var(--accent-soft);
+  outline-offset: -1px;
+  background: var(--accent-veil);
+}
 </style>

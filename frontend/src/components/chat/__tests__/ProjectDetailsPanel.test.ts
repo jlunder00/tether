@@ -161,4 +161,47 @@ describe('ProjectDetailsPanel', () => {
 
     expect(wrapper.emitted('collapse')).toBeTruthy()
   })
+
+  it('back-to-back saves: older fade timer does not clear newer Saved indicator', async () => {
+    // Regression guard: the savedAt fade-out timer captures the save's timestamp
+    // in a closure and only clears savedAt if it's still equal. Otherwise a fast
+    // second save would be silenced by the first save's fade timer.
+    vi.useFakeTimers()
+    const ctxStore = makeCtxStore({ section: makeSection({ body: 'initial' }) })
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+
+    const { default: ProjectDetailsPanel } = await import('../ProjectDetailsPanel.vue')
+    const wrapper = mount(ProjectDetailsPanel, { props: { nodeId: 'node-1' } })
+    await flushPromises()
+
+    // First save via blur — sets savedAt=T1 and schedules clear-T1 for +2000ms
+    const textarea = wrapper.find('[data-testid="context-textarea"]')
+    await textarea.setValue('first edit')
+    await textarea.trigger('blur')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Saved')
+
+    // Advance 1900ms — first fade timer hasn't fired yet
+    vi.advanceTimersByTime(1900)
+    expect(wrapper.text()).toContain('Saved')
+
+    // Second save while first fade is still pending — must reset savedAt to T2
+    await textarea.setValue('second edit')
+    await textarea.trigger('blur')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Saved')
+
+    // Now advance past the first fade timer's 2000ms total (200ms remaining).
+    // The first timer fires here — it MUST NOT clear savedAt because savedAt=T2 now.
+    vi.advanceTimersByTime(200)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Saved')
+
+    // Advance to past T2 + 2000ms — second fade timer fires, clears savedAt
+    vi.advanceTimersByTime(2000)
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Saved')
+
+    vi.useRealTimers()
+  })
 })

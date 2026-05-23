@@ -54,6 +54,7 @@ function makeConvStore(selectedId: string | null = null) {
     list: [] as any[],
     refresh: vi.fn().mockResolvedValue(undefined),
     select: vi.fn((id: string | null) => { convStoreInstance.selectedId = id }),
+    fetchOne: vi.fn().mockResolvedValue(null),
   })
 }
 let convStoreInstance: ReturnType<typeof makeConvStore>

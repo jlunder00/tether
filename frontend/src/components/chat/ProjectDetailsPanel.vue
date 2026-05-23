@@ -90,6 +90,7 @@ function formatSize(bytes: number): string {
         <span class="det-sec__label">Context</span>
         <textarea
           v-model="contextBody"
+          data-testid="context-textarea"
           class="det-sec__area"
           placeholder="Describe what this folder is about. Injected into every chat here."
           @input="onContextInput"
