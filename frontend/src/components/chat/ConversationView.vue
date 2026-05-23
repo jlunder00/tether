@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
 import { useConversationChat } from '../../composables/useConversationChat'
 import { useAgentPickerStore } from '../../stores/agentPicker'
+import { useConnectionsStore } from '../../stores/connections'
 import AgentPicker from '../AgentPicker.vue'
 import PriorityPill from './PriorityPill.vue'
 import StateToggle from './StateToggle.vue'
@@ -10,8 +11,13 @@ import type { ConversationMessage, ConversationPriority, ConversationState } fro
 
 const store = useConversationsStore()
 const agentPickerStore = useAgentPickerStore()
+const connectionsStore = useConnectionsStore()
 
-onMounted(() => agentPickerStore.fetchPreference())
+onMounted(() => {
+  agentPickerStore.fetchPreference()
+  // Hydrate accepted connections for @mention autocomplete — idempotent if already loaded.
+  connectionsStore.fetchConnections()
+})
 
 const draft = ref('')
 const scrollEl = ref<HTMLDivElement | null>(null)
@@ -38,6 +44,65 @@ watch(selectedId, (id) => {
   chat = id ? useConversationChat(id) : null
 }, { immediate: true })
 
+// ---------------------------------------------------------------------------
+// @handle mention autocomplete
+// ---------------------------------------------------------------------------
+
+/** The current partially-typed handle (the text after @), or null when not in a mention. */
+const activeMentionPrefix = ref<string | null>(null)
+
+/** Index of the currently keyboard-highlighted suggestion. */
+const mentionHighlight = ref(0)
+
+/**
+ * Detect whether the cursor is inside a mention context.
+ * Pattern: @ not preceded by a word character, followed by optional word chars.
+ * This prevents email addresses (name@domain) from triggering autocomplete.
+ */
+function detectMention(text: string): string | null {
+  const match = text.match(/(?:^|[^\w])@(\w*)$/)
+  return match ? match[1] : null
+}
+
+/** Up to 8 accepted connections matching the current prefix. */
+const mentionSuggestions = computed(() => {
+  const prefix = activeMentionPrefix.value
+  if (prefix === null) return []
+  const lower = prefix.toLowerCase()
+  return connectionsStore.accepted
+    .filter(c => c.other_username.toLowerCase().startsWith(lower))
+    .slice(0, 8)
+})
+
+function onInput(e: Event) {
+  const el = e.target as HTMLTextAreaElement
+  const textUpToCursor = el.value.slice(0, el.selectionStart ?? el.value.length)
+  activeMentionPrefix.value = detectMention(textUpToCursor)
+  mentionHighlight.value = 0
+}
+
+function insertMention(username: string) {
+  // Replace the partial @prefix with the full @username + trailing space.
+  const prefix = activeMentionPrefix.value ?? ''
+  const pattern = new RegExp(`(^|[^\\w])@${escapeRegex(prefix)}$`)
+  draft.value = draft.value.replace(pattern, (_, pre) => `${pre}@${username} `)
+  activeMentionPrefix.value = null
+  mentionHighlight.value = 0
+}
+
+function closeMention() {
+  activeMentionPrefix.value = null
+  mentionHighlight.value = 0
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// ---------------------------------------------------------------------------
+// Scroll helpers
+// ---------------------------------------------------------------------------
+
 function onScroll() {
   if (!scrollEl.value) return
   const el = scrollEl.value
@@ -52,10 +117,15 @@ async function scrollToBottom() {
 
 watch(() => messages.value.length, scrollToBottom)
 
+// ---------------------------------------------------------------------------
+// Send
+// ---------------------------------------------------------------------------
+
 async function onSend() {
   if (!draft.value.trim() || !selectedId.value || !chat) return
   const text = draft.value.trim()
   draft.value = ''
+  closeMention()
   isAtBottom.value = true
 
   // Append user message locally
@@ -95,12 +165,44 @@ async function onSend() {
   await scrollToBottom()
 }
 
+// ---------------------------------------------------------------------------
+// Keyboard
+// ---------------------------------------------------------------------------
+
 function onKeydown(e: KeyboardEvent) {
+  // Handle autocomplete navigation first
+  if (mentionSuggestions.value.length > 0) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionHighlight.value = (mentionHighlight.value + 1) % mentionSuggestions.value.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionHighlight.value = (mentionHighlight.value - 1 + mentionSuggestions.value.length) % mentionSuggestions.value.length
+      return
+    }
+    if (e.key === 'Tab' || (e.key === 'Enter' && mentionSuggestions.value.length > 0)) {
+      e.preventDefault()
+      const suggestion = mentionSuggestions.value[mentionHighlight.value]
+      if (suggestion) insertMention(suggestion.other_username)
+      return
+    }
+    if (e.key === 'Escape') {
+      closeMention()
+      return
+    }
+  }
+
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     onSend()
   }
 }
+
+// ---------------------------------------------------------------------------
+// Inline name editing
+// ---------------------------------------------------------------------------
 
 function startEditName() {
   if (!selected.value) return
@@ -149,6 +251,19 @@ async function loadOlder() {
 }
 
 const isStreaming = computed(() => chat?.isStreaming.value ?? false)
+
+// ---------------------------------------------------------------------------
+// @handle rendering in messages
+// ---------------------------------------------------------------------------
+
+/** Replace @handle tokens in message body with accent-coloured spans. */
+function renderBody(body: string): string {
+  return body.replace(
+    /(^|[^\w])(@\w+)/g,
+    (_, pre, handle) =>
+      `${pre}<span class="text-[--accent] font-medium">${handle}</span>`,
+  )
+}
 </script>
 
 <template>
@@ -231,7 +346,9 @@ const isStreaming = computed(() => chat?.isStreaming.value ?? false)
               ? 'bg-blue-500 text-white rounded-br-none'
               : 'bg-[--bg-2] text-[--fg-1] rounded-bl-none'"
           >
-            {{ msg.body }}
+            <!-- Render @handles with accent colour; sanitised by v-html (no user HTML allowed) -->
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <span v-html="renderBody(msg.body)" />
           </div>
         </div>
 
@@ -248,15 +365,41 @@ const isStreaming = computed(() => chat?.isStreaming.value ?? false)
         <div class="flex items-center gap-2 mb-2">
           <AgentPicker />
         </div>
-        <div class="flex gap-2">
-          <textarea
-            v-model="draft"
-            rows="2"
-            class="flex-1 resize-none rounded border border-[--border-1] bg-[--bg-2] text-[--fg-1] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-            :disabled="isStreaming"
-            @keydown="onKeydown"
-          />
+
+        <!-- Textarea + mention dropdown wrapper -->
+        <div class="relative flex gap-2">
+          <div class="flex-1 relative">
+            <textarea
+              v-model="draft"
+              rows="2"
+              class="w-full resize-none rounded border border-[--border-1] bg-[--bg-2] text-[--fg-1] px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+              :disabled="isStreaming"
+              @input="onInput"
+              @keydown="onKeydown"
+            />
+
+            <!-- @mention autocomplete dropdown -->
+            <ul
+              v-if="mentionSuggestions.length > 0"
+              data-mention-dropdown
+              class="absolute bottom-full left-0 mb-1 w-48 max-h-48 overflow-y-auto bg-[--bg-elev-2] border border-[--border-1] rounded-lg shadow-lg z-50 py-1"
+            >
+              <li
+                v-for="(suggestion, idx) in mentionSuggestions"
+                :key="suggestion.other_user_id"
+                data-mention-item
+                class="px-3 py-1.5 text-sm cursor-pointer transition-colors"
+                :class="idx === mentionHighlight
+                  ? 'bg-[--accent] text-[--accent-fg]'
+                  : 'text-[--fg-1] hover:bg-[--bg-elev-3]'"
+                @click="insertMention(suggestion.other_username)"
+              >
+                {{ suggestion.other_username }}
+              </li>
+            </ul>
+          </div>
+
           <div class="flex flex-col gap-1">
             <button
               type="submit"

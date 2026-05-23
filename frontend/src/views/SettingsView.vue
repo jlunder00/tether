@@ -9,6 +9,7 @@ import ConnectionsSection from '../components/ConnectionsSection.vue'
 import ApiKeysSection from '../components/ApiKeysSection.vue'
 import ICalSection from '../components/ICalSection.vue'
 import AgentBehaviorSection from '../components/AgentBehaviorSection.vue'
+import NotificationRoutingSection from '../components/NotificationRoutingSection.vue'
 
 const auth = useAuthStore()
 
@@ -528,6 +529,9 @@ async function linkTelegram() {
           </router-link>
         </div>
       </section>
+
+      <!-- Notification Routing -->
+      <NotificationRoutingSection />
     </div>
   </div>
 </template>
