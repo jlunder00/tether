@@ -5,7 +5,7 @@
  * ConversationView uses useConnectionsStore (accepted connections) for handle suggestions.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('../../../lib/api', () => ({ api: vi.fn() }))
