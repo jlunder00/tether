@@ -273,10 +273,18 @@ async def _dispatch_v25(
             if response:
                 tracked_send(response)
             return
-        except (ImportError, NotImplementedError):
+        except (ImportError, NotImplementedError) as exc:
+            # Log exc_info so the actual missing symbol or not-implemented site
+            # appears in the log — without this, the error is silent and the
+            # "premium not available" message is misleading (implies the package
+            # is absent when it may be an import symbol mismatch inside the handler).
             logger.warning(
-                "dispatch_v25: premium not available for user_id=%s — falling back to 1.0",
+                "dispatch_v25: premium handler raised %s for user_id=%s"
+                " — falling back to 1.0: %s",
+                type(exc).__name__,
                 user_id,
+                exc,
+                exc_info=True,
             )
         except Exception:
             logger.exception(

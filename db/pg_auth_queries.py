@@ -371,10 +371,10 @@ async def clear_telegram_bot_token(
 
 
 async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None:
-    """Return the user with the most recent telegram link or message turn.
+    """Return the user with the most recent telegram link.
 
-    'Most recent' = latest created_at in telegram_connections (for users who have a telegram_chat_id set).
-    Falls back to users ordered by conversation_history recency if available.
+    Orders by u.created_at (users table) — telegram_connections has no
+    created_at column (only user_id and telegram_chat_id).
 
     Returns dict with 'id' (str UUID) and 'telegram_chat_id' (str), or None.
     """
@@ -385,7 +385,7 @@ async def get_most_recent_telegram_user(conn: asyncpg.Connection) -> dict | None
         JOIN telegram_connections tc ON tc.user_id = u.id
         WHERE tc.telegram_chat_id IS NOT NULL
           AND tc.telegram_chat_id != ''
-        ORDER BY tc.created_at DESC NULLS LAST
+        ORDER BY u.created_at DESC NULLS LAST
         LIMIT 1
         """
     )
