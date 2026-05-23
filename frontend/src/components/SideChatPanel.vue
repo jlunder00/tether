@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import ConversationList from './chat/ConversationList.vue'
+import FolderCenterPanel from './chat/FolderCenterPanel.vue'
 import ConversationView from './chat/ConversationView.vue'
 
 const emit = defineEmits<{ close: [] }>()
@@ -30,7 +30,7 @@ function onKeydown(e: KeyboardEvent) {
     <div class="flex flex-1 overflow-hidden">
       <!-- Narrow conversation list -->
       <div class="w-40 flex-shrink-0 border-r border-[--border-1] overflow-hidden">
-        <ConversationList />
+        <FolderCenterPanel :node-id="null" />
       </div>
 
       <!-- Conversation view -->

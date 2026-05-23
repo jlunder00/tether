@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
 import { useContextStore } from '../../stores/context'
+import type { ContextNode } from '../../stores/context'
 import type { ConversationDetail } from '../../types/conversations'
 
 const props = defineProps<{ nodeId: string | null }>()
@@ -25,7 +26,7 @@ const pathSegs = computed(() => {
   const segs: string[] = []
   let id: string | null = props.nodeId
   while (id) {
-    const node = ctxStore.nodes[id]
+    const node: ContextNode | undefined = ctxStore.nodes[id]
     if (!node) break
     segs.unshift(node.name)
     id = node.parent_id ?? null

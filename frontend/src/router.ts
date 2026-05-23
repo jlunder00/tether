@@ -41,8 +41,10 @@ const router = createRouter({
       name: 'chat',
       component: () => import('./views/ChatPageView.vue'),
       children: [
-        { path: 'node/:nodeId',         name: 'chat-node',         props: true },
-        { path: 'conversation/:convId', name: 'chat-conversation', props: true },
+        // The parent (ChatPageView) reads these params directly via useRoute() on mount.
+        // A minimal component is required by vue-router for child route records.
+        { path: 'node/:nodeId',         name: 'chat-node',         props: true, component: { template: '<span />' } },
+        { path: 'conversation/:convId', name: 'chat-conversation', props: true, component: { template: '<span />' } },
       ],
     },
     { path: '/beacon/suppressions', name: 'beacon-suppressions', component: () => import('./views/SuppressionsView.vue') },

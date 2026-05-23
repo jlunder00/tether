@@ -265,12 +265,8 @@ describe('ContextNodeSidebar', () => {
     mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
     mockUseConversationsStore.mockReturnValue(convStore as any)
 
-    const wrapper = mount(ContextNodeSidebar, {
-      props: { activeNodeId: null },
-    })
-
-    // Expand the node by clicking the chevron (node has no children but conversations can still be loaded)
-    // First simulate expanding manually by clicking chevron for a node with children_count undefined
+    // First mount uses nodes with children_count: 0 (no expansion possible)
+    // Re-mount with a node where children_count is undefined to allow expansion
     const nodeWithConvs = makeNode({ id: 'node-1', name: 'Parent' })
     delete (nodeWithConvs as any).children_count
     mockUseContextStore.mockReturnValue(makeContextStore([nodeWithConvs]) as any)

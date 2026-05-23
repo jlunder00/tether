@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // We test the router config by importing it directly — but it imports vue-router and
 // useAuthStore which need mocking.
