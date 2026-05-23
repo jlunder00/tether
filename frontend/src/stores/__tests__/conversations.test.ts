@@ -255,6 +255,37 @@ describe('useConversationsStore', () => {
     })
   })
 
+  describe('discard()', () => {
+    it('PATCHes state=rejected and updates list in place', async () => {
+      mockApi.mockResolvedValue({ ok: true } as Response)
+      const store = useConversationsStore()
+      store.list = [makeConv({ id: 'conv-9', state: 'pending' })]
+
+      const ok = await store.discard('conv-9')
+
+      expect(ok).toBe(true)
+      expect(mockApi).toHaveBeenCalledWith(
+        '/api/conversations/conv-9',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ state: 'rejected' }),
+        }),
+      )
+      expect(store.list[0].state).toBe('rejected')
+    })
+
+    it('returns false on API failure', async () => {
+      mockApi.mockResolvedValue({ ok: false } as Response)
+      const store = useConversationsStore()
+      store.list = [makeConv({ id: 'conv-9', state: 'pending' })]
+
+      const ok = await store.discard('conv-9')
+      expect(ok).toBe(false)
+      // List should not be mutated on failure
+      expect(store.list[0].state).toBe('pending')
+    })
+  })
+
   describe('appendMessage()', () => {
     it('appends to existing messages', () => {
       const store = useConversationsStore()

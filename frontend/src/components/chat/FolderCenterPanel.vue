@@ -4,6 +4,7 @@ import { useConversationsStore } from '../../stores/conversations'
 import { useContextStore } from '../../stores/context'
 import type { ContextNode } from '../../stores/context'
 import type { ConversationDetail } from '../../types/conversations'
+import ConversationStateActions from './ConversationStateActions.vue'
 
 const props = defineProps<{ nodeId: string | null }>()
 const emit  = defineEmits<{ 'open-conversation': [id: string] }>()
@@ -56,6 +57,43 @@ async function startChat() {
 
 function onDragStart(conv: ConversationDetail, evt: DragEvent) {
   evt.dataTransfer?.setData('text/plain', JSON.stringify({ conversationId: conv.id }))
+}
+
+// ---------------------------------------------------------------------------
+// State actions (D1) — approve/dismiss/restore pending & rejected convs
+// ---------------------------------------------------------------------------
+
+const actionLoading = ref<string | null>(null) // convId currently being patched
+
+async function onApprove(convId: string) {
+  if (actionLoading.value) return
+  actionLoading.value = convId
+  try {
+    await convStore.patch(convId, { state: 'open' })
+    emit('open-conversation', convId)
+  } finally {
+    actionLoading.value = null
+  }
+}
+
+async function onDismiss(convId: string) {
+  if (actionLoading.value) return
+  actionLoading.value = convId
+  try {
+    await convStore.discard(convId)
+  } finally {
+    actionLoading.value = null
+  }
+}
+
+async function onRestore(convId: string) {
+  if (actionLoading.value) return
+  actionLoading.value = convId
+  try {
+    await convStore.patch(convId, { state: 'open' })
+  } finally {
+    actionLoading.value = null
+  }
 }
 
 function formatTime(iso: string): string {
@@ -132,19 +170,51 @@ function formatTime(iso: string): string {
         v-for="conv in conversations"
         :key="conv.id"
         :data-testid="`conv-row-${conv.id}`"
+        :data-state="conv.state"
         class="convitem"
+        :class="{
+          'convitem--pending': conv.state === 'pending',
+          'convitem--rejected': conv.state === 'rejected',
+        }"
         draggable="true"
         @click="emit('open-conversation', conv.id)"
         @dragstart="onDragStart(conv, $event)"
       >
-        <span class="convitem__dot" :class="{ 'convitem__dot--on': conv.priority === 'urgent' || conv.priority === 'high' }" />
+        <!-- State dot: pending = amber, urgent/high = accent, else hidden -->
+        <span
+          class="convitem__dot"
+          :class="{
+            'convitem__dot--on': conv.priority === 'urgent' || conv.priority === 'high',
+            'convitem__dot--pending': conv.state === 'pending',
+          }"
+        />
         <div class="convitem__body">
-          <div class="convitem__title">{{ conv.name }}</div>
+          <div class="convitem__title" :class="{ 'convitem__title--muted': conv.state === 'rejected' }">
+            {{ conv.name }}
+            <!-- "Awaiting reply" badge for pending convs -->
+            <span
+              v-if="conv.state === 'pending'"
+              data-pending-badge
+              class="convitem__pending-badge"
+            >
+              ⏳ Awaiting
+            </span>
+          </div>
           <div class="convitem__meta">
             <span class="convitem__ts">{{ formatTime(conv.last_message_at) }}</span>
             <span class="convitem__path">{{ pathSegs.join(' › ') }}</span>
           </div>
         </div>
+
+        <!-- State actions: approve/dismiss for pending, restore for rejected, overflow for open -->
+        <ConversationStateActions
+          :conv-id="conv.id"
+          :state="conv.state"
+          :loading="actionLoading === conv.id"
+          @approve="onApprove"
+          @dismiss="onDismiss"
+          @restore="onRestore"
+        />
       </div>
     </div>
 
@@ -255,4 +325,22 @@ function formatTime(iso: string): string {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-5);
 }
 .convitem__path { color: var(--fg-6); }
+
+/* Pending / rejected state variants */
+.convitem--pending { background: var(--status-important-bg, hsl(45 100% 97%)); }
+.convitem--pending:hover { background: var(--status-important-bg, hsl(45 100% 95%)); }
+.convitem--rejected { opacity: 0.55; }
+.convitem__dot--pending {
+  visibility: visible;
+  background: var(--status-important, hsl(38 92% 50%));
+}
+.convitem__title--muted { color: var(--fg-4); }
+.convitem__pending-badge {
+  display: inline-flex; align-items: center;
+  margin-left: 6px;
+  font-size: 10px; font-weight: 500;
+  padding: 1px 5px; border-radius: 9999px;
+  background: var(--status-important-bg); color: var(--status-important-fg);
+  vertical-align: middle;
+}
 </style>

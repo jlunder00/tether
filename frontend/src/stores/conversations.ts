@@ -100,6 +100,18 @@ export const useConversationsStore = defineStore('conversations', () => {
     setMessages(conversationId, [...msgs, msg])
   }
 
+  /**
+   * Discard a conversation: transitions state → 'rejected'.
+   *
+   * Phase 5 TODO: when POST /api/conversations/{id}/discard ships, call that
+   * endpoint instead of PATCH so that a beacon_suppressions row is also written
+   * (preventing Beacon from re-dispatching immediately). Until then this is
+   * Option A — state change only, no suppression write.
+   */
+  async function discard(conversationId: string): Promise<boolean> {
+    return patch(conversationId, { state: 'rejected' })
+  }
+
   async function assignNode(conversationId: string, nodeId: string | null): Promise<void> {
     const res = await api(`/api/conversations/${conversationId}`, {
       method: 'PATCH',
@@ -125,5 +137,5 @@ export const useConversationsStore = defineStore('conversations', () => {
     return conv
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
+  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, discard, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
 })
