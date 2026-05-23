@@ -62,13 +62,17 @@ def _compute_options_hash(options: dict[str, Any]) -> str:
 
 
 def _get_pool_client(request: Request):
-    """Return the pool client, falling back to a lazily-constructed default."""
+    """Return the pool client, lazily constructing and caching on app.state.
+
+    Tests inject a mock by setting ``app.state.pool_client`` before requests.
+    In production the client is constructed once from config and reused, so
+    httpx connection pooling applies across requests.
+    """
     client = getattr(request.app.state, "pool_client", None)
     if client is not None:
         return client
 
-    # Construct from config on first use. The pool client is stateless enough
-    # that creating one per-request is safe (no persistent connection held).
+    # Construct from config on first use and cache for the app's lifetime.
     try:
         from config.loader import config
         base_url: str = config.get("agent_pool.base_url", "http://127.0.0.1:5002")
@@ -76,7 +80,9 @@ def _get_pool_client(request: Request):
         base_url = "http://127.0.0.1:5002"
 
     from agent_pool_manager.client import PoolClient
-    return PoolClient(base_url=base_url)
+    pool_client = PoolClient(base_url=base_url)
+    request.app.state.pool_client = pool_client
+    return pool_client
 
 
 # ---------------------------------------------------------------------------
