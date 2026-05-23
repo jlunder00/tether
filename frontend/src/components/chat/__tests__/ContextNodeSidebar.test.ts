@@ -443,6 +443,31 @@ describe('ContextNodeSidebar', () => {
     expect(ctxStore.patchNode).not.toHaveBeenCalled()
   })
 
+  it('cancelRename zeros renameValue so blur-on-teardown does not commit', async () => {
+    // Regression guard for Escape→blur ordering:
+    // cancelRename must zero renameValue before removing the input, so that if
+    // the browser fires blur on DOM teardown, commitRename's !trimmed guard fires.
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('Beta')
+    // Cancel — renameValue should be zeroed
+    await input.trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+
+    // Simulate what the browser does: fire blur after DOM removal
+    const vm = wrapper.vm as any
+    vm.commitRename('node-1', 'Alpha')
+
+    expect(ctxStore.patchNode).not.toHaveBeenCalled()
+  })
+
   it('rename does not call patchNode when value is blank after trim', async () => {
     const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
     const ctxStore = makeContextStore(nodes)

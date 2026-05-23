@@ -38,6 +38,7 @@ const createInputRef = ref<HTMLInputElement | null>(null)
 
 // Delete confirmation
 const deletingNode = ref<ContextNode | null>(null)
+const deleteCancelBtnRef = ref<HTMLButtonElement | null>(null)
 
 onMounted(() => {
   contextStore.fetchRootNodes()
@@ -93,6 +94,9 @@ function commitRename(nodeId: string, originalName: string) {
 }
 
 function cancelRename() {
+  // Zero renameValue so that if the browser fires blur on DOM teardown,
+  // commitRename's !trimmed guard treats it as a no-op.
+  renameValue.value = ''
   renamingNodeId.value = null
 }
 
@@ -133,6 +137,7 @@ function onCreateKeydown(evt: KeyboardEvent) {
 function startDelete(node: ContextNode, evt: Event) {
   evt.stopPropagation()
   deletingNode.value = node
+  nextTick(() => deleteCancelBtnRef.value?.focus())
 }
 
 async function confirmDelete() {
@@ -508,10 +513,14 @@ function startNewChat(nodeId: string) {
       v-if="deletingNode"
       data-testid="delete-confirm-dialog"
       class="delete-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-dialog-title"
       @click.self="cancelDelete"
+      @keydown.escape.stop="cancelDelete"
     >
       <div class="delete-dialog">
-        <p class="delete-dialog__msg">
+        <p id="delete-dialog-title" class="delete-dialog__msg">
           Delete '{{ deletingNode.name }}'?
           <template v-if="(deletingNode.children_count ?? 0) > 0">
             This will delete {{ deletingNode.children_count }}
@@ -521,6 +530,7 @@ function startNewChat(nodeId: string) {
         </p>
         <div class="delete-dialog__actions">
           <button
+            :ref="(el) => { if (el) deleteCancelBtnRef = el as HTMLButtonElement }"
             data-testid="delete-confirm-cancel"
             type="button"
             class="delete-btn delete-btn--cancel"
@@ -616,7 +626,7 @@ function startNewChat(nodeId: string) {
   transition: background 100ms, color 100ms;
 }
 .node-action-btn:hover { background: var(--bg-elev-3); color: var(--fg-2); }
-.node-action-btn--danger:hover { background: var(--status-block-bg, #f003); color: var(--status-block-fg, var(--fg-1)); }
+.node-action-btn--danger:hover { background: var(--status-block-bg); color: var(--status-block-fg, var(--fg-1)); }
 
 /* ── Rename input ── */
 .rename-input {
@@ -665,7 +675,7 @@ function startNewChat(nodeId: string) {
   padding: 16px;
   max-width: 200px;
   width: 100%;
-  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.2));
+  box-shadow: var(--shadow-pop);
 }
 
 .delete-dialog__msg {
