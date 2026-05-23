@@ -7,6 +7,10 @@ import ContextNodeSidebar from '../components/chat/ContextNodeSidebar.vue'
 import FolderCenterPanel  from '../components/chat/FolderCenterPanel.vue'
 import ConversationView   from '../components/chat/ConversationView.vue'
 import ProjectDetailsPanel from '../components/chat/ProjectDetailsPanel.vue'
+import { usePoolWarm } from '../composables/usePoolWarm'
+
+// Pre-warm a pool subprocess as soon as the user arrives at the chat surface.
+usePoolWarm()
 
 // ─── Collapse state ───────────────────────────────────────
 const leftOpen  = ref(true)
