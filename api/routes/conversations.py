@@ -18,6 +18,7 @@ clients must treat the cursor as an opaque integer string. See PR description.
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -44,6 +45,10 @@ router = APIRouter(tags=["conversations"])
 _NOTIF_MODES = {"all", "focus", "quiet", "off"}
 _CHANNELS = {"telegram", "email", "push"}
 
+# Valid conversation states — open/closed existed from Phase B; pending/rejected
+# added in Phase 3 for Beacon-initiated conversations (spec §7.1).
+ConversationState = Literal["open", "closed", "pending", "rejected"]
+
 
 class ConversationCreate(BaseModel):
     name: str
@@ -55,7 +60,7 @@ class ConversationCreate(BaseModel):
 class ConversationPatch(BaseModel):
     name: str | None = None
     priority: str | None = None
-    state: str | None = None
+    state: ConversationState | None = None
     context_node_id: str | None = None
 
 
