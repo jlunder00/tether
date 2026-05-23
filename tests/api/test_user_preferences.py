@@ -107,6 +107,99 @@ async def test_auth_me_is_paid_false_for_cancelled_premium(api_client, conn):
     assert resp.json()["is_paid"] is False
 
 
+# ---------------------------------------------------------------------------
+# notification_routing GET / PATCH
+# ---------------------------------------------------------------------------
+
+_VALID_ROUTING = {
+    "anchor_ping": {
+        "mode": "thread_by_key",
+        "key_template": "anchor:{anchor_id}:{date}",
+        "priority": "important",
+        "external": ["telegram"],
+    },
+    "task_followup": {
+        "mode": "thread_by_key",
+        "key_template": "anchor:{anchor_id}:{date}",
+        "priority": "important",
+        "external": ["telegram"],
+    },
+    "beacon": {"mode": "bot_decides", "priority": "normal", "external": ["web"]},
+    "meeting_event": {
+        "mode": "thread_by_key",
+        "key_template": "meeting:{request_id}",
+        "priority": "important",
+        "external": ["telegram", "web"],
+    },
+    "scheduling_update": {"mode": "fixed", "priority": "normal", "external": ["web"]},
+}
+
+
+@pytest.mark.asyncio
+async def test_get_preferences_returns_notification_routing_defaults_when_unset(api_client, conn):
+    """GET /api/user/preferences returns default routing when no prefs stored."""
+    resp = await api_client.get("/api/user/preferences")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "notification_routing" in data
+    routing = data["notification_routing"]
+    # All 5 default types present
+    for key in ("anchor_ping", "task_followup", "beacon", "meeting_event", "scheduling_update"):
+        assert key in routing
+
+
+@pytest.mark.asyncio
+async def test_patch_notification_routing_happy_path(api_client, conn):
+    """PATCH with valid notification_routing stores and is reflected in GET."""
+    resp = await api_client.patch(
+        "/api/user/preferences", json={"notification_routing": _VALID_ROUTING}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+    resp2 = await api_client.get("/api/user/preferences")
+    assert resp2.status_code == 200
+    data = resp2.json()
+    assert data["notification_routing"]["anchor_ping"]["mode"] == "thread_by_key"
+    assert data["notification_routing"]["beacon"]["priority"] == "normal"
+
+
+@pytest.mark.asyncio
+async def test_patch_notification_routing_rejects_unknown_type(api_client, conn):
+    """PATCH rejects routing dicts containing unknown notification type keys."""
+    bad_routing = {**_VALID_ROUTING, "unknown_type": {"mode": "fixed", "priority": "normal", "external": ["web"]}}
+    resp = await api_client.patch(
+        "/api/user/preferences", json={"notification_routing": bad_routing}
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_notification_routing_rejects_invalid_mode(api_client, conn):
+    """PATCH rejects routing entries with an invalid mode value."""
+    bad_routing = {
+        **_VALID_ROUTING,
+        "beacon": {"mode": "send_everywhere", "priority": "normal", "external": ["web"]},
+    }
+    resp = await api_client.patch(
+        "/api/user/preferences", json={"notification_routing": bad_routing}
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_notification_routing_rejects_invalid_priority(api_client, conn):
+    """PATCH rejects routing entries with an invalid priority value."""
+    bad_routing = {
+        **_VALID_ROUTING,
+        "beacon": {"mode": "bot_decides", "priority": "critical", "external": ["web"]},
+    }
+    resp = await api_client.patch(
+        "/api/user/preferences", json={"notification_routing": bad_routing}
+    )
+    assert resp.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_get_user_is_paid_raises_without_rls_context(conn):
     """get_user_is_paid raises RuntimeError when called on an unscoped connection,
