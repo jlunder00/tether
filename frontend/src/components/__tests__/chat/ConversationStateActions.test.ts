@@ -5,12 +5,12 @@
  *   pending  → "Approve" (→ open) + "Dismiss" (→ rejected)
  *   rejected → "Restore" (→ open)
  *   open     → overflow "Mark as rejected" option
- *   closed   → no actions (archive state)
+ *   closed   → overflow "Mark as rejected" option (spec §7.2: any conv)
  *
  * The component emits state-change events; the parent calls store.patch().
  * This keeps the component pure and testable without store mocking.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import ConversationStateActions from '../../chat/ConversationStateActions.vue'
@@ -168,13 +168,33 @@ describe('ConversationStateActions — closed state', () => {
     setActivePinia(createPinia())
   })
 
-  it('renders nothing meaningful for closed conversations (archive state)', () => {
+  it('renders overflow button for closed conversations (can still be rejected)', () => {
     const wrapper = mount(ConversationStateActions, {
       props: { state: 'closed', convId: 'conv-4' },
     })
-    // No action buttons for closed/archived convs
+    // No inline approve/dismiss/restore for closed convs
     expect(wrapper.find('[data-testid="btn-approve"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-dismiss"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="btn-restore"]').exists()).toBe(false)
+    // But overflow menu should be present (spec §7.2: any conv can be marked rejected)
+    expect(wrapper.find('[data-testid="btn-overflow"]').exists()).toBe(true)
+  })
+
+  it('clicking overflow exposes Mark-as-rejected for closed conversations', async () => {
+    const wrapper = mount(ConversationStateActions, {
+      props: { state: 'closed', convId: 'conv-4' },
+    })
+    await wrapper.find('[data-testid="btn-overflow"]').trigger('click')
+    expect(wrapper.find('[data-testid="btn-mark-rejected"]').exists()).toBe(true)
+  })
+
+  it('clicking Mark-as-rejected emits dismiss event for closed conversations', async () => {
+    const wrapper = mount(ConversationStateActions, {
+      props: { state: 'closed', convId: 'conv-4' },
+    })
+    await wrapper.find('[data-testid="btn-overflow"]').trigger('click')
+    await wrapper.find('[data-testid="btn-mark-rejected"]').trigger('click')
+    expect(wrapper.emitted('dismiss')).toBeTruthy()
+    expect(wrapper.emitted('dismiss')![0]).toEqual(['conv-4'])
   })
 })

@@ -6,7 +6,7 @@
  *   pending  → "Approve" (→ open) + "Dismiss" (→ rejected)
  *   rejected → "Restore" (→ open)
  *   open     → overflow "⋮" button → "Mark as rejected" menu item
- *   closed   → nothing (archive state)
+ *   closed   → overflow "⋮" button → "Mark as rejected" (spec §7.2: any conv)
  *
  * Emits events; parent is responsible for calling store.patch() / store.discard().
  * This keeps the component store-free and easy to test.
@@ -111,8 +111,8 @@ function onRestore() {
     </button>
   </template>
 
-  <!-- Open: overflow menu with "Mark as rejected" -->
-  <template v-else-if="state === 'open'">
+  <!-- Open / closed: overflow menu with "Mark as rejected" (spec §7.2) -->
+  <template v-else-if="state === 'open' || state === 'closed'">
     <div class="relative">
       <button
         type="button"
@@ -142,5 +142,5 @@ function onRestore() {
     </div>
   </template>
 
-  <!-- Closed: no actions -->
+
 </template>

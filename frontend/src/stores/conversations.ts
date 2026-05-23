@@ -103,10 +103,21 @@ export const useConversationsStore = defineStore('conversations', () => {
   /**
    * Discard a conversation: transitions state → 'rejected'.
    *
-   * Phase 5 TODO: when POST /api/conversations/{id}/discard ships, call that
-   * endpoint instead of PATCH so that a beacon_suppressions row is also written
-   * (preventing Beacon from re-dispatching immediately). Until then this is
-   * Option A — state change only, no suppression write.
+   * ⚠️  KNOWN DEBT — Option A implementation:
+   * This call transitions conversation state to `rejected` but does NOT write a
+   * `beacon_suppressions` row (the table doesn't exist yet — landing in
+   * pool-builder's Beacon Phase 3 PR 1). When that PR merges, a follow-up PR
+   * will upgrade this to call `POST /api/conversations/{id}/discard`, which
+   * atomically writes state + suppression row. Until then, dismissals from this
+   * period will not be recorded as suppressions; Beacon (when Phase 5 ships)
+   * may re-dispatch the same checkpoint patterns the user already dismissed.
+   *
+   * TODO (Phase 5): replace with:
+   *   const res = await api(`/api/conversations/${conversationId}/discard`, { method: 'POST' })
+   *   if (!res.ok) return false
+   *   const idx = list.value.findIndex(c => c.id === conversationId)
+   *   if (idx !== -1) list.value[idx].state = 'rejected'
+   *   return true
    */
   async function discard(conversationId: string): Promise<boolean> {
     return patch(conversationId, { state: 'rejected' })
