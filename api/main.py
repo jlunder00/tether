@@ -41,6 +41,7 @@ from api.routes import preferences as preferences_routes
 from api.routes import ical as ical_routes
 from api.routes import conversations as conversations_routes
 from api.routes import internal as internal_routes
+from api.routes import pool as pool_routes
 from api.ws import manager
 from api.auth import auth_dependency, decode_jwt
 from api.redis_pubsub import subscribe_and_forward, get_redis_url
@@ -220,6 +221,11 @@ def create_app(lifespan_override=None) -> FastAPI:
     app.include_router(
         internal_routes.router,
         prefix="/api/internal",
+        include_in_schema=False,
+    )
+    app.include_router(
+        pool_routes.router,
+        prefix="/api/internal/pool",
         include_in_schema=False,
     )
 
