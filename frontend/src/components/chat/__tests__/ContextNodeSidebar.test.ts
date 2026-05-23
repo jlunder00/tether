@@ -48,9 +48,14 @@ function makeContextStore(nodes: ReturnType<typeof makeNode>[] = []) {
   })
 }
 
-function makeConversationsStore() {
+function makeConversationsStore(overrides: Record<string, any> = {}) {
   return {
+    selectedId: null,
+    list: [] as any[],
     assignNode: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn().mockResolvedValue(undefined),
+    select: vi.fn(),
+    ...overrides,
   }
 }
 
@@ -196,8 +201,8 @@ describe('ContextNodeSidebar', () => {
     const dropZone = wrapper.find('[data-testid="drop-zone-node-1"]')
     await dropZone.trigger('dragover')
 
-    // Should have drag-over highlight class
-    expect(dropZone.classes()).toContain('ring-2')
+    // Should have drag-over highlight class (token-themed via scoped CSS)
+    expect(dropZone.classes()).toContain('drag-over')
   })
 
   it('calls conversationsStore.assignNode on drop with conversation id', async () => {
@@ -222,5 +227,171 @@ describe('ContextNodeSidebar', () => {
     await wrapper.vm.$nextTick()
 
     expect(conversationsStore.assignNode).toHaveBeenCalledWith('conv-123', 'node-1')
+  })
+
+  it('emits collapse when collapse button is clicked', async () => {
+    mockUseContextStore.mockReturnValue(makeContextStore() as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const collapseBtn = wrapper.find('[data-testid="sidebar-collapse-btn"]')
+    expect(collapseBtn.exists()).toBe(true)
+    await collapseBtn.trigger('click')
+
+    expect(wrapper.emitted('collapse')).toBeTruthy()
+  })
+
+  it('shows conversation leaves under expanded node', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Parent', children_count: 0 })]
+    const convStore = {
+      assignNode: vi.fn().mockResolvedValue(undefined),
+      selectedId: null,
+      list: [
+        {
+          id: 'conv-1', name: 'Leaf Conv', context_node_id: 'node-1',
+          type: 'interactive', priority: 'normal', state: 'open',
+          thread_key: null, is_system: false,
+          created_at: '2026-01-01T00:00:00Z',
+          last_message_at: '2026-01-01T00:01:00Z',
+          folder_name: 'Parent',
+        },
+      ],
+      refresh: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(),
+    }
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(convStore as any)
+
+    // First mount uses nodes with children_count: 0 (no expansion possible)
+    // Re-mount with a node where children_count is undefined to allow expansion
+    const nodeWithConvs = makeNode({ id: 'node-1', name: 'Parent' })
+    delete (nodeWithConvs as any).children_count
+    mockUseContextStore.mockReturnValue(makeContextStore([nodeWithConvs]) as any)
+
+    const wrapper2 = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper2.find('[data-testid="expand-chevron-node-1"]')
+    await chevron.trigger('click')
+    await wrapper2.vm.$nextTick()
+
+    // The conv leaf should appear after expansion (store.list is filtered by node)
+    expect(wrapper2.text()).toContain('Leaf Conv')
+  })
+
+  it('shows "+ New chat" row under expanded folder', async () => {
+    const nodeWithConvs = makeNode({ id: 'node-1', name: 'Parent' })
+    delete (nodeWithConvs as any).children_count
+    const convStore = {
+      assignNode: vi.fn().mockResolvedValue(undefined),
+      selectedId: null,
+      list: [],
+      refresh: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(),
+    }
+    mockUseContextStore.mockReturnValue(makeContextStore([nodeWithConvs]) as any)
+    mockUseConversationsStore.mockReturnValue(convStore as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper.find('[data-testid="expand-chevron-node-1"]')
+    await chevron.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('New chat')
+  })
+
+  it('clicking a conversation leaf emits open-conversation (preserves folder context)', async () => {
+    const nodeWithConvs = makeNode({ id: 'node-1', name: 'Parent' })
+    delete (nodeWithConvs as any).children_count
+    const convStore = {
+      assignNode: vi.fn().mockResolvedValue(undefined),
+      selectedId: null,
+      list: [
+        {
+          id: 'conv-click', name: 'Click Conv', context_node_id: 'node-1',
+          type: 'interactive', priority: 'normal', state: 'open',
+          thread_key: null, is_system: false,
+          created_at: '2026-01-01T00:00:00Z',
+          last_message_at: '2026-01-01T00:01:00Z',
+          folder_name: 'Parent',
+        },
+      ],
+      refresh: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(),
+    }
+    mockUseContextStore.mockReturnValue(makeContextStore([nodeWithConvs]) as any)
+    mockUseConversationsStore.mockReturnValue(convStore as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper.find('[data-testid="expand-chevron-node-1"]')
+    await chevron.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const leafRow = wrapper.find('[data-testid="conv-leaf-conv-click"]')
+    expect(leafRow.exists()).toBe(true)
+    await leafRow.trigger('click')
+
+    // Should emit open-conversation, NOT mutate activeNodeId — parent decides
+    // navigation, preserving folder context for back-navigation.
+    expect(wrapper.emitted('open-conversation')).toBeTruthy()
+    expect(wrapper.emitted('open-conversation')![0]).toEqual(['conv-click'])
+    // Old buggy behavior was emit('update:activeNodeId', null); ensure it doesn't.
+    expect(wrapper.emitted('update:activeNodeId')).toBeFalsy()
+  })
+
+  it('conversation leaves are draggable with correct dataTransfer payload', async () => {
+    const nodeWithConvs = makeNode({ id: 'node-1', name: 'Parent' })
+    delete (nodeWithConvs as any).children_count
+    const convStore = {
+      assignNode: vi.fn().mockResolvedValue(undefined),
+      selectedId: null,
+      list: [
+        {
+          id: 'conv-drag', name: 'Draggable Conv', context_node_id: 'node-1',
+          type: 'interactive', priority: 'normal', state: 'open',
+          thread_key: null, is_system: false,
+          created_at: '2026-01-01T00:00:00Z',
+          last_message_at: '2026-01-01T00:01:00Z',
+          folder_name: 'Parent',
+        },
+      ],
+      refresh: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(),
+    }
+    mockUseContextStore.mockReturnValue(makeContextStore([nodeWithConvs]) as any)
+    mockUseConversationsStore.mockReturnValue(convStore as any)
+
+    const wrapper = mount(ContextNodeSidebar, {
+      props: { activeNodeId: null },
+    })
+
+    const chevron = wrapper.find('[data-testid="expand-chevron-node-1"]')
+    await chevron.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const leafRow = wrapper.find('[data-testid="conv-leaf-conv-drag"]')
+    expect(leafRow.exists()).toBe(true)
+    expect(leafRow.attributes('draggable')).toBe('true')
+
+    const setDataMock = vi.fn()
+    const dragEvent = new Event('dragstart') as any
+    dragEvent.dataTransfer = { setData: setDataMock }
+    await leafRow.element.dispatchEvent(dragEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(setDataMock).toHaveBeenCalledWith(
+      'text/plain',
+      JSON.stringify({ conversationId: 'conv-drag' })
+    )
   })
 })

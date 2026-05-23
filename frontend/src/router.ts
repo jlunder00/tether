@@ -33,10 +33,21 @@ const router = createRouter({
       component: () => import('./views/PlanView.vue'),
       props: route => ({ view: 'month', date: route.params.date }),
     },
-    { path: '/context', name: 'context', component: () => import('./components/ContextEditor.vue') },
+    // Legacy redirect: preserves query string (e.g. ?panels=task:abc) and hash
+    { path: '/context', redirect: (to) => ({ path: '/chat', query: to.query, hash: to.hash }) },
     { path: '/anchors', name: 'anchors', component: () => import('./views/AnchorsView.vue') },
     { path: '/kanban', name: 'kanban', component: () => import('./views/KanbanView.vue') },
-    { path: '/chat', name: 'chat', component: () => import('./views/ChatPageView.vue') },
+    {
+      path: '/chat',
+      name: 'chat',
+      component: () => import('./views/ChatPageView.vue'),
+      children: [
+        // The parent (ChatPageView) reads these params directly via useRoute() on mount.
+        // A minimal component is required by vue-router for child route records.
+        { path: 'node/:nodeId',         name: 'chat-node',         props: true, component: { template: '<span />' } },
+        { path: 'conversation/:convId', name: 'chat-conversation', props: true, component: { template: '<span />' } },
+      ],
+    },
     { path: '/beacon/suppressions', name: 'beacon-suppressions', component: () => import('./views/SuppressionsView.vue') },
     { path: '/', redirect: '/dashboard' },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

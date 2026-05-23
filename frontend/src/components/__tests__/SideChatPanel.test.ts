@@ -40,10 +40,10 @@ describe('SideChatPanel', () => {
     expect(wrapper.emitted('close')).toBeTruthy()
   })
 
-  it('renders ConversationList component', async () => {
+  it('renders FolderCenterPanel component', async () => {
     const { default: SideChatPanel } = await import('../SideChatPanel.vue')
     const wrapper = mount(SideChatPanel)
-    expect(wrapper.findComponent({ name: 'ConversationList' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'FolderCenterPanel' }).exists()).toBe(true)
   })
 
   it('renders ConversationView component', async () => {

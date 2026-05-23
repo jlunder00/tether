@@ -19,7 +19,6 @@ const navLinks: NavLink[] = [
   { to: '/dashboard', label: 'Dashboard', match: '/dashboard' },
   { to: '/calendar', label: 'Calendar', match: '/calendar' },
   { to: '/plan/day', label: 'Plan', match: '/plan' },
-  { to: '/context', label: 'Context', match: '/context', exact: true },
   { to: '/anchors', label: 'Anchors', match: '/anchors', exact: true },
   { to: '/kanban', label: 'Kanban', match: '/kanban' },
   { to: '/chat', label: 'Chat', match: '/chat' },
