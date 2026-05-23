@@ -45,6 +45,11 @@ function makeContextStore(nodes: ReturnType<typeof makeNode>[] = []) {
     fetchRootNodes: vi.fn().mockResolvedValue(nodes),
     fetchChildren: vi.fn().mockResolvedValue([]),
     childrenOf: vi.fn().mockReturnValue([]),
+    // Editing operations (K1-PR2)
+    patchNode: vi.fn().mockResolvedValue({}),
+    createNode: vi.fn().mockResolvedValue({ id: 'new-node', name: 'New Folder', parent_id: null }),
+    deleteNode: vi.fn().mockResolvedValue(undefined),
+    moveNode: vi.fn().mockResolvedValue(undefined),
   })
 }
 
@@ -347,6 +352,459 @@ describe('ContextNodeSidebar', () => {
     expect(wrapper.emitted('open-conversation')![0]).toEqual(['conv-click'])
     // Old buggy behavior was emit('update:activeNodeId', null); ensure it doesn't.
     expect(wrapper.emitted('update:activeNodeId')).toBeFalsy()
+  })
+
+  // ── K1-PR2: Inline rename ──────────────────────────────────────────────
+
+  it('double-clicking a node name shows a rename input pre-filled with the name', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    const nameSpan = wrapper.find('[data-testid="node-row-node-1"]')
+    await nameSpan.trigger('dblclick')
+
+    // Input should appear in place of the span
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    expect(input.exists()).toBe(true)
+    expect((input.element as HTMLInputElement).value).toBe('Alpha')
+  })
+
+  it('pressing Enter on rename input calls patchNode and hides input', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('Beta')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.patchNode).toHaveBeenCalledWith('node-1', { name: 'Beta' })
+    // Input should be gone, span restored
+    expect(wrapper.find('[data-testid="rename-input-node-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="node-row-node-1"]').exists()).toBe(true)
+  })
+
+  it('pressing Escape on rename input cancels without calling patchNode', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('SomethingElse')
+    await input.trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.patchNode).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="rename-input-node-1"]').exists()).toBe(false)
+  })
+
+  it('blurring the rename input commits the rename', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('Gamma')
+    await input.trigger('blur')
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.patchNode).toHaveBeenCalledWith('node-1', { name: 'Gamma' })
+  })
+
+  it('rename does not call patchNode when value is unchanged', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    // Do not change value (still 'Alpha')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.patchNode).not.toHaveBeenCalled()
+  })
+
+  it('cancelRename zeros renameValue so blur-on-teardown does not commit', async () => {
+    // Regression guard for Escape→blur ordering:
+    // cancelRename must zero renameValue before removing the input, so that if
+    // the browser fires blur on DOM teardown, commitRename's !trimmed guard fires.
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('Beta')
+    // Cancel — renameValue should be zeroed
+    await input.trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+
+    // Simulate what the browser does: fire blur after DOM removal
+    const vm = wrapper.vm as any
+    vm.commitRename('node-1', 'Alpha')
+
+    expect(ctxStore.patchNode).not.toHaveBeenCalled()
+  })
+
+  it('rename does not call patchNode when value is blank after trim', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="node-row-node-1"]').trigger('dblclick')
+
+    const input = wrapper.find('[data-testid="rename-input-node-1"]')
+    await input.setValue('   ')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.patchNode).not.toHaveBeenCalled()
+  })
+
+  // ── K1-PR2: Create folder ──────────────────────────────────────────────
+
+  it('shows a "+" create button on each root folder row', () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    expect(wrapper.find('[data-testid="create-child-btn-node-1"]').exists()).toBe(true)
+  })
+
+  it('clicking the folder "+" button shows an inline create input', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="create-child-btn-node-1"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="create-input-node-1"]').exists()).toBe(true)
+  })
+
+  it('Enter on create input calls createNode with parentId and name, then hides input', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="create-child-btn-node-1"]').trigger('click')
+
+    const input = wrapper.find('[data-testid="create-input-node-1"]')
+    await input.setValue('Child Folder')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.createNode).toHaveBeenCalledWith('node-1', 'Child Folder')
+    expect(wrapper.find('[data-testid="create-input-node-1"]').exists()).toBe(false)
+  })
+
+  it('Escape on create input cancels without calling createNode', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="create-child-btn-node-1"]').trigger('click')
+
+    await wrapper.find('[data-testid="create-input-node-1"]').trigger('keydown', { key: 'Escape' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.createNode).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="create-input-node-1"]').exists()).toBe(false)
+  })
+
+  it('shows a "New root folder" affordance', () => {
+    mockUseContextStore.mockReturnValue(makeContextStore() as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    expect(wrapper.find('[data-testid="create-root-btn"]').exists()).toBe(true)
+  })
+
+  it('clicking "New root folder" shows a root create input; Enter calls createNode(null, name)', async () => {
+    const ctxStore = makeContextStore()
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="create-root-btn"]').trigger('click')
+
+    const input = wrapper.find('[data-testid="create-input-root"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('Root Folder')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.createNode).toHaveBeenCalledWith(null, 'Root Folder')
+    expect(wrapper.find('[data-testid="create-input-root"]').exists()).toBe(false)
+  })
+
+  it('create does not call createNode when name is blank', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="create-child-btn-node-1"]').trigger('click')
+
+    const input = wrapper.find('[data-testid="create-input-node-1"]')
+    await input.setValue('   ')
+    await input.trigger('keydown', { key: 'Enter' })
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.createNode).not.toHaveBeenCalled()
+  })
+
+  // ── K1-PR2: Delete folder ──────────────────────────────────────────────
+
+  it('shows a delete button on each root folder row', () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    expect(wrapper.find('[data-testid="delete-btn-node-1"]').exists()).toBe(true)
+  })
+
+  it('clicking delete button shows confirmation dialog with node name', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+
+    const dialog = wrapper.find('[data-testid="delete-confirm-dialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.text()).toContain('Alpha')
+  })
+
+  it('delete confirmation mentions subfolders count when children_count > 0', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 3 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+
+    const dialog = wrapper.find('[data-testid="delete-confirm-dialog"]')
+    expect(dialog.text()).toContain('3 subfolder')
+  })
+
+  it('delete confirmation omits subfolder sentence when children_count === 0', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+
+    const dialog = wrapper.find('[data-testid="delete-confirm-dialog"]')
+    expect(dialog.text()).not.toContain('subfolder')
+  })
+
+  it('delete confirmation mentions conversations moving to All conversations', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+
+    const dialog = wrapper.find('[data-testid="delete-confirm-dialog"]')
+    expect(dialog.text()).toContain('All conversations')
+  })
+
+  it('confirming delete calls deleteNode and closes dialog', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+    await wrapper.find('[data-testid="delete-confirm-ok"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.deleteNode).toHaveBeenCalledWith('node-1')
+    expect(wrapper.find('[data-testid="delete-confirm-dialog"]').exists()).toBe(false)
+  })
+
+  it('cancelling delete does not call deleteNode and closes dialog', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    await wrapper.find('[data-testid="delete-btn-node-1"]').trigger('click')
+    await wrapper.find('[data-testid="delete-confirm-cancel"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.deleteNode).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="delete-confirm-dialog"]').exists()).toBe(false)
+  })
+
+  // ── K1-PR2: Folder drag-and-drop reparent ─────────────────────────────
+
+  it('folder rows are draggable', () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    const dropZone = wrapper.find('[data-testid="drop-zone-node-1"]')
+    expect(dropZone.attributes('draggable')).toBe('true')
+  })
+
+  it('dragstart on a folder row sets application/x-tether-folder dataTransfer', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    mockUseContextStore.mockReturnValue(makeContextStore(nodes) as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+    const dropZone = wrapper.find('[data-testid="drop-zone-node-1"]')
+
+    const setDataMock = vi.fn()
+    const dragEvent = new Event('dragstart') as any
+    dragEvent.dataTransfer = { setData: setDataMock, effectAllowed: '' }
+    await dropZone.element.dispatchEvent(dragEvent)
+
+    expect(setDataMock).toHaveBeenCalledWith(
+      'application/x-tether-folder',
+      JSON.stringify({ folderId: 'node-1' }),
+    )
+  })
+
+  it('dropping a folder onto another folder calls moveNode(folderId, targetId)', async () => {
+    const nodes = [
+      makeNode({ id: 'node-a', name: 'Alpha', children_count: 0 }),
+      makeNode({ id: 'node-b', name: 'Beta', children_count: 0 }),
+    ]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+
+    // Drop node-a onto node-b
+    const dropZoneB = wrapper.find('[data-testid="drop-zone-node-b"]')
+    const dropEvent = new Event('drop') as any
+    dropEvent.preventDefault = vi.fn()
+    dropEvent.dataTransfer = {
+      getData: vi.fn().mockImplementation((type: string) => {
+        if (type === 'application/x-tether-folder') return JSON.stringify({ folderId: 'node-a' })
+        return ''
+      }),
+      types: ['application/x-tether-folder'],
+    }
+    await dropZoneB.element.dispatchEvent(dropEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.moveNode).toHaveBeenCalledWith('node-a', 'node-b')
+  })
+
+  it('dropping a folder onto root zone calls moveNode(folderId, null)', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+
+    const rootDropZone = wrapper.find('[data-testid="all-item"]')
+    const dropEvent = new Event('drop') as any
+    dropEvent.preventDefault = vi.fn()
+    dropEvent.dataTransfer = {
+      getData: vi.fn().mockImplementation((type: string) => {
+        if (type === 'application/x-tether-folder') return JSON.stringify({ folderId: 'node-1' })
+        return ''
+      }),
+      types: ['application/x-tether-folder'],
+    }
+    await rootDropZone.element.dispatchEvent(dropEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.moveNode).toHaveBeenCalledWith('node-1', null)
+  })
+
+  it('dropping a folder onto itself does not call moveNode', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(makeConversationsStore() as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+
+    const dropZone = wrapper.find('[data-testid="drop-zone-node-1"]')
+    const dropEvent = new Event('drop') as any
+    dropEvent.preventDefault = vi.fn()
+    dropEvent.dataTransfer = {
+      getData: vi.fn().mockImplementation((type: string) => {
+        if (type === 'application/x-tether-folder') return JSON.stringify({ folderId: 'node-1' })
+        return ''
+      }),
+      types: ['application/x-tether-folder'],
+    }
+    await dropZone.element.dispatchEvent(dropEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(ctxStore.moveNode).not.toHaveBeenCalled()
+  })
+
+  it('existing conversation drag still calls assignNode (not moveNode)', async () => {
+    const nodes = [makeNode({ id: 'node-1', name: 'Alpha', children_count: 0 })]
+    const ctxStore = makeContextStore(nodes)
+    const convStore = makeConversationsStore()
+    mockUseContextStore.mockReturnValue(ctxStore as any)
+    mockUseConversationsStore.mockReturnValue(convStore as any)
+
+    const wrapper = mount(ContextNodeSidebar, { props: { activeNodeId: null } })
+
+    const dropZone = wrapper.find('[data-testid="drop-zone-node-1"]')
+    const dropEvent = new Event('drop') as any
+    dropEvent.preventDefault = vi.fn()
+    dropEvent.dataTransfer = {
+      getData: vi.fn().mockImplementation((type: string) => {
+        if (type === 'text/plain') return JSON.stringify({ conversationId: 'conv-99' })
+        return ''
+      }),
+      types: ['text/plain'],
+    }
+    await dropZone.element.dispatchEvent(dropEvent)
+    await wrapper.vm.$nextTick()
+
+    expect(convStore.assignNode).toHaveBeenCalledWith('conv-99', 'node-1')
+    expect(ctxStore.moveNode).not.toHaveBeenCalled()
   })
 
   it('conversation leaves are draggable with correct dataTransfer payload', async () => {
