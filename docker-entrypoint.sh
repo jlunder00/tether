@@ -97,4 +97,5 @@ else
     echo "[entrypoint] CONFIG_SOURCE_URL not set — booting from baked-in defaults + env vars"
 fi
 
+echo "0.0.0.0 statsig.anthropic.com" >> /etc/hosts
 exec "$@"
