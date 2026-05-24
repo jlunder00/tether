@@ -41,10 +41,24 @@ class _FakePool:
     """Minimal pool stub — only needed for app.state.pool, not used by dispatch tests."""
 
 
+def _make_mock_vault(oauth_token: str = "sk-ant-ws-test-token"):
+    """Return a mock vault whose materialize() yields CLAUDE_CODE_OAUTH_TOKEN."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+    vault = MagicMock()
+
+    @asynccontextmanager
+    async def _materialize(user_id: str):
+        yield {"CLAUDE_CODE_OAUTH_TOKEN": oauth_token}
+
+    vault.materialize = _materialize
+    return vault
+
+
 @asynccontextmanager
 async def _noop_lifespan(app):
     app.state.pool = _FakePool()
-    app.state.vault = None
+    app.state.vault = _make_mock_vault()
     yield
 
 

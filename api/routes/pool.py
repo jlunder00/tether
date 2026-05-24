@@ -120,27 +120,29 @@ async def pool_warm(
                    f"Valid versions: {sorted(agent_options)}",
         )
 
-    # Inject the user's OAuth token so the pool subprocess can authenticate.
-    # Vault is None in dev/Pi (subprocess uses disk credentials instead).
-    options_for_hint = dict(options)
-    vault = getattr(request.app.state, "vault", None)
-    if vault is not None:
-        try:
-            async with vault.materialize(user_id) as env_dict:
-                options_for_hint = {**options, "env": env_dict}
-        except ValueError:
-            log.warning(
-                "pool_warm: no vault credentials for user_id=%s agent_version=%s"
-                " — hint will fire without env (subprocess may fail to authenticate)",
-                user_id,
-                body.agent_version,
-            )
+    vault = request.app.state.vault
+    if vault is None:
+        log.error(
+            "pool_warm: vault is not configured — set VAULT_KEY in the environment. "
+            "Pool warming requires vault to inject OAuth credentials into subprocesses."
+        )
+        return {"hinted": False, "options_hash": _compute_options_hash(options)}
 
-    # Hash is computed from options_for_hint (after env injection) so the warm
-    # queue partition matches the acquire-side hash in interactive_agent_layer.
-    # When env contains a per-user OAuth token, warm partitions are per-user —
-    # this is intentional: a subprocess authenticated as user A must not serve
-    # user B's requests.
+    try:
+        async with vault.materialize(user_id) as env_dict:
+            options_for_hint = {**options, "env": env_dict}
+    except ValueError:
+        log.warning(
+            "pool_warm: no vault credentials for user_id=%s agent_version=%s"
+            " — user must connect their Anthropic account first",
+            user_id,
+            body.agent_version,
+        )
+        return {"hinted": False, "options_hash": _compute_options_hash(options)}
+
+    # Hash computed after env injection so the warm partition matches the
+    # acquire-side hash in interactive_agent_layer. Partitions are per-user —
+    # a subprocess authenticated as user A must not serve user B.
     options_hash = _compute_options_hash(options_for_hint)
 
     pool_client = _get_pool_client(request)

@@ -138,19 +138,27 @@ async def _dispatch_v2_0(
     delta_sent = False
 
     # Inject the user's OAuth token so the pool subprocess can authenticate.
-    # Hash stays stable — the layer strips env before hashing (env is per-user).
     # Never mutate _V2_0_OPTIONS; always copy.
-    options: dict[str, Any] = dict(_V2_0_OPTIONS)
-    if vault is not None:
-        try:
-            async with vault.materialize(user_id) as env_dict:
-                options = {**_V2_0_OPTIONS, "env": dict(env_dict)}
-        except ValueError:
-            logger.warning(
-                "dispatch_v2_0: no vault credentials for user_id=%s"
-                " — pool subprocess will rely on disk credentials",
-                user_id,
-            )
+    if vault is None:
+        logger.error(
+            "dispatch_v2_0: vault is not configured — VAULT_KEY must be set. "
+            "Falling back to 1.0 pipeline for user_id=%s",
+            user_id,
+        )
+        await handle_message(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+        return
+
+    try:
+        async with vault.materialize(user_id) as env_dict:
+            options: dict[str, Any] = {**_V2_0_OPTIONS, "env": dict(env_dict)}
+    except ValueError:
+        logger.warning(
+            "dispatch_v2_0: no vault credentials for user_id=%s"
+            " — user must connect Anthropic account. Falling back to 1.0 pipeline.",
+            user_id,
+        )
+        await handle_message(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+        return
 
     try:
         session_id = await layer.start_session(

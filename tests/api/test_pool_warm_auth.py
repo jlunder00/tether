@@ -164,19 +164,21 @@ async def test_options_hash_includes_env_for_per_user_partitioning(client_with_v
     assert hint_hash == _compute_options_hash(hint_options)  # hash == H(options_for_hint)
 
 
-async def test_no_vault_hint_fires_without_env(client_no_vault):
-    """When vault=None (dev), hint fires without env — subprocess uses disk credentials."""
+async def test_no_vault_returns_hinted_false_with_error(client_no_vault):
+    """When vault is not configured, pool_warm must return hinted=false without firing a hint.
+
+    Vault is a required dependency — pool subprocesses need OAuth credentials to
+    authenticate. A missing vault is a misconfiguration, not a supported path.
+    """
     client, pool = client_no_vault
     resp = await client.post(
         "/api/internal/pool/warm",
         json={"agent_version": "tether-agent-2.0"},
     )
     assert resp.status_code == 202
-    assert resp.json()["hinted"] is True
-    assert len(pool.hint_calls) == 1
-    _user_id, _hash, options = pool.hint_calls[0]
-    # No env injected when vault is absent
-    assert "env" not in options or options["env"] == {}
+    assert resp.json()["hinted"] is False
+    # No hint should have fired — firing without env spawns a doomed subprocess
+    assert len(pool.hint_calls) == 0
 
 
 async def test_missing_vault_credentials_returns_202(client_no_credentials):

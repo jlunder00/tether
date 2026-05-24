@@ -28,6 +28,19 @@ async def _fake_handle_1_0_response(text, send_fn, pool, user_id, vault=None, st
     send_fn("1.0-response")
 
 
+def _make_mock_vault(oauth_token: str = "sk-ant-test-token"):
+    """Return a mock vault whose materialize() yields CLAUDE_CODE_OAUTH_TOKEN."""
+    from contextlib import asynccontextmanager
+    vault = MagicMock()
+
+    @asynccontextmanager
+    async def _materialize(user_id: str):
+        yield {"CLAUDE_CODE_OAUTH_TOKEN": oauth_token}
+
+    vault.materialize = _materialize
+    return vault
+
+
 def _assert_not_wired_stub(stub: str) -> None:
     """Stub must communicate not-wired status (matches the wording in agent_dispatch)."""
     stub_lower = stub.lower()
@@ -138,6 +151,7 @@ async def test_dispatch_unknown_or_none_defaults_to_2_0_path(version):
             send_fn=sent_parts.append,
             pool=None,
             user_id="user1",
+            vault=_make_mock_vault(),
         )
     # On success, the layer delivers the final text — no stub, no 1.0 fallback
     assert sent_parts == ["Layer response"]
@@ -163,6 +177,7 @@ async def test_dispatch_2_0_creates_layer_session_with_correct_options():
             send_fn=lambda m: None,
             pool=None,
             user_id="user42",
+            vault=_make_mock_vault(),
         )
 
     constructor.assert_called_once()  # LayerClient instantiated
@@ -202,6 +217,7 @@ async def test_dispatch_2_0_turn_complete_sends_final_text_and_ends_session():
             send_fn=sent_parts.append,
             pool=None,
             user_id="user1",
+            vault=_make_mock_vault(),
         )
 
     assert sent_parts == ["Done!"]
@@ -234,6 +250,7 @@ async def test_dispatch_2_0_status_events_forwarded_via_status_fn():
             pool=None,
             user_id="user1",
             status_fn=fake_status_fn,
+            vault=_make_mock_vault(),
         )
 
     assert "Thinking..." in status_calls
@@ -262,6 +279,7 @@ async def test_dispatch_2_0_layer_disabled_falls_back_to_1_0():
             send_fn=sent_parts.append,
             pool=None,
             user_id="user1",
+            vault=_make_mock_vault(),
         )
 
     # Layer not used
@@ -289,6 +307,7 @@ async def test_dispatch_2_0_layer_http_error_falls_back_to_1_0():
             send_fn=sent_parts.append,
             pool=None,
             user_id="user1",
+            vault=_make_mock_vault(),
         )
 
     # 1.0 pipeline must have fired, and no stub message
@@ -308,7 +327,9 @@ async def test_dispatch_2_0_end_session_called_on_http_error():
         from bot.agent_dispatch import dispatch_message
 
         await dispatch_message(
-            "tether-agent-2.0", "hi", send_fn=lambda m: None, pool=None, user_id="u1"
+            "tether-agent-2.0", "hi",
+            send_fn=lambda m: None, pool=None, user_id="u1",
+            vault=_make_mock_vault(),
         )
 
     client.end_session.assert_not_awaited()
@@ -345,6 +366,7 @@ async def test_dispatch_2_0_text_deltas_forwarded_via_event_fn():
             pool=None,
             user_id="user1",
             event_fn=fake_event_fn,
+            vault=_make_mock_vault(),
         )
 
     delta_events = [e for e in event_calls if e.get("type") == "agent_text_delta"]
@@ -378,6 +400,7 @@ async def test_dispatch_2_0_send_fn_skipped_when_deltas_sent():
             pool=None,
             user_id="user1",
             event_fn=noop_event_fn,
+            vault=_make_mock_vault(),
         )
 
     assert sent_parts == [], "send_fn must not be called when deltas were already streamed"
@@ -407,6 +430,7 @@ async def test_dispatch_2_0_send_fn_used_when_no_deltas():
             pool=None,
             user_id="user1",
             event_fn=noop_event_fn,
+            vault=_make_mock_vault(),
         )
 
     assert sent_parts == ["All at once"], "send_fn must be called when no deltas were streamed"
@@ -437,6 +461,7 @@ async def test_dispatch_2_0_unknown_events_forwarded_via_event_fn():
             pool=None,
             user_id="user1",
             event_fn=fake_event_fn,
+            vault=_make_mock_vault(),
         )
 
     forwarded_types = [e["type"] for e in event_calls]
@@ -469,6 +494,7 @@ async def test_dispatch_2_0_turn_error_falls_back_to_1_0(caplog):
             send_fn=sent_parts.append,
             pool=None,
             user_id="user1",
+            vault=_make_mock_vault(),
         )
 
     # 1.0 fallback fires
@@ -497,7 +523,9 @@ async def test_dispatch_2_0_transport_error_logs_turn_transport_error(caplog):
         from bot.agent_dispatch import dispatch_message
 
         await dispatch_message(
-            "tether-agent-2.0", "hi", send_fn=lambda m: None, pool=None, user_id="u1"
+            "tether-agent-2.0", "hi",
+            send_fn=lambda m: None, pool=None, user_id="u1",
+            vault=_make_mock_vault(),
         )
 
     # The improved log message must say "layer unreachable" or similar, not the old "unavailable"
@@ -583,9 +611,11 @@ async def test_dispatch_2_0_injects_vault_token_into_options():
     assert opts.get("env", {}).get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oauth-v2-test"
 
 
-async def test_dispatch_2_0_no_vault_options_unchanged():
-    """Without vault, options must not include env — subprocess uses disk credentials."""
+async def test_dispatch_2_0_no_vault_falls_back_to_1_0():
+    """Without vault (misconfiguration), dispatch_v2_0 must fall back to 1.0 — not fire a
+    doomed pool session that will fail auth."""
     constructor, client = _make_layer_client()
+    sent_parts: list[str] = []
 
     with (
         patch("bot.agent_dispatch.LayerClient", constructor),
@@ -596,12 +626,12 @@ async def test_dispatch_2_0_no_vault_options_unchanged():
         await dispatch_message(
             "tether-agent-2.0",
             "do something",
-            send_fn=lambda m: None,
+            send_fn=sent_parts.append,
             pool=None,
             user_id="user42",
             vault=None,
         )
 
-    call_kwargs = client.start_session.call_args
-    opts = call_kwargs.kwargs.get("options", {})
-    assert "env" not in opts or not opts.get("env")
+    # Must have fallen back to 1.0, not attempted the layer
+    assert sent_parts == ["1.0-response"]
+    client.start_session.assert_not_awaited()
