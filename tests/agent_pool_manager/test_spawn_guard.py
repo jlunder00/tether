@@ -155,3 +155,30 @@ async def test_spawn_guard_does_not_increment_warming_count():
     assert pool.warming_count(HASH_A) == 0, (
         "warming count must not be incremented when guard rejects the spawn"
     )
+
+
+@pytest.mark.asyncio
+async def test_spawn_guard_increments_metrics_counter():
+    """Each guard rejection increments PoolMetrics.spawn_guard_rejection_total.
+
+    Critical for ops visibility — without this counter, the guard is silent in
+    production and we cannot tell whether it's rejecting 1 spawn/day or 1000/min.
+    """
+    from agent_pool_manager.metrics import PoolMetrics
+
+    pool = make_pool()
+    metrics = PoolMetrics(pool)
+    pool._metrics = metrics
+
+    assert metrics.spawn_guard_rejection_total.value == 0
+
+    with patch("agent_pool_manager.pool.ClaudeSDKClient", FakeClient):
+        await pool._try_inject_warm(HASH_A, OPTIONS_NO_ENV)
+        await pool._try_inject_warm(HASH_A, OPTIONS_EMPTY_ENV)
+        await pool._try_inject_warm(HASH_A, OPTIONS_EMPTY_TOKEN)
+        # Valid token — should NOT increment
+        await pool._try_inject_warm(HASH_A, OPTIONS_WITH_TOKEN)
+
+    assert metrics.spawn_guard_rejection_total.value == 3, (
+        "counter must increment once per guard rejection, not for valid spawns"
+    )

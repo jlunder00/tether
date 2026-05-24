@@ -298,6 +298,8 @@ class Pool:
                 " — skipping spawn to prevent auth-timeout waste",
                 options_hash,
             )
+            if self._metrics:
+                self._metrics.spawn_guard_rejection_total.inc()
             return False
 
         async with self._lock:
