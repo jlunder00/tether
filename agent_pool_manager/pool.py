@@ -106,6 +106,41 @@ def _options_summary(options: dict[str, Any]) -> dict:
     }
 
 
+# MCP server URL for the tether MCP service (supervisord, port 5001).
+_MCP_TETHER_URL = "http://localhost:5001/sse"
+
+
+def _expand_mcp_placeholders(options: dict[str, Any], mcp_key: str) -> dict[str, Any]:
+    """Expand the ``['tether']`` MCP placeholder into a real SSE config dict.
+
+    The static ``_V2_0_OPTIONS`` in ``bot.agent_dispatch`` carries
+    ``mcp_servers=['tether']`` as a stable hash-stable placeholder.  The SDK
+    expects ``dict[str, McpServerConfig]``; passing a list causes it to fall
+    through to ``str(value)`` which produces ``--mcp-config "['tether']"`` on
+    the CLI — an unparseable value that causes a 15 s connect hang.
+
+    This function is called at ``_spawn_and_prime`` time (not at options-dict
+    creation time) so the hash computed from the placeholder stays stable
+    across the warm endpoint and dispatch_v2_0 callers.
+
+    Returns a shallow-copied options dict with ``mcp_servers`` replaced.
+    Does NOT mutate the input dict.
+    """
+    mcp_servers = options.get("mcp_servers")
+    if not (isinstance(mcp_servers, list) and "tether" in mcp_servers):
+        return options  # already correct form or absent — no copy needed
+
+    result = dict(options)
+    result["mcp_servers"] = {
+        "tether": {
+            "type": "sse",
+            "url": _MCP_TETHER_URL,
+            "headers": {"Authorization": f"Bearer {mcp_key}"},
+        }
+    }
+    return result
+
+
 class PoolExhausted(Exception):
     """Raised when no warm subprocess becomes available within the timeout."""
 
@@ -143,6 +178,10 @@ class Subprocess:
     last_used_at: float = field(default_factory=time.monotonic)
     in_use: bool = False
     callback_ctx: _CallbackContext = field(default_factory=_CallbackContext)
+    # Ephemeral MCP api_key created at spawn time; revoked on _terminate.
+    # None when pool has no DB access or no user_id was available at spawn.
+    mcp_key_id: str | None = None
+    mcp_user_id: str | None = None
 
     def is_expired(self, max_age_seconds: int) -> bool:
         return (time.monotonic() - self.spawned_at) > max_age_seconds
@@ -155,7 +194,7 @@ class Pool:
     (drain-on-touch), not via a background timer.
     """
 
-    def __init__(self, config: AgentPoolConfig) -> None:
+    def __init__(self, config: AgentPoolConfig, *, pg_pool: Any = None) -> None:
         self.config = config
         # warm queue per options_hash
         self._warm: dict[str, asyncio.Queue[Subprocess]] = {}
@@ -172,6 +211,8 @@ class Pool:
         )
         # optional metrics instance — attach via pool._metrics = metrics
         self._metrics: "PoolMetrics | None" = None
+        # optional asyncpg pool for ephemeral MCP key creation/revocation
+        self._pg_pool: Any = pg_pool
 
     # ------------------------------------------------------------------
     # Public API
@@ -347,16 +388,28 @@ class Pool:
     # Internal helpers — also used by RefillLoop and tests
     # ------------------------------------------------------------------
 
-    async def _inject_warm(self, options_hash: str, options: dict[str, Any]) -> None:
+    async def _inject_warm(
+        self,
+        options_hash: str,
+        options: dict[str, Any],
+        *,
+        user_id: str | None = None,
+    ) -> None:
         """Spawn, prime, and push one subprocess to the warm queue.
 
         Used directly by RefillLoop and by tests via FakeClient patch.
         Silently no-ops at capacity.
         """
-        if not await self._try_inject_warm(options_hash, options):
+        if not await self._try_inject_warm(options_hash, options, user_id=user_id):
             log.debug("Capacity full — skipping inject for hash %s", options_hash)
 
-    async def _try_inject_warm(self, options_hash: str, options: dict[str, Any]) -> bool:
+    async def _try_inject_warm(
+        self,
+        options_hash: str,
+        options: dict[str, Any],
+        *,
+        user_id: str | None = None,
+    ) -> bool:
         """Attempt to spawn-and-prime one subprocess.
 
         Returns True if spawned, False if at capacity or if the spawn guard fires.
@@ -401,7 +454,7 @@ class Pool:
             self._warming[options_hash] = self._warming.get(options_hash, 0) + 1
 
         try:
-            sub = await self._spawn_and_prime(options_hash, options)
+            sub = await self._spawn_and_prime(options_hash, options, user_id=user_id)
         finally:
             async with self._lock:
                 self._warming[options_hash] = max(
@@ -417,7 +470,11 @@ class Pool:
         return True
 
     async def _spawn_and_prime(
-        self, options_hash: str, options: dict[str, Any]
+        self,
+        options_hash: str,
+        options: dict[str, Any],
+        *,
+        user_id: str | None = None,
     ) -> Subprocess:
         """Spawn a ClaudeSDKClient, connect, and send the priming prompt.
 
@@ -441,6 +498,33 @@ class Pool:
         )
 
         ctx = _CallbackContext()
+
+        # Ephemeral MCP key injection — expand ['tether'] placeholder into a
+        # real SSE config dict with a per-spawn Bearer token.  The key is
+        # created here (not at options-dict creation time) so the options hash
+        # computed from the placeholder stays stable across warm-endpoint and
+        # dispatch_v2_0 callers.
+        mcp_key_id: str | None = None
+        if self._pg_pool is not None and user_id is not None:
+            try:
+                from db.pg_queries.api_keys import create_key as _create_key
+                async with self._pg_pool.acquire() as _conn:
+                    _raw_key, _key_rec = await _create_key(
+                        _conn, user_id=user_id, name=f"pool_mcp_{options_hash[:8]}"
+                    )
+                mcp_key_id = _key_rec["id"]
+                options = _expand_mcp_placeholders(options, _raw_key)
+                log.info(
+                    "pool.mcp_key_created options_hash=%s key_id=%s",
+                    options_hash, mcp_key_id,
+                )
+            except Exception:
+                log.warning(
+                    "pool.mcp_key_create_failed options_hash=%s"
+                    " — spawning without MCP auth injection",
+                    options_hash,
+                    exc_info=True,
+                )
 
         # Wire subprocess stderr to our logger so CLI errors surface in
         # fly.io's log stream.  Without this, stderr is dropped on the floor.
@@ -546,6 +630,8 @@ class Pool:
             spawned_at=now,
             primed_at=now,
             callback_ctx=ctx,
+            mcp_key_id=mcp_key_id,
+            mcp_user_id=user_id,
         )
 
     @staticmethod
@@ -625,8 +711,24 @@ class Pool:
             self._warm[options_hash] = asyncio.Queue()
         return self._warm[options_hash]
 
-    @staticmethod
-    async def _terminate(sub: Subprocess) -> None:
+    async def _terminate(self, sub: Subprocess) -> None:
+        # Revoke ephemeral MCP key before disconnecting the subprocess.
+        # Failure must not block disconnect — log and continue.
+        if sub.mcp_key_id is not None and self._pg_pool is not None:
+            try:
+                from db.pg_queries.api_keys import revoke_key as _revoke_key
+                async with self._pg_pool.acquire() as _conn:
+                    await _revoke_key(_conn, sub.mcp_key_id, sub.mcp_user_id or "")
+                log.info(
+                    "pool.mcp_key_revoked options_hash=%s key_id=%s",
+                    sub.options_hash, sub.mcp_key_id,
+                )
+            except Exception:
+                log.warning(
+                    "pool.mcp_key_revoke_failed key_id=%s — continuing with disconnect",
+                    sub.mcp_key_id,
+                    exc_info=True,
+                )
         try:
             await sub.proc.disconnect()
         except Exception:

@@ -121,7 +121,24 @@ def build_app(
                 cfg = load_pool_config(TetherConfig())
             except Exception:
                 cfg = AgentPoolConfig()
-            app.state.pool = Pool(cfg)
+
+            # Attempt to initialise a Postgres pool for ephemeral MCP key
+            # creation/revocation.  Gracefully degrades to no-key mode if
+            # DATABASE_URL is absent (e.g. Pi bot running SQLite-only).
+            pg_pool = None
+            try:
+                from db.postgres import create_pool as _create_pg_pool
+                pg_pool = await _create_pg_pool()
+                log.info("agent_pool_manager: Postgres pool initialised for MCP key injection")
+            except Exception:
+                log.warning(
+                    "agent_pool_manager: Postgres pool unavailable"
+                    " — MCP key injection disabled; subprocesses will receive"
+                    " list-form mcp_servers (may cause connect hang on non-Pi deploys)",
+                    exc_info=True,
+                )
+
+            app.state.pool = Pool(cfg, pg_pool=pg_pool)
             app.state.refill = RefillLoop(app.state.pool)
             app.state.metrics = PoolMetrics()
 
@@ -286,7 +303,9 @@ def build_app(
             "pool_server.hint_recv user_id=%s options_hash=%s summary=%r",
             req.user_id, req.options_hash, _options_summary(req.options),
         )
-        asyncio.create_task(the_refill.hint(req.options_hash, req.options))
+        asyncio.create_task(
+            the_refill.hint(req.options_hash, req.options, user_id=req.user_id)
+        )
         return {"queued": True}
 
     # -----------------------------------------------------------------------

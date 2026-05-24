@@ -21,25 +21,41 @@ class RefillLoop:
         self._pool = pool
         # options_hash → options dict
         self._registry: dict[str, dict[str, Any]] = {}
+        # options_hash → user_id (stored alongside options for key injection)
+        self._user_ids: dict[str, str] = {}
         self._hint_event = asyncio.Event()
         self._running = False
         self._task: asyncio.Task | None = None
 
-    def register(self, options_hash: str, options: dict[str, Any]) -> None:
+    def register(
+        self,
+        options_hash: str,
+        options: dict[str, Any],
+        *,
+        user_id: str | None = None,
+    ) -> None:
         """Register a hash for periodic refill.  Idempotent."""
         already_known = options_hash in self._registry
         self._registry[options_hash] = options
+        if user_id is not None:
+            self._user_ids[options_hash] = user_id
         log.info(
             "refill.register options_hash=%s already_known=%s registry_size=%d",
             options_hash, already_known, len(self._registry),
         )
 
-    async def hint(self, options_hash: str, options: dict[str, Any]) -> None:
+    async def hint(
+        self,
+        options_hash: str,
+        options: dict[str, Any],
+        *,
+        user_id: str | None = None,
+    ) -> None:
         """Signal that a user will likely need a subprocess soon.
 
         Registers the hash and triggers an immediate refill cycle.
         """
-        self.register(options_hash, options)
+        self.register(options_hash, options, user_id=user_id)
         self._hint_event.set()
         # Run one fill cycle immediately for this hash
         deficit = self._deficit(options_hash)
@@ -54,12 +70,13 @@ class RefillLoop:
         )
         for _ in range(deficit):
             asyncio.create_task(
-                self._pool._try_inject_warm(options_hash, options)
+                self._pool._try_inject_warm(options_hash, options, user_id=user_id)
             )
 
     async def run_once(self) -> None:
         """Run one full refill cycle across all registered hashes."""
         for options_hash, options in list(self._registry.items()):
+            user_id = self._user_ids.get(options_hash)
             deficit = self._deficit(options_hash)
             if deficit > 0:
                 log.info(
@@ -69,7 +86,9 @@ class RefillLoop:
                     self._pool.warming_count(options_hash),
                 )
             for _ in range(deficit):
-                accepted = await self._pool._try_inject_warm(options_hash, options)
+                accepted = await self._pool._try_inject_warm(
+                    options_hash, options, user_id=user_id
+                )
                 if not accepted:
                     log.info(
                         "refill.capacity_full options_hash=%s — breaking refill cycle",
