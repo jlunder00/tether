@@ -137,12 +137,27 @@ async def _dispatch_v2_0(
     session_id: str | None = None
     delta_sent = False
 
+    # Inject the user's OAuth token so the pool subprocess can authenticate.
+    # Hash stays stable — the layer strips env before hashing (env is per-user).
+    # Never mutate _V2_0_OPTIONS; always copy.
+    options: dict[str, Any] = dict(_V2_0_OPTIONS)
+    if vault is not None:
+        try:
+            async with vault.materialize(user_id) as env_dict:
+                options = {**_V2_0_OPTIONS, "env": dict(env_dict)}
+        except ValueError:
+            logger.warning(
+                "dispatch_v2_0: no vault credentials for user_id=%s"
+                " — pool subprocess will rely on disk credentials",
+                user_id,
+            )
+
     try:
         session_id = await layer.start_session(
             user_id=user_id,
             user_ws_id=user_id,  # proxy: use user_id until per-connection IDs land
             agent_version="tether-agent-2.0",
-            options=_V2_0_OPTIONS,
+            options=options,
             user_message=text,
         )
 

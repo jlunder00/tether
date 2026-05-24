@@ -120,12 +120,34 @@ async def pool_warm(
                    f"Valid versions: {sorted(agent_options)}",
         )
 
-    options_hash = _compute_options_hash(options)
+    # Inject the user's OAuth token so the pool subprocess can authenticate.
+    # Vault is None in dev/Pi (subprocess uses disk credentials instead).
+    options_for_hint = dict(options)
+    vault = getattr(request.app.state, "vault", None)
+    if vault is not None:
+        try:
+            async with vault.materialize(user_id) as env_dict:
+                options_for_hint = {**options, "env": env_dict}
+        except ValueError:
+            log.warning(
+                "pool_warm: no vault credentials for user_id=%s agent_version=%s"
+                " — hint will fire without env (subprocess may fail to authenticate)",
+                user_id,
+                body.agent_version,
+            )
+
+    # Hash is computed from options_for_hint (after env injection) so the warm
+    # queue partition matches the acquire-side hash in interactive_agent_layer.
+    # When env contains a per-user OAuth token, warm partitions are per-user —
+    # this is intentional: a subprocess authenticated as user A must not serve
+    # user B's requests.
+    options_hash = _compute_options_hash(options_for_hint)
+
     pool_client = _get_pool_client(request)
 
     hinted = False
     try:
-        await pool_client.hint(user_id, options_hash, options)
+        await pool_client.hint(user_id, options_hash, options_for_hint)
         hinted = True
     except Exception as exc:
         log.warning(

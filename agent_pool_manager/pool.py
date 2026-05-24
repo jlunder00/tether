@@ -312,7 +312,35 @@ class Pool:
             can_use_tool=self._make_forwarding_callback(ctx),
         )
         client = ClaudeSDKClient(options=sdk_options)
-        await client.connect()
+        try:
+            await asyncio.wait_for(
+                client.connect(),
+                timeout=self.config.connect_timeout_seconds,
+            )
+        except Exception:
+            # Kill the underlying subprocess so a failed spawn doesn't leave a
+            # zombie Claude CLI process holding memory until the OS cleans it up.
+            # This covers both auth failures (70 s timeout) and other errors.
+            try:
+                transport = getattr(client, "_transport", None)
+                proc = getattr(transport, "_process", None) if transport is not None else None
+                if proc is not None:
+                    proc.kill()
+                    # asyncio.subprocess.Process.wait() is a coroutine; a
+                    # synchronous subprocess.Popen.wait() is not.  Guard against
+                    # the sync case so a future SDK transport change doesn't
+                    # silently suppress the TypeError and leave zombies.
+                    if asyncio.iscoroutinefunction(getattr(proc, "wait", None)):
+                        await proc.wait()
+                    else:
+                        log.warning(
+                            "pool.cleanup: proc.wait() is not a coroutine for hash=%s"
+                            " — skipping await; subprocess may remain as zombie",
+                            options_hash,
+                        )
+            except Exception:
+                pass
+            raise
 
         # Prime: send a cheap prompt so the subprocess pays its init cost now
         try:

@@ -537,3 +537,71 @@ async def test_dispatch_forwards_vault_and_status_fn():
 
     assert received["vault"] is sentinel_vault
     assert received["status_fn"] is sentinel_status
+
+
+# ---------------------------------------------------------------------------
+# 2.0 vault token injection
+# ---------------------------------------------------------------------------
+
+def _make_mock_vault(oauth_token: str = "sk-ant-dispatch-test"):
+    """Return a mock vault whose materialize() yields CLAUDE_CODE_OAUTH_TOKEN."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+
+    vault = MagicMock()
+
+    @asynccontextmanager
+    async def _materialize(user_id: str):
+        yield {"CLAUDE_CODE_OAUTH_TOKEN": oauth_token}
+
+    vault.materialize = _materialize
+    return vault
+
+
+async def test_dispatch_2_0_injects_vault_token_into_options():
+    """_dispatch_v2_0 must inject CLAUDE_CODE_OAUTH_TOKEN via vault into start_session options."""
+    constructor, client = _make_layer_client()
+    vault = _make_mock_vault("sk-ant-oauth-v2-test")
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "do something",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user42",
+            vault=vault,
+        )
+
+    call_kwargs = client.start_session.call_args
+    opts = call_kwargs.kwargs.get("options", {})
+    assert opts.get("env", {}).get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oauth-v2-test"
+
+
+async def test_dispatch_2_0_no_vault_options_unchanged():
+    """Without vault, options must not include env — subprocess uses disk credentials."""
+    constructor, client = _make_layer_client()
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "do something",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user42",
+            vault=None,
+        )
+
+    call_kwargs = client.start_session.call_args
+    opts = call_kwargs.kwargs.get("options", {})
+    assert "env" not in opts or not opts.get("env")
