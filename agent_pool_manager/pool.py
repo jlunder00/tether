@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import logging
 import time
@@ -24,6 +25,85 @@ if TYPE_CHECKING:
     from .metrics import PoolMetrics
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic helpers — sensitive value redaction.
+#
+# The warm spawn path runs in production with the user's OAuth token in env.
+# We need visibility into what's actually being passed to the subprocess,
+# but must never log the raw token.  ``_redact_env`` shows the key names
+# and a short prefix of each value (8 chars) so we can confirm shape without
+# leaking secrets.
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_ENV_KEYS = frozenset({
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "TETHER_JWT_SECRET",
+    "VAULT_KEY",
+})
+
+
+def _redact_env(env: dict | None) -> dict:
+    """Return a redacted copy of an env dict — sensitive values become ``<len=N prefix=XXX...>``.
+
+    Non-sensitive values are passed through unchanged.  Used in diagnostic
+    logs so the env composition is visible without leaking secrets.
+    """
+    if not env:
+        return {}
+    out: dict[str, str] = {}
+    for k, v in env.items():
+        sval = str(v) if v is not None else ""
+        if k in _SENSITIVE_ENV_KEYS:
+            prefix = sval[:8] if len(sval) >= 8 else sval
+            out[k] = f"<len={len(sval)} prefix={prefix!r}>"
+        else:
+            out[k] = sval
+    return out
+
+
+def _mcp_servers_form(mcp_servers: Any) -> str:
+    """Return a short string describing the form of an mcp_servers value.
+
+    The Claude SDK accepts ``dict[str, McpServerConfig] | str | Path`` but
+    we historically pass a ``list[str]`` from ``_V2_0_OPTIONS``.  The list
+    form falls through to ``str(value)`` in the SDK, which is suspected
+    to be a contributor to the 15 s warm-spawn hang.
+    """
+    if mcp_servers is None:
+        return "None"
+    if isinstance(mcp_servers, dict):
+        return f"dict(keys={list(mcp_servers.keys())})"
+    if isinstance(mcp_servers, list):
+        return f"list({mcp_servers!r})"
+    if isinstance(mcp_servers, (str, bytes)):
+        return f"str(len={len(mcp_servers)})"
+    return f"other(type={type(mcp_servers).__name__})"
+
+
+def _options_summary(options: dict[str, Any]) -> dict:
+    """Return a compact, redacted summary of the options dict for logging.
+
+    Keys whose values are large or sensitive are summarised rather than
+    dumped in full — this keeps log lines readable in fly.io's log stream.
+    """
+    return {
+        "model": options.get("model"),
+        "allowed_tools_count": len(options.get("allowed_tools", []) or []),
+        "max_turns": options.get("max_turns"),
+        "permission_mode": options.get("permission_mode"),
+        "mcp_servers_form": _mcp_servers_form(options.get("mcp_servers")),
+        "env_keys": sorted((options.get("env") or {}).keys()),
+        "env_redacted": _redact_env(options.get("env")),
+        "extra_keys": sorted(
+            k for k in options.keys()
+            if k not in {"model", "allowed_tools", "max_turns", "permission_mode",
+                          "mcp_servers", "env"}
+        ),
+    }
 
 
 class PoolExhausted(Exception):
@@ -291,6 +371,15 @@ class Pool:
         All known spawn paths (RefillLoop.hint, RefillLoop.run_once, _inject_warm)
         converge here, so this single check covers the entire spawn surface.
         """
+        log.info(
+            "pool.inject_warm_entry options_hash=%s warm=%d active=%d warming=%d capacity=%d",
+            options_hash,
+            self.warm_count(options_hash),
+            len(self._active),
+            self.warming_count(options_hash),
+            self.config.capacity_total,
+        )
+
         token = (options.get("env") or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
         if not token:
             log.warning(
@@ -304,6 +393,10 @@ class Pool:
 
         async with self._lock:
             if self.total_count() >= self.config.capacity_total:
+                log.info(
+                    "pool.inject_warm_capacity_full options_hash=%s total=%d capacity=%d",
+                    options_hash, self.total_count(), self.config.capacity_total,
+                )
                 return False
             self._warming[options_hash] = self._warming.get(options_hash, 0) + 1
 
@@ -326,19 +419,75 @@ class Pool:
     async def _spawn_and_prime(
         self, options_hash: str, options: dict[str, Any]
     ) -> Subprocess:
-        """Spawn a ClaudeSDKClient, connect, and send the priming prompt."""
+        """Spawn a ClaudeSDKClient, connect, and send the priming prompt.
+
+        Diagnostic logging: this method is the prime suspect for the 15 s
+        warm-spawn hang in prod.  We log:
+
+          * The options summary (redacted) before constructing sdk_options
+          * Timing checkpoints around ``client.connect()`` and priming
+          * The full exception details on connect failure (type, message,
+            time spent, subprocess PID if any)
+          * Subprocess stderr lines piped via the SDK's ``stderr`` callback,
+            so the CLI's own error output is visible in fly.io logs
+
+        Without these, ``connect()`` can hang for 15 s with no observable
+        cause from the application side.
+        """
+        log.info(
+            "pool.spawn_start options_hash=%s summary=%r",
+            options_hash,
+            _options_summary(options),
+        )
+
         ctx = _CallbackContext()
+
+        # Wire subprocess stderr to our logger so CLI errors surface in
+        # fly.io's log stream.  Without this, stderr is dropped on the floor.
+        def _stderr_cb(line: str) -> None:
+            log.info(
+                "pool.subprocess_stderr options_hash=%s line=%s",
+                options_hash, line.rstrip(),
+            )
+
+        options_with_stderr = dict(options)
+        # Don't overwrite a caller-supplied stderr callback.
+        options_with_stderr.setdefault("stderr", _stderr_cb)
+
+        # Turn on the CLI's debug-to-stderr mode so the SDK protocol traces
+        # also flow through our stderr callback.  Without this we only see
+        # whatever the CLI writes to stderr on its own (which is typically
+        # nothing on a successful run and very little even on errors).
+        # This is the single most useful flag for diagnosing a connect() hang.
+        existing_extra = dict(options_with_stderr.get("extra_args") or {})
+        existing_extra.setdefault("debug-to-stderr", None)
+        options_with_stderr["extra_args"] = existing_extra
+
         sdk_options = self._build_sdk_options(
-            options,
+            options_with_stderr,
             can_use_tool=self._make_forwarding_callback(ctx),
         )
         client = ClaudeSDKClient(options=sdk_options)
+
+        t_connect_start = time.monotonic()
         try:
             await asyncio.wait_for(
                 client.connect(),
                 timeout=self.config.connect_timeout_seconds,
             )
-        except Exception:
+        except Exception as exc:
+            elapsed = time.monotonic() - t_connect_start
+            pid = _extract_pid(client)
+            log.warning(
+                "pool.connect_failed options_hash=%s exc_type=%s msg=%s"
+                " elapsed_s=%.2f pid=%s timeout_s=%.1f",
+                options_hash,
+                type(exc).__name__,
+                str(exc) or "<no message>",
+                elapsed,
+                pid,
+                self.config.connect_timeout_seconds,
+            )
             # Kill the underlying subprocess so a failed spawn doesn't leave a
             # zombie Claude CLI process holding memory until the OS cleans it up.
             # This covers both auth failures (70 s timeout) and other errors.
@@ -363,14 +512,31 @@ class Pool:
                 pass
             raise
 
+        connect_elapsed = time.monotonic() - t_connect_start
+        log.info(
+            "pool.connect_done options_hash=%s elapsed_s=%.2f pid=%s",
+            options_hash, connect_elapsed, _extract_pid(client),
+        )
+
         # Prime: send a cheap prompt so the subprocess pays its init cost now
+        t_prime_start = time.monotonic()
         try:
             await asyncio.wait_for(
                 self._do_prime(client),
                 timeout=self.config.prime_timeout_seconds,
             )
+            log.info(
+                "pool.prime_done options_hash=%s elapsed_s=%.2f",
+                options_hash, time.monotonic() - t_prime_start,
+            )
         except asyncio.TimeoutError:
-            log.warning("Priming timed out for hash %s — keeping unprimed client", options_hash)
+            log.warning(
+                "pool.prime_timeout options_hash=%s elapsed_s=%.2f timeout_s=%d"
+                " — keeping unprimed client",
+                options_hash,
+                time.monotonic() - t_prime_start,
+                self.config.prime_timeout_seconds,
+            )
 
         now = time.monotonic()
         return Subprocess(
@@ -426,11 +592,32 @@ class Pool:
         options: dict[str, Any],
         can_use_tool: Any = None,
     ) -> ClaudeAgentOptions:
-        """Convert the options dict to ClaudeAgentOptions, ignoring unknown keys."""
-        known = {f for f in dir(ClaudeAgentOptions) if not f.startswith("_")}
+        """Convert the options dict to ClaudeAgentOptions, ignoring unknown keys.
+
+        Diagnostic logging: emit which keys were passed through to the SDK
+        and which were filtered out.  This helps explain unexpected SDK
+        behaviour when callers pass dict-shaped options that don't map 1:1
+        to ``ClaudeAgentOptions`` fields.
+
+        Field enumeration uses ``dataclasses.fields()``, NOT ``dir()`` —
+        ``dir()`` on a dataclass class omits fields declared with
+        ``default_factory`` (env, mcp_servers, allowed_tools, extra_args,
+        plugins, add_dirs, betas, disallowed_tools).  Using ``dir()`` here
+        silently dropped the user's OAuth token from the subprocess env,
+        which was the root cause of the 15 s warm-spawn timeout in prod.
+        """
+        known = {f.name for f in dataclasses.fields(ClaudeAgentOptions)}
         filtered = {k: v for k, v in options.items() if k in known}
+        dropped = sorted(k for k in options.keys() if k not in known)
         if can_use_tool is not None:
             filtered["can_use_tool"] = can_use_tool
+
+        log.info(
+            "pool.sdk_options known_keys=%s dropped_keys=%s mcp_servers_form=%s",
+            sorted(filtered.keys()),
+            dropped,
+            _mcp_servers_form(filtered.get("mcp_servers")),
+        )
         return ClaudeAgentOptions(**filtered)
 
     def _get_or_create_queue(self, options_hash: str) -> asyncio.Queue[Subprocess]:

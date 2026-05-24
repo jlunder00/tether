@@ -27,7 +27,12 @@ class RefillLoop:
 
     def register(self, options_hash: str, options: dict[str, Any]) -> None:
         """Register a hash for periodic refill.  Idempotent."""
+        already_known = options_hash in self._registry
         self._registry[options_hash] = options
+        log.info(
+            "refill.register options_hash=%s already_known=%s registry_size=%d",
+            options_hash, already_known, len(self._registry),
+        )
 
     async def hint(self, options_hash: str, options: dict[str, Any]) -> None:
         """Signal that a user will likely need a subprocess soon.
@@ -38,6 +43,15 @@ class RefillLoop:
         self._hint_event.set()
         # Run one fill cycle immediately for this hash
         deficit = self._deficit(options_hash)
+        log.info(
+            "refill.hint options_hash=%s deficit=%d target_depth=%d"
+            " warm=%d warming=%d",
+            options_hash,
+            deficit,
+            self._pool.config.target_depth_per_hash,
+            self._pool.warm_count(options_hash),
+            self._pool.warming_count(options_hash),
+        )
         for _ in range(deficit):
             asyncio.create_task(
                 self._pool._try_inject_warm(options_hash, options)
@@ -47,10 +61,20 @@ class RefillLoop:
         """Run one full refill cycle across all registered hashes."""
         for options_hash, options in list(self._registry.items()):
             deficit = self._deficit(options_hash)
+            if deficit > 0:
+                log.info(
+                    "refill.run_once options_hash=%s deficit=%d warm=%d warming=%d",
+                    options_hash, deficit,
+                    self._pool.warm_count(options_hash),
+                    self._pool.warming_count(options_hash),
+                )
             for _ in range(deficit):
                 accepted = await self._pool._try_inject_warm(options_hash, options)
                 if not accepted:
-                    log.debug("Capacity full during refill for hash %s", options_hash)
+                    log.info(
+                        "refill.capacity_full options_hash=%s — breaking refill cycle",
+                        options_hash,
+                    )
                     break
 
     async def run(self) -> None:
