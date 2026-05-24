@@ -120,12 +120,36 @@ async def pool_warm(
                    f"Valid versions: {sorted(agent_options)}",
         )
 
-    options_hash = _compute_options_hash(options)
+    vault = request.app.state.vault
+    if vault is None:
+        log.error(
+            "pool_warm: vault is not configured — set VAULT_KEY in the environment. "
+            "Pool warming requires vault to inject OAuth credentials into subprocesses."
+        )
+        return {"hinted": False, "options_hash": _compute_options_hash(options)}
+
+    try:
+        async with vault.materialize(user_id) as env_dict:
+            options_for_hint = {**options, "env": env_dict}
+    except ValueError:
+        log.warning(
+            "pool_warm: no vault credentials for user_id=%s agent_version=%s"
+            " — user must connect their Anthropic account first",
+            user_id,
+            body.agent_version,
+        )
+        return {"hinted": False, "options_hash": _compute_options_hash(options)}
+
+    # Hash computed after env injection so the warm partition matches the
+    # acquire-side hash in interactive_agent_layer. Partitions are per-user —
+    # a subprocess authenticated as user A must not serve user B.
+    options_hash = _compute_options_hash(options_for_hint)
+
     pool_client = _get_pool_client(request)
 
     hinted = False
     try:
-        await pool_client.hint(user_id, options_hash, options)
+        await pool_client.hint(user_id, options_hash, options_for_hint)
         hinted = True
     except Exception as exc:
         log.warning(

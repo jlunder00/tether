@@ -55,14 +55,28 @@ class _MockPoolClient:
             raise PoolClientError("pool unreachable")
 
 
+def _make_mock_vault(oauth_token: str = "sk-ant-pool-warm-test"):
+    """Return a mock vault whose materialize() yields CLAUDE_CODE_OAUTH_TOKEN."""
+    from contextlib import asynccontextmanager
+    from unittest.mock import MagicMock
+
+    vault = MagicMock()
+
+    @asynccontextmanager
+    async def _materialize(user_id: str):
+        yield {"CLAUDE_CODE_OAUTH_TOKEN": oauth_token}
+
+    vault.materialize = _materialize
+    return vault
+
+
 def _make_app(mock_pool_client: _MockPoolClient) -> FastAPI:
     """Create a minimal FastAPI app with just the pool warm router."""
     from api.main import create_app
-    from api.routes import pool as pool_routes
 
     app = create_app()
-    # Inject mock pool client into app state
     app.state.pool_client = mock_pool_client
+    app.state.vault = _make_mock_vault()
     return app
 
 
@@ -146,7 +160,11 @@ async def test_warm_calls_pool_hint(warm_client):
 
 
 async def test_warm_options_hash_matches_layer_algorithm(warm_client):
-    """The returned options_hash must match the layer's _stable_options_hash algorithm."""
+    """The returned options_hash must match the layer's _stable_options_hash algorithm.
+
+    Hash includes env (per-user OAuth token) so the warm partition matches the
+    acquire-side hash in interactive_agent_layer — subprocesses are consumed.
+    """
     from bot.agent_dispatch import _V2_0_OPTIONS
 
     client, pool = warm_client
@@ -157,8 +175,12 @@ async def test_warm_options_hash_matches_layer_algorithm(warm_client):
     assert resp.status_code == 202
     returned_hash = resp.json()["options_hash"]
 
-    expected_hash = _stable_options_hash(_V2_0_OPTIONS)
+    # Hash includes env — verify it matches algorithm applied to options+env
+    assert len(pool.hint_calls) == 1
+    _, hint_hash, hint_options = pool.hint_calls[0]
+    expected_hash = _stable_options_hash(hint_options)
     assert returned_hash == expected_hash
+    assert hint_hash == expected_hash
 
 
 async def test_warm_pool_failure_still_returns_202(warm_client_failing):

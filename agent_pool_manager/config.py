@@ -39,6 +39,11 @@ class AgentPoolConfig:
     control_response_timeout_seconds: float = 60.0
     """Seconds the pool waits for a control_response before denying the tool call."""
 
+    connect_timeout_seconds: float = 15.0
+    """Max seconds to wait for ClaudeSDKClient.connect() before treating the spawn
+    as failed.  Must be shorter than prime_timeout_seconds so a hung transport
+    is detected and killed before the priming phase would time out anyway."""
+
 
 _FIELD_NAMES = {f.name for f in fields(AgentPoolConfig)}
 

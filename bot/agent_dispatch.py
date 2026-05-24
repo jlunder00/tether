@@ -137,12 +137,35 @@ async def _dispatch_v2_0(
     session_id: str | None = None
     delta_sent = False
 
+    # Inject the user's OAuth token so the pool subprocess can authenticate.
+    # Never mutate _V2_0_OPTIONS; always copy.
+    if vault is None:
+        logger.error(
+            "dispatch_v2_0: vault is not configured — VAULT_KEY must be set. "
+            "Falling back to 1.0 pipeline for user_id=%s",
+            user_id,
+        )
+        await handle_message(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+        return
+
+    try:
+        async with vault.materialize(user_id) as env_dict:
+            options: dict[str, Any] = {**_V2_0_OPTIONS, "env": dict(env_dict)}
+    except ValueError:
+        logger.warning(
+            "dispatch_v2_0: no vault credentials for user_id=%s"
+            " — user must connect Anthropic account. Falling back to 1.0 pipeline.",
+            user_id,
+        )
+        await handle_message(text, send_fn, pool, user_id, vault=vault, status_fn=status_fn)
+        return
+
     try:
         session_id = await layer.start_session(
             user_id=user_id,
             user_ws_id=user_id,  # proxy: use user_id until per-connection IDs land
             agent_version="tether-agent-2.0",
-            options=_V2_0_OPTIONS,
+            options=options,
             user_message=text,
         )
 
