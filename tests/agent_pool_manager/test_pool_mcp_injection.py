@@ -432,3 +432,85 @@ async def test_spawn_failure_revokes_key():
     mock_revoke.assert_awaited_once()
     args = mock_revoke.await_args.args
     assert "key-uuid-leak" in args
+
+
+# ---------------------------------------------------------------------------
+# Bug 1: empty-string user_id must be treated same as None (no key creation)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_spawn_with_empty_string_user_id_skips_key_creation():
+    """user_id='' must not trigger create_key — would cause UUID parse error in DB."""
+    mock_pg_pool = MagicMock()
+    pool = _make_pool(pg_pool=mock_pg_pool)
+
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock()
+
+    async def fake_do_prime(_client):
+        pass
+
+    with (
+        patch.object(Pool, "_build_sdk_options", return_value=MagicMock()),
+        patch("agent_pool_manager.pool.ClaudeSDKClient", return_value=mock_client),
+        patch.object(Pool, "_do_prime", new=staticmethod(fake_do_prime)),
+        patch("db.pg_queries.api_keys.create_key") as mock_create_key,
+    ):
+        sub = await pool._spawn_and_prime(
+            options_hash="abcdef01abcdef01",
+            options=_base_options(),
+            user_id="",  # empty string — must be treated as absent
+        )
+
+    mock_create_key.assert_not_called()
+    assert sub.mcp_key_id is None
+
+
+# ---------------------------------------------------------------------------
+# Bug 2: key creation failure must strip ['tether'] placeholder before spawn
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_spawn_key_failure_strips_mcp_placeholder():
+    """When key creation fails, mcp_servers must be replaced with {} so SDK doesn't hang."""
+    mock_pg_pool = MagicMock()
+    mock_conn = AsyncMock()
+    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    pool = _make_pool(pg_pool=mock_pg_pool)
+    captured_sdk_options: list[dict] = []
+
+    def fake_build_sdk_options(options, can_use_tool=None):
+        captured_sdk_options.append(dict(options))
+        return MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock()
+
+    async def fake_do_prime(_client):
+        pass
+
+    with (
+        patch(
+            "db.pg_queries.api_keys.create_key",
+            new=AsyncMock(side_effect=Exception("DB error")),
+        ),
+        patch.object(Pool, "_build_sdk_options", side_effect=fake_build_sdk_options),
+        patch("agent_pool_manager.pool.ClaudeSDKClient", return_value=mock_client),
+        patch.object(Pool, "_do_prime", new=staticmethod(fake_do_prime)),
+    ):
+        sub = await pool._spawn_and_prime(
+            options_hash="abcdef01abcdef01",
+            options=_base_options(),
+            user_id="user-uuid-999",
+        )
+
+    assert len(captured_sdk_options) == 1
+    mcp = captured_sdk_options[0].get("mcp_servers")
+    # Must NOT be the list placeholder — that would cause SDK to hang
+    assert not isinstance(mcp, list), (
+        f"mcp_servers must not be a list after key creation failure, got: {mcp!r}"
+    )
+    # Must be an empty dict (no MCP servers) so subprocess can start without MCP auth
+    assert mcp == {}, f"Expected empty dict mcp_servers on fallback, got: {mcp!r}"

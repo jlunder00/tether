@@ -37,7 +37,7 @@ class RefillLoop:
         """Register a hash for periodic refill.  Idempotent."""
         already_known = options_hash in self._registry
         self._registry[options_hash] = options
-        if user_id is not None:
+        if user_id:  # truthy: excludes None and "" to prevent UUID parse errors
             self._user_ids[options_hash] = user_id
         log.info(
             "refill.register options_hash=%s already_known=%s registry_size=%d",
