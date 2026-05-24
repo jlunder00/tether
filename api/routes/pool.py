@@ -111,6 +111,11 @@ async def pool_warm(
     """
     user_id: str = request.state.user_id
 
+    log.info(
+        "pool_warm.entry user_id=%s agent_version=%s",
+        user_id, body.agent_version,
+    )
+
     agent_options = _get_agent_options()
     options = agent_options.get(body.agent_version)
     if options is None:
@@ -145,12 +150,28 @@ async def pool_warm(
     # a subprocess authenticated as user A must not serve user B.
     options_hash = _compute_options_hash(options_for_hint)
 
+    # Diagnostic: surface what we're about to hint so we can correlate with
+    # pool-side logs.  Env values are redacted but key names are visible —
+    # this confirms what the subprocess will receive.
+    env_keys = sorted((options_for_hint.get("env") or {}).keys())
+    mcp_servers = options_for_hint.get("mcp_servers")
+    log.info(
+        "pool_warm.hint_send user_id=%s agent_version=%s options_hash=%s"
+        " env_keys=%s mcp_servers_type=%s mcp_servers_value=%r",
+        user_id, body.agent_version, options_hash,
+        env_keys, type(mcp_servers).__name__, mcp_servers,
+    )
+
     pool_client = _get_pool_client(request)
 
     hinted = False
     try:
         await pool_client.hint(user_id, options_hash, options_for_hint)
         hinted = True
+        log.info(
+            "pool_warm.hint_ok user_id=%s options_hash=%s",
+            user_id, options_hash,
+        )
     except Exception as exc:
         log.warning(
             "pool_warm: pool hint failed user_id=%s agent_version=%s: %s",

@@ -279,6 +279,13 @@ def build_app(
     @app.post("/hint", status_code=202)
     async def hint(req: HintRequest, request: Request) -> dict:
         the_refill: RefillLoop = request.app.state.refill
+        # Diagnostic: log hint receipt with redacted summary so we can confirm
+        # what reached the pool service and correlate with refill-side logs.
+        from .pool import _options_summary  # local import — keep module deps flat
+        log.info(
+            "pool_server.hint_recv user_id=%s options_hash=%s summary=%r",
+            req.user_id, req.options_hash, _options_summary(req.options),
+        )
         asyncio.create_task(the_refill.hint(req.options_hash, req.options))
         return {"queued": True}
 
