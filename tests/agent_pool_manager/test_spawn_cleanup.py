@@ -18,7 +18,7 @@ from .fake_client import FakeClient
 
 
 HASH_A = "aaa111"
-OPTIONS_A = {"model": "claude-haiku-4-5"}
+OPTIONS_A = {"model": "claude-haiku-4-5", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
 
 
 def make_pool(**overrides) -> Pool:
