@@ -22,7 +22,7 @@ from agent_pool_manager.metrics import PoolMetrics
 
 
 HASH_A = "aaa111"
-OPTIONS_A = {"model": "claude-haiku-4-5"}
+OPTIONS_A = {"model": "claude-haiku-4-5", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
 USER_ID = "smoke-user-1"
 
 COLD_DELAY = 0.05   # simulate a 50ms subprocess start cost

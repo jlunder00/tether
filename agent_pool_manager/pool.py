@@ -279,8 +279,29 @@ class Pool:
     async def _try_inject_warm(self, options_hash: str, options: dict[str, Any]) -> bool:
         """Attempt to spawn-and-prime one subprocess.
 
-        Returns True if spawned, False if at capacity.
+        Returns True if spawned, False if at capacity or if the spawn guard fires.
+
+        Spawn guard: if options['env'] does not contain CLAUDE_CODE_OAUTH_TOKEN,
+        the spawn is rejected with a WARNING.  Subprocesses launched without OAuth
+        credentials time out after connect_timeout_seconds (15 s) with no useful
+        output, waste pool capacity, and leave asyncio "Task exception was never
+        retrieved" errors in the logs.  The guard fires before the warming counter
+        is incremented, so rejected attempts do not count against capacity.
+
+        All known spawn paths (RefillLoop.hint, RefillLoop.run_once, _inject_warm)
+        converge here, so this single check covers the entire spawn surface.
         """
+        token = (options.get("env") or {}).get("CLAUDE_CODE_OAUTH_TOKEN")
+        if not token:
+            log.warning(
+                "pool.spawn_guard: options_hash=%s missing CLAUDE_CODE_OAUTH_TOKEN in env"
+                " — skipping spawn to prevent auth-timeout waste",
+                options_hash,
+            )
+            if self._metrics:
+                self._metrics.spawn_guard_rejection_total.inc()
+            return False
+
         async with self._lock:
             if self.total_count() >= self.config.capacity_total:
                 return False

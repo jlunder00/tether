@@ -146,6 +146,10 @@ class PoolMetrics:
             "pool_refill_total",
             "Total subprocess spawns triggered by refill loop",
         )
+        self.spawn_guard_rejection_total = Counter(
+            "pool_spawn_guard_rejection_total",
+            "Total spawn attempts rejected by the auth guard (missing CLAUDE_CODE_OAUTH_TOKEN)",
+        )
         self.acquire_latency_seconds = Histogram(
             "pool_acquire_latency_seconds",
             "Time from acquire() call to handle returned (seconds)",
@@ -163,6 +167,7 @@ class PoolMetrics:
             self.release_total.render_text(),
             self.expire_total.render_text(),
             self.refill_total.render_text(),
+            self.spawn_guard_rejection_total.render_text(),
             self.acquire_latency_seconds.render_text(),
         ]
 
