@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime
 import logging
 import time
@@ -597,8 +598,15 @@ class Pool:
         and which were filtered out.  This helps explain unexpected SDK
         behaviour when callers pass dict-shaped options that don't map 1:1
         to ``ClaudeAgentOptions`` fields.
+
+        Field enumeration uses ``dataclasses.fields()``, NOT ``dir()`` —
+        ``dir()`` on a dataclass class omits fields declared with
+        ``default_factory`` (env, mcp_servers, allowed_tools, extra_args,
+        plugins, add_dirs, betas, disallowed_tools).  Using ``dir()`` here
+        silently dropped the user's OAuth token from the subprocess env,
+        which was the root cause of the 15 s warm-spawn timeout in prod.
         """
-        known = {f for f in dir(ClaudeAgentOptions) if not f.startswith("_")}
+        known = {f.name for f in dataclasses.fields(ClaudeAgentOptions)}
         filtered = {k: v for k, v in options.items() if k in known}
         dropped = sorted(k for k in options.keys() if k not in known)
         if can_use_tool is not None:
