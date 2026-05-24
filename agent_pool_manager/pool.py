@@ -524,7 +524,7 @@ class Pool:
         # computed from the placeholder stays stable across warm-endpoint and
         # dispatch_v2_0 callers.
         mcp_key_id: str | None = None
-        if self._pg_pool is not None and user_id is not None:
+        if self._pg_pool is not None and user_id:  # truthy: excludes None and ""
             try:
                 from db.pg_queries.api_keys import create_key as _create_key
                 async with self._pg_pool.acquire() as _conn:
@@ -544,6 +544,11 @@ class Pool:
                     options_hash,
                     exc_info=True,
                 )
+                # Strip the ['tether'] placeholder so the subprocess doesn't hang
+                # waiting for a tether MCP server it cannot authenticate with.
+                # An empty dict tells the SDK "no MCP servers" — clean start.
+                options = dict(options)
+                options["mcp_servers"] = {}
 
         # Wire subprocess stderr to our logger so CLI errors surface in
         # fly.io's log stream.  Without this, stderr is dropped on the floor.
