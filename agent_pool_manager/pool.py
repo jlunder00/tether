@@ -274,6 +274,25 @@ class Pool:
                     asyncio.create_task(self._terminate(sub))
                     continue
 
+                # User isolation: the warm queue is keyed by options_hash, which is
+                # intentionally computed from the static placeholder so the hash
+                # stays stable across users.  But each subprocess now carries an
+                # ephemeral MCP Bearer token minted for the user that triggered its
+                # warm spawn.  A subprocess spawned for user A must not serve user B.
+                # If there is a user mismatch, terminate and try the next entry.
+                if (
+                    sub.mcp_user_id is not None
+                    and user_id is not None
+                    and sub.mcp_user_id != user_id
+                ):
+                    log.info(
+                        "pool.user_mismatch options_hash=%s sub_user=%s req_user=%s"
+                        " — discarding subprocess to prevent cross-user MCP key leak",
+                        options_hash, sub.mcp_user_id, user_id,
+                    )
+                    asyncio.create_task(self._terminate(sub))
+                    continue
+
                 # Hand it out
                 handle_id = str(uuid.uuid4())
                 sub.in_use = True
@@ -553,74 +572,98 @@ class Pool:
         )
         client = ClaudeSDKClient(options=sdk_options)
 
-        t_connect_start = time.monotonic()
+        # If we created an ephemeral MCP key and the spawn fails (connect
+        # timeout, OAuth failure, prime error, etc.) the Subprocess dataclass
+        # is never constructed so _terminate is never called.  Guard here to
+        # ensure the key is revoked on any failure after creation.
         try:
-            await asyncio.wait_for(
-                client.connect(),
-                timeout=self.config.connect_timeout_seconds,
-            )
-        except Exception as exc:
-            elapsed = time.monotonic() - t_connect_start
-            pid = _extract_pid(client)
-            log.warning(
-                "pool.connect_failed options_hash=%s exc_type=%s msg=%s"
-                " elapsed_s=%.2f pid=%s timeout_s=%.1f",
-                options_hash,
-                type(exc).__name__,
-                str(exc) or "<no message>",
-                elapsed,
-                pid,
-                self.config.connect_timeout_seconds,
-            )
-            # Kill the underlying subprocess so a failed spawn doesn't leave a
-            # zombie Claude CLI process holding memory until the OS cleans it up.
-            # This covers both auth failures (70 s timeout) and other errors.
+            t_connect_start = time.monotonic()
             try:
-                transport = getattr(client, "_transport", None)
-                proc = getattr(transport, "_process", None) if transport is not None else None
-                if proc is not None:
-                    proc.kill()
-                    # asyncio.subprocess.Process.wait() is a coroutine; a
-                    # synchronous subprocess.Popen.wait() is not.  Guard against
-                    # the sync case so a future SDK transport change doesn't
-                    # silently suppress the TypeError and leave zombies.
-                    if asyncio.iscoroutinefunction(getattr(proc, "wait", None)):
-                        await proc.wait()
-                    else:
-                        log.warning(
-                            "pool.cleanup: proc.wait() is not a coroutine for hash=%s"
-                            " — skipping await; subprocess may remain as zombie",
-                            options_hash,
-                        )
-            except Exception:
-                pass
-            raise
+                await asyncio.wait_for(
+                    client.connect(),
+                    timeout=self.config.connect_timeout_seconds,
+                )
+            except Exception as exc:
+                elapsed = time.monotonic() - t_connect_start
+                pid = _extract_pid(client)
+                log.warning(
+                    "pool.connect_failed options_hash=%s exc_type=%s msg=%s"
+                    " elapsed_s=%.2f pid=%s timeout_s=%.1f",
+                    options_hash,
+                    type(exc).__name__,
+                    str(exc) or "<no message>",
+                    elapsed,
+                    pid,
+                    self.config.connect_timeout_seconds,
+                )
+                # Kill the underlying subprocess so a failed spawn doesn't leave a
+                # zombie Claude CLI process holding memory until the OS cleans it up.
+                # This covers both auth failures (70 s timeout) and other errors.
+                try:
+                    transport = getattr(client, "_transport", None)
+                    proc = getattr(transport, "_process", None) if transport is not None else None
+                    if proc is not None:
+                        proc.kill()
+                        # asyncio.subprocess.Process.wait() is a coroutine; a
+                        # synchronous subprocess.Popen.wait() is not.  Guard against
+                        # the sync case so a future SDK transport change doesn't
+                        # silently suppress the TypeError and leave zombies.
+                        if asyncio.iscoroutinefunction(getattr(proc, "wait", None)):
+                            await proc.wait()
+                        else:
+                            log.warning(
+                                "pool.cleanup: proc.wait() is not a coroutine for hash=%s"
+                                " — skipping await; subprocess may remain as zombie",
+                                options_hash,
+                            )
+                except Exception:
+                    pass
+                raise
 
-        connect_elapsed = time.monotonic() - t_connect_start
-        log.info(
-            "pool.connect_done options_hash=%s elapsed_s=%.2f pid=%s",
-            options_hash, connect_elapsed, _extract_pid(client),
-        )
-
-        # Prime: send a cheap prompt so the subprocess pays its init cost now
-        t_prime_start = time.monotonic()
-        try:
-            await asyncio.wait_for(
-                self._do_prime(client),
-                timeout=self.config.prime_timeout_seconds,
-            )
+            connect_elapsed = time.monotonic() - t_connect_start
             log.info(
-                "pool.prime_done options_hash=%s elapsed_s=%.2f",
-                options_hash, time.monotonic() - t_prime_start,
+                "pool.connect_done options_hash=%s elapsed_s=%.2f pid=%s",
+                options_hash, connect_elapsed, _extract_pid(client),
             )
-        except asyncio.TimeoutError:
-            log.warning(
-                "pool.prime_timeout options_hash=%s elapsed_s=%.2f timeout_s=%d"
-                " — keeping unprimed client",
-                options_hash,
-                time.monotonic() - t_prime_start,
-                self.config.prime_timeout_seconds,
-            )
+
+            # Prime: send a cheap prompt so the subprocess pays its init cost now
+            t_prime_start = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    self._do_prime(client),
+                    timeout=self.config.prime_timeout_seconds,
+                )
+                log.info(
+                    "pool.prime_done options_hash=%s elapsed_s=%.2f",
+                    options_hash, time.monotonic() - t_prime_start,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "pool.prime_timeout options_hash=%s elapsed_s=%.2f timeout_s=%d"
+                    " — keeping unprimed client",
+                    options_hash,
+                    time.monotonic() - t_prime_start,
+                    self.config.prime_timeout_seconds,
+                )
+
+        except Exception:
+            # Spawn failed after key was created — revoke key to prevent orphan rows.
+            if mcp_key_id is not None and self._pg_pool is not None and user_id:
+                try:
+                    from db.pg_queries.api_keys import revoke_key as _revoke_key
+                    async with self._pg_pool.acquire() as _conn:
+                        await _revoke_key(_conn, mcp_key_id, user_id)
+                    log.info(
+                        "pool.mcp_key_revoked_on_spawn_failure options_hash=%s key_id=%s",
+                        options_hash, mcp_key_id,
+                    )
+                except Exception:
+                    log.warning(
+                        "pool.mcp_key_revoke_on_spawn_failure_failed key_id=%s",
+                        mcp_key_id,
+                        exc_info=True,
+                    )
+            raise
 
         now = time.monotonic()
         return Subprocess(
@@ -712,24 +755,29 @@ class Pool:
         return self._warm[options_hash]
 
     async def _terminate(self, sub: Subprocess) -> None:
-        # Revoke ephemeral MCP key before disconnecting the subprocess.
-        # Failure must not block disconnect — log and continue.
-        if sub.mcp_key_id is not None and self._pg_pool is not None:
+        # Disconnect first — this guarantees no further MCP calls will be made
+        # by the subprocess before we invalidate its credential.  Revoking
+        # before disconnect would leave a window where in-flight MCP requests
+        # receive 401 responses.
+        try:
+            await sub.proc.disconnect()
+        except Exception:
+            pass
+
+        # Revoke ephemeral MCP key after the subprocess is disconnected.
+        # Failure must not propagate — log and continue.
+        if sub.mcp_key_id is not None and self._pg_pool is not None and sub.mcp_user_id:
             try:
                 from db.pg_queries.api_keys import revoke_key as _revoke_key
                 async with self._pg_pool.acquire() as _conn:
-                    await _revoke_key(_conn, sub.mcp_key_id, sub.mcp_user_id or "")
+                    await _revoke_key(_conn, sub.mcp_key_id, sub.mcp_user_id)
                 log.info(
                     "pool.mcp_key_revoked options_hash=%s key_id=%s",
                     sub.options_hash, sub.mcp_key_id,
                 )
             except Exception:
                 log.warning(
-                    "pool.mcp_key_revoke_failed key_id=%s — continuing with disconnect",
+                    "pool.mcp_key_revoke_failed key_id=%s",
                     sub.mcp_key_id,
                     exc_info=True,
                 )
-        try:
-            await sub.proc.disconnect()
-        except Exception:
-            pass

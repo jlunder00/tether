@@ -302,3 +302,133 @@ async def test_terminate_revoke_failure_does_not_block_disconnect():
 
     # Disconnect still runs despite revoke failure
     mock_proc.disconnect.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_terminate_disconnect_before_revoke():
+    """Disconnect must complete before revoke so in-flight MCP calls are not 401'd."""
+    call_order: list[str] = []
+
+    mock_pg_pool = MagicMock()
+    mock_conn = AsyncMock()
+    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    pool = _make_pool(pg_pool=mock_pg_pool)
+
+    mock_proc = MagicMock()
+
+    async def _disconnect():
+        call_order.append("disconnect")
+    mock_proc.disconnect = _disconnect
+
+    sub = Subprocess(
+        proc=mock_proc,
+        options_hash="abcdef01abcdef01",
+        options={},
+        mcp_key_id="key-uuid-001",
+        mcp_user_id="user-uuid-999",
+    )
+
+    async def _revoke(conn, key_id, user_id):
+        call_order.append("revoke")
+    with patch("db.pg_queries.api_keys.revoke_key", new=_revoke):
+        await pool._terminate(sub)
+
+    assert call_order == ["disconnect", "revoke"], (
+        f"Expected disconnect before revoke, got: {call_order}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-user isolation tests (acquire-time user_id check)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_acquire_skips_subprocess_with_wrong_user():
+    """acquire() discards and terminates subprocesses belonging to a different user."""
+    pool = _make_pool()
+
+    mock_proc_wrong = MagicMock()
+    mock_proc_wrong.disconnect = AsyncMock()
+    mock_proc_right = MagicMock()
+    mock_proc_right.disconnect = AsyncMock()
+
+    # Push wrong-user subprocess first, right-user subprocess second
+    sub_wrong = Subprocess(
+        proc=mock_proc_wrong,
+        options_hash="aabbccdd11223344",
+        options={},
+        mcp_key_id="key-wrong",
+        mcp_user_id="user-A",
+    )
+    sub_right = Subprocess(
+        proc=mock_proc_right,
+        options_hash="aabbccdd11223344",
+        options={},
+        mcp_key_id="key-right",
+        mcp_user_id="user-B",
+    )
+
+    queue = pool._get_or_create_queue("aabbccdd11223344")
+    await queue.put(sub_wrong)
+    await queue.put(sub_right)
+
+    handle_id, _ = await pool.acquire(
+        options_hash="aabbccdd11223344",
+        options={},
+        user_id="user-B",
+    )
+
+    # The right subprocess was handed out
+    async with pool._lock:
+        active_sub = pool._active[handle_id]
+    assert active_sub.mcp_user_id == "user-B"
+
+    # The wrong subprocess was terminated
+    # (give the task a chance to run)
+    await asyncio.sleep(0)
+    mock_proc_wrong.disconnect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Key revocation on spawn failure tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_spawn_failure_revokes_key():
+    """If connect() fails after key creation, the ephemeral key is revoked."""
+    fake_raw_key = "ttr_fakerawkey123"
+    fake_key_record = {"id": "key-uuid-leak", "name": "pool_mcp_abcdef01"}
+
+    mock_pg_pool = MagicMock()
+    mock_conn = AsyncMock()
+    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    pool = _make_pool(pg_pool=mock_pg_pool)
+
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock(side_effect=Exception("connect failed"))
+
+    with (
+        patch(
+            "db.pg_queries.api_keys.create_key",
+            new=AsyncMock(return_value=(fake_raw_key, fake_key_record)),
+        ),
+        patch(
+            "db.pg_queries.api_keys.revoke_key",
+            new=AsyncMock(),
+        ) as mock_revoke,
+        patch("agent_pool_manager.pool.ClaudeSDKClient", return_value=mock_client),
+    ):
+        with pytest.raises(Exception, match="connect failed"):
+            await pool._spawn_and_prime(
+                options_hash="abcdef01abcdef01",
+                options=_base_options(),
+                user_id="user-uuid-999",
+            )
+
+    mock_revoke.assert_awaited_once()
+    args = mock_revoke.await_args.args
+    assert "key-uuid-leak" in args
