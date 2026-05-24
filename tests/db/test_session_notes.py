@@ -190,7 +190,7 @@ class TestUpsertSessionNotes:
             "SELECT updated_at FROM session_notes "
             "WHERE user_id = current_setting('app.current_user_id', true)::uuid"
         )
-        assert row2["updated_at"] >= row1["updated_at"]
+        assert row2["updated_at"] > row1["updated_at"]
 
 
 # ---------------------------------------------------------------------------
