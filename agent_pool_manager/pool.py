@@ -584,10 +584,22 @@ class Pool:
         # subprocesses spawn simultaneously.
         home_path: "Path | None" = None
         if self._home_pool is not None:
-            home_path = await self._home_pool.acquire()
-            env = dict(options["env"])
-            env["HOME"] = str(home_path)
-            options["env"] = env
+            try:
+                home_path = await asyncio.wait_for(
+                    self._home_pool.acquire(),
+                    timeout=self.config.connect_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "pool.home_acquire_timeout options_hash=%s timeout_s=%.1f"
+                    " — spawning without isolated home dir",
+                    options_hash,
+                    self.config.connect_timeout_seconds,
+                )
+            if home_path is not None:
+                env = dict(options["env"])
+                env["HOME"] = str(home_path)
+                options["env"] = env
 
         # Wire subprocess stderr to our logger so CLI errors surface in
         # fly.io's log stream.  Without this, stderr is dropped on the floor.

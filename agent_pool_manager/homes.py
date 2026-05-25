@@ -71,12 +71,14 @@ class HomeDirPool:
         template_path = Path(self._config.home_dir_template)
         self._template = template_path if template_path.is_dir() else None
 
-        loop = asyncio.get_event_loop()
         for i in range(count):
             home = self._base / f"home-{i}"
             home.mkdir(parents=True, exist_ok=True)
-            # Seed from template in executor to avoid blocking the loop.
-            await loop.run_in_executor(None, _reset_home, home, self._template)
+            # Skip reset for dirs currently checked out by a live subprocess —
+            # wiping them would corrupt the running CLI process's HOME.
+            if str(home) not in self._checked_out:
+                # Seed from template in executor to avoid blocking the loop.
+                await asyncio.to_thread(_reset_home, home, self._template)
             if home not in self._dirs:
                 self._dirs.append(home)
             # Populate the available queue; clear first to avoid duplication on re-init.
@@ -107,9 +109,11 @@ class HomeDirPool:
         available — callers should use ``asyncio.wait_for`` for timeouts.
         """
         home = await self._available.get()
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _reset_home, home, self._template)
-        expiry = time.monotonic() + self._config.max_age_seconds
+        await asyncio.to_thread(_reset_home, home, self._template)
+        # Use 2× subprocess max_age as home TTL so sweep never evicts a home
+        # whose subprocess might still be running (drain-on-touch retirement
+        # means a subprocess can live past its nominal max_age).
+        expiry = time.monotonic() + self._config.max_age_seconds * 2
         self._checked_out[str(home)] = expiry
         log.debug("home_pool.acquired path=%s", home)
         return home
