@@ -3,10 +3,10 @@
 
 models:
   orchestrator: claude-sonnet-4-5
-  meta_eval: claude-haiku-4-5
-  quick_classifier: claude-haiku-4-5
+  meta_eval: claude-haiku-4-5-20251001
+  quick_classifier: claude-haiku-4-5-20251001
   response_builder: claude-sonnet-4-5
-  satisfaction_eval: claude-haiku-4-5
+  satisfaction_eval: claude-haiku-4-5-20251001
 
 pipeline:
   history_exchanges: 5

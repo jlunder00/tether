@@ -68,7 +68,7 @@ _KNOWN_VERSIONS: frozenset[str] = frozenset(
 
 # MCP tools available to tether-agent-2.0 (basic tether MCP only, no premium).
 _V2_0_OPTIONS: dict[str, Any] = {
-    "model": "haiku-4.5",
+    "model": "claude-haiku-4-5-20251001",
     "allowed_tools": [
         "upsert_tasks",
         "upsert_context",
