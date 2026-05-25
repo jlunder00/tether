@@ -256,10 +256,15 @@ async def bot_chat(websocket: WebSocket,
 
             # Async event callback for streamed layer events (text deltas,
             # permission requests, etc.). agent_text_delta events are sent
-            # immediately as chunk frames so the browser can render them
-            # incrementally. Other event types are forwarded as-is.
-            # When any delta is sent, dispatch skips the final send_fn call
-            # at turn_complete to prevent duplicating the response content.
+            # as agent_text_delta frames so the browser can render them
+            # incrementally. Other event types (including turn_complete) are
+            # forwarded as-is.
+            # turn_complete_sent tracks whether event_fn already forwarded a
+            # turn_complete from the session — if so, the response_parts path
+            # below skips its own turn_complete to prevent a double-send that
+            # would poison the frontend's incoming queue for the next message.
+            turn_complete_sent: list[bool] = [False]
+
             async def event_fn(event: dict) -> None:
                 try:
                     etype = event.get("type")
@@ -268,6 +273,8 @@ async def bot_chat(websocket: WebSocket,
                         if delta:
                             await websocket.send_json({"type": "agent_text_delta", "delta": delta})
                     else:
+                        if etype == "turn_complete":
+                            turn_complete_sent[0] = True
                         await websocket.send_json(event)
                 except Exception as e:
                     logger.debug(
@@ -397,8 +404,9 @@ async def bot_chat(websocket: WebSocket,
                 continue
 
             session_task = None
-            response = "\n\n".join(response_parts) if response_parts else ""
-            await websocket.send_json({"type": "turn_complete", "final_text": response, "session_id": ""})
+            if not turn_complete_sent[0]:
+                response = "\n\n".join(response_parts) if response_parts else ""
+                await websocket.send_json({"type": "turn_complete", "final_text": response, "session_id": ""})
 
     except WebSocketDisconnect:
         await _cancel_and_wait(session_task) if session_task else None

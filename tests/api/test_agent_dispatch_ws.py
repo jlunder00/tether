@@ -1,13 +1,18 @@
 """WS integration tests for agent_version dispatch routing in bot_chat.
 
 Verifies the bot_chat WebSocket handler routes messages based on agent_version:
-- tether-agent-1.0 → no stub, chunk contains only the 1.0 response
+- tether-agent-1.0 → no stub, turn_complete carries only the 1.0 response
 - tether-agent-2.0 → real layer pipeline; falls back silently to 1.0 on error
 - tether-agent-2.5 → free user: upgrade notice + 1.0 fallback (M4)
 - agent_version missing → defaults to 2.0 path (layer pipeline / fallback)
 
 Note: The Telegram path (_process_telegram_update) calls handle_message directly
 and is intentionally excluded from dispatch routing — it has no picker UI.
+
+Protocol (post-M3 update):
+- Terminal event: {"type": "turn_complete", "final_text": "...", "session_id": "..."}
+- Streaming:      {"type": "agent_text_delta", "delta": "..."}  (one per chunk)
+- No {"type": "chunk"} or {"type": "done"} frames are ever emitted.
 
 Deliberate behaviour change (M3): tether-agent-2.0 no longer sends a user-
 visible stub. It runs the real layer pipeline, falling back silently to 1.0
@@ -104,26 +109,11 @@ def _make_layer_constructor(*, events=None, raise_on_start=None):
     return MagicMock(return_value=client), client
 
 
-def _dispatch_via_ws(user_message: dict, extra_patches=None) -> tuple[dict, dict]:
-    """Run a single user message through bot_chat and return (chunk, done) frames.
-
-    For non-streaming responses only (one chunk + done). Use _dispatch_via_ws_all
-    when testing streaming (multiple chunk frames before done).
-
-    extra_patches: list of (target, mock) tuples for additional patch.object calls.
-    """
-    frames = _dispatch_via_ws_all(user_message, extra_patches=extra_patches)
-    chunks = [f for f in frames if f["type"] == "chunk"]
-    dones = [f for f in frames if f["type"] == "done"]
-    # Collapse multiple chunks into one for backward compat with existing tests
-    if len(chunks) > 1:
-        combined = "\n\n".join(c["content"] for c in chunks)
-        return {"type": "chunk", "content": combined}, dones[0]
-    return chunks[0] if chunks else {"type": "chunk", "content": ""}, dones[0]
-
-
 def _dispatch_via_ws_all(user_message: dict, extra_patches=None) -> list[dict]:
-    """Run a single user message through bot_chat and return ALL frames received until done."""
+    """Run a single user message through bot_chat and return ALL frames until turn_complete.
+
+    Terminal event is {"type": "turn_complete"} — the server never emits {"type": "done"}.
+    """
     from starlette.testclient import TestClient
 
     app = _make_app()
@@ -148,21 +138,33 @@ def _dispatch_via_ws_all(user_message: dict, extra_patches=None) -> list[dict]:
                 while True:
                     frame = ws.receive_json()
                     frames.append(frame)
-                    if frame.get("type") == "done":
+                    if frame.get("type") == "turn_complete":
                         break
     return frames
 
 
-def _assert_stub_present(content: str, version_suffix: str) -> None:
-    """Chunk content must include the 1.0 response and a stub mentioning the version."""
-    assert "1.0-response" in content, "1.0 response must be present in chunk"
-    assert version_suffix in content, f"stub must mention agent version {version_suffix}"
-    content_lower = content.lower()
+def _dispatch_via_ws(user_message: dict, extra_patches=None) -> dict:
+    """Run a single user message and return the turn_complete frame.
+
+    For non-streaming responses. Use _dispatch_via_ws_all when inspecting
+    individual agent_text_delta frames before the terminal turn_complete.
+    """
+    frames = _dispatch_via_ws_all(user_message, extra_patches=extra_patches)
+    tc = next((f for f in frames if f["type"] == "turn_complete"), None)
+    assert tc is not None, f"No turn_complete frame received. Frames: {frames}"
+    return tc
+
+
+def _assert_stub_present(final_text: str, version_suffix: str) -> None:
+    """final_text must include the 1.0 response and a stub mentioning the version."""
+    assert "1.0-response" in final_text, "1.0 response must be present in final_text"
+    assert version_suffix in final_text, f"stub must mention agent version {version_suffix}"
+    content_lower = final_text.lower()
     assert (
         "coming soon" in content_lower
         or "not yet" in content_lower
         or "falling back" in content_lower
-    ), f"stub must communicate not-wired status, got chunk: {content!r}"
+    ), f"stub must communicate not-wired status, got final_text: {final_text!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -170,14 +172,13 @@ def _assert_stub_present(content: str, version_suffix: str) -> None:
 # ---------------------------------------------------------------------------
 
 def test_ws_agent_1_0_no_stub():
-    """tether-agent-1.0 must produce chunk('1.0-response') with no stub prepended."""
-    chunk, done = _dispatch_via_ws({"agent_version": "tether-agent-1.0"})
+    """tether-agent-1.0 must produce turn_complete(final_text='1.0-response') with no stub."""
+    tc = _dispatch_via_ws({"agent_version": "tether-agent-1.0"})
 
-    assert chunk["type"] == "chunk"
-    assert chunk["content"] == "1.0-response", (
-        "1.0 must not prepend a stub — response must be exactly '1.0-response'"
+    assert tc["type"] == "turn_complete"
+    assert tc["final_text"] == "1.0-response", (
+        "1.0 must not prepend a stub — final_text must be exactly '1.0-response'"
     )
-    assert done["type"] == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -191,11 +192,11 @@ def test_ws_2_5_free_user_gets_upgrade_notice():
     (defaults to free).  _dispatch_v25 must send the upgrade notice then fall
     back to handle_message (1.0 pipeline).
     """
-    chunk, done = _dispatch_via_ws({"agent_version": "tether-agent-2.5"})
+    tc = _dispatch_via_ws({"agent_version": "tether-agent-2.5"})
 
-    combined = chunk.get("content", "")
-    assert chunk["type"] == "chunk"
-    assert "1.0-response" in combined, "1.0 fallback must be present"
+    combined = tc.get("final_text", "")
+    assert tc["type"] == "turn_complete"
+    assert "1.0-response" in combined, "1.0 fallback must be present in final_text"
     combined_lower = combined.lower()
     assert (
         "pro plan" in combined_lower
@@ -205,7 +206,6 @@ def test_ws_2_5_free_user_gets_upgrade_notice():
     # Must NOT include the old not-yet-wired generic stub
     assert "not yet wired" not in combined_lower, \
         "2.5 must not send the generic 'not yet wired' stub"
-    assert done["type"] == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -213,36 +213,34 @@ def test_ws_2_5_free_user_gets_upgrade_notice():
 # ---------------------------------------------------------------------------
 
 def test_ws_2_0_layer_delivers_response():
-    """2.0 real pipeline: layer turn_complete final_text must arrive as the chunk."""
+    """2.0 real pipeline: layer turn_complete final_text must arrive as the turn_complete."""
     constructor, client = _make_layer_constructor()
-    chunk, done = _dispatch_via_ws(
+    tc = _dispatch_via_ws(
         {"agent_version": "tether-agent-2.0"},
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    assert chunk["type"] == "chunk"
-    assert chunk["content"] == "Layer WS response"
-    assert done["type"] == "done"
+    assert tc["type"] == "turn_complete"
+    assert tc["final_text"] == "Layer WS response"
 
 
 def test_ws_2_0_layer_unavailable_falls_back_silently():
-    """2.0 path: when layer is unavailable, fall back to 1.0 — no stub in chunk."""
+    """2.0 path: when layer is unavailable, fall back to 1.0 — no stub in final_text."""
     import httpx
     constructor, _client = _make_layer_constructor(
         raise_on_start=httpx.ConnectError("refused")
     )
-    chunk, done = _dispatch_via_ws(
+    tc = _dispatch_via_ws(
         {"agent_version": "tether-agent-2.0"},
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    assert chunk["type"] == "chunk"
+    assert tc["type"] == "turn_complete"
     # No stub — silent fallback, user just gets the 1.0 response
-    assert chunk["content"] == "1.0-response"
-    content_lower = chunk["content"].lower()
+    assert tc["final_text"] == "1.0-response"
+    content_lower = tc["final_text"].lower()
     assert "coming soon" not in content_lower
     assert "not yet" not in content_lower
-    assert done["type"] == "done"
 
 
 # ---------------------------------------------------------------------------
@@ -255,24 +253,23 @@ def test_ws_missing_agent_version_defaults_to_2_0_layer_path():
     constructor, _client = _make_layer_constructor(
         raise_on_start=httpx.ConnectError("refused")
     )
-    chunk, done = _dispatch_via_ws(
+    tc = _dispatch_via_ws(
         {},  # agent_version intentionally omitted
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    assert chunk["type"] == "chunk"
+    assert tc["type"] == "turn_complete"
     # 2.0 fallback: 1.0-response, no stub
-    assert chunk["content"] == "1.0-response"
-    assert "coming soon" not in chunk["content"].lower()
-    assert done["type"] == "done"
+    assert tc["final_text"] == "1.0-response"
+    assert "coming soon" not in tc["final_text"].lower()
 
 
 # ---------------------------------------------------------------------------
 # tether-agent-2.0 — streaming text deltas via event_fn
 # ---------------------------------------------------------------------------
 
-def test_ws_2_0_text_deltas_arrive_as_chunk_frames():
-    """agent_text_delta events must arrive as individual chunk frames before done."""
+def test_ws_2_0_text_deltas_arrive_as_agent_text_delta_frames():
+    """agent_text_delta events must arrive as individual agent_text_delta frames before turn_complete."""
     events = [
         {"type": "agent_text_delta", "session_id": "sid-ws", "delta": "Hello"},
         {"type": "agent_text_delta", "session_id": "sid-ws", "delta": " world"},
@@ -284,17 +281,17 @@ def test_ws_2_0_text_deltas_arrive_as_chunk_frames():
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    chunk_frames = [f for f in frames if f["type"] == "chunk"]
-    done_frames = [f for f in frames if f["type"] == "done"]
+    delta_frames = [f for f in frames if f["type"] == "agent_text_delta"]
+    tc_frames = [f for f in frames if f["type"] == "turn_complete"]
 
-    assert len(chunk_frames) == 2, "two delta events must produce two chunk frames"
-    assert chunk_frames[0]["content"] == "Hello"
-    assert chunk_frames[1]["content"] == " world"
-    assert len(done_frames) == 1
+    assert len(delta_frames) == 2, "two agent_text_delta events must produce two agent_text_delta frames"
+    assert delta_frames[0]["delta"] == "Hello"
+    assert delta_frames[1]["delta"] == " world"
+    assert len(tc_frames) == 1, "exactly one turn_complete must be sent"
 
 
-def test_ws_2_0_no_duplicate_chunk_after_streaming():
-    """When deltas are streamed, final_text must NOT be sent as an extra chunk frame."""
+def test_ws_2_0_no_duplicate_turn_complete_after_streaming():
+    """When deltas are streamed, the event_fn turn_complete must NOT be doubled by response_parts."""
     events = [
         {"type": "agent_text_delta", "session_id": "sid-ws", "delta": "Hi"},
         {"type": "turn_complete", "session_id": "sid-ws", "final_text": "Hi", "tokens_used": 2},
@@ -305,14 +302,17 @@ def test_ws_2_0_no_duplicate_chunk_after_streaming():
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    chunk_frames = [f for f in frames if f["type"] == "chunk"]
-    # Only one delta chunk — no duplicate final_text chunk
-    assert len(chunk_frames) == 1
-    assert chunk_frames[0]["content"] == "Hi"
+    delta_frames = [f for f in frames if f["type"] == "agent_text_delta"]
+    tc_frames = [f for f in frames if f["type"] == "turn_complete"]
+
+    # One delta, one turn_complete — no duplicate terminal event
+    assert len(delta_frames) == 1
+    assert delta_frames[0]["delta"] == "Hi"
+    assert len(tc_frames) == 1, "must send exactly one turn_complete — response_parts must not double-send"
 
 
-def test_ws_2_0_non_streaming_still_sends_final_chunk():
-    """When no deltas arrive, final_text must still arrive as a single chunk frame."""
+def test_ws_2_0_non_streaming_sends_turn_complete_with_final_text():
+    """When no deltas arrive, final_text must still arrive in turn_complete."""
     events = [
         {"type": "turn_complete", "session_id": "sid-ws", "final_text": "All at once", "tokens_used": 4},
     ]
@@ -322,6 +322,6 @@ def test_ws_2_0_non_streaming_still_sends_final_chunk():
         extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
     )
 
-    chunk_frames = [f for f in frames if f["type"] == "chunk"]
-    assert len(chunk_frames) == 1
-    assert chunk_frames[0]["content"] == "All at once"
+    tc_frames = [f for f in frames if f["type"] == "turn_complete"]
+    assert len(tc_frames) == 1
+    assert tc_frames[0]["final_text"] == "All at once"
