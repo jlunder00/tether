@@ -526,8 +526,9 @@ class Pool:
         mcp_key_id: str | None = None
         if self._pg_pool is not None and user_id:  # truthy: excludes None and ""
             try:
+                import db.postgres as pg
                 from db.pg_queries.api_keys import create_key as _create_key
-                async with self._pg_pool.acquire() as _conn:
+                async with pg.get_conn(self._pg_pool, user_id=user_id) as _conn:
                     _raw_key, _key_rec = await _create_key(
                         _conn, user_id=user_id, name=f"pool_mcp_{options_hash[:8]}"
                     )
@@ -655,8 +656,9 @@ class Pool:
             # Spawn failed after key was created — revoke key to prevent orphan rows.
             if mcp_key_id is not None and self._pg_pool is not None and user_id:
                 try:
+                    import db.postgres as pg
                     from db.pg_queries.api_keys import revoke_key as _revoke_key
-                    async with self._pg_pool.acquire() as _conn:
+                    async with pg.get_conn(self._pg_pool, user_id=user_id) as _conn:
                         await _revoke_key(_conn, mcp_key_id, user_id)
                     log.info(
                         "pool.mcp_key_revoked_on_spawn_failure options_hash=%s key_id=%s",
@@ -773,8 +775,9 @@ class Pool:
         # Failure must not propagate — log and continue.
         if sub.mcp_key_id is not None and self._pg_pool is not None and sub.mcp_user_id:
             try:
+                import db.postgres as pg
                 from db.pg_queries.api_keys import revoke_key as _revoke_key
-                async with self._pg_pool.acquire() as _conn:
+                async with pg.get_conn(self._pg_pool, user_id=sub.mcp_user_id) as _conn:
                     await _revoke_key(_conn, sub.mcp_key_id, sub.mcp_user_id)
                 log.info(
                     "pool.mcp_key_revoked options_hash=%s key_id=%s",
