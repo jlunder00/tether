@@ -154,7 +154,7 @@ def _start_pexpect_sync(env: dict) -> tuple:
         return None, None
 
     buf = ""
-    deadline = time.time() + 30
+    deadline = time.time() + 60
     while time.time() < deadline:
         try:
             chunk = child.read_nonblocking(4096, timeout=1)
