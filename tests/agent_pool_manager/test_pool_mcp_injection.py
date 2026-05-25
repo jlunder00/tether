@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -98,8 +99,10 @@ async def test_spawn_creates_mcp_key_and_expands_options():
 
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
 
@@ -117,6 +120,7 @@ async def test_spawn_creates_mcp_key_and_expands_options():
         pass
 
     with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
         patch(
             "db.pg_queries.api_keys.create_key",
             new=AsyncMock(return_value=(fake_raw_key, fake_key_record)),
@@ -219,8 +223,10 @@ async def test_terminate_revokes_mcp_key():
     """_terminate calls revoke_key when sub has mcp_key_id."""
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
 
@@ -235,10 +241,13 @@ async def test_terminate_revokes_mcp_key():
         mcp_user_id="user-uuid-999",
     )
 
-    with patch(
-        "db.pg_queries.api_keys.revoke_key",
-        new=AsyncMock(),
-    ) as mock_revoke:
+    with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
+        patch(
+            "db.pg_queries.api_keys.revoke_key",
+            new=AsyncMock(),
+        ) as mock_revoke,
+    ):
         await pool._terminate(sub)
 
     mock_revoke.assert_awaited_once()
@@ -277,8 +286,10 @@ async def test_terminate_revoke_failure_does_not_block_disconnect():
     """Revoke failure must not prevent subprocess disconnect (fire-and-forget safety)."""
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
 
@@ -293,9 +304,12 @@ async def test_terminate_revoke_failure_does_not_block_disconnect():
         mcp_user_id="user-uuid-999",
     )
 
-    with patch(
-        "db.pg_queries.api_keys.revoke_key",
-        new=AsyncMock(side_effect=Exception("DB down")),
+    with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
+        patch(
+            "db.pg_queries.api_keys.revoke_key",
+            new=AsyncMock(side_effect=Exception("DB down")),
+        ),
     ):
         # Must not raise
         await pool._terminate(sub)
@@ -311,8 +325,10 @@ async def test_terminate_disconnect_before_revoke():
 
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
 
@@ -332,7 +348,10 @@ async def test_terminate_disconnect_before_revoke():
 
     async def _revoke(conn, key_id, user_id):
         call_order.append("revoke")
-    with patch("db.pg_queries.api_keys.revoke_key", new=_revoke):
+    with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
+        patch("db.pg_queries.api_keys.revoke_key", new=_revoke),
+    ):
         await pool._terminate(sub)
 
     assert call_order == ["disconnect", "revoke"], (
@@ -403,8 +422,10 @@ async def test_spawn_failure_revokes_key():
 
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
 
@@ -412,6 +433,7 @@ async def test_spawn_failure_revokes_key():
     mock_client.connect = AsyncMock(side_effect=Exception("connect failed"))
 
     with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
         patch(
             "db.pg_queries.api_keys.create_key",
             new=AsyncMock(return_value=(fake_raw_key, fake_key_record)),
@@ -475,8 +497,10 @@ async def test_spawn_key_failure_strips_mcp_placeholder():
     """When key creation fails, mcp_servers must be replaced with {} so SDK doesn't hang."""
     mock_pg_pool = MagicMock()
     mock_conn = AsyncMock()
-    mock_pg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-    mock_pg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    @asynccontextmanager
+    async def _fake_get_conn(pool, *, user_id=None):
+        yield mock_conn
 
     pool = _make_pool(pg_pool=mock_pg_pool)
     captured_sdk_options: list[dict] = []
@@ -492,6 +516,7 @@ async def test_spawn_key_failure_strips_mcp_placeholder():
         pass
 
     with (
+        patch("db.postgres.get_conn", side_effect=_fake_get_conn),
         patch(
             "db.pg_queries.api_keys.create_key",
             new=AsyncMock(side_effect=Exception("DB error")),
@@ -514,3 +539,86 @@ async def test_spawn_key_failure_strips_mcp_placeholder():
     )
     # Must be an empty dict (no MCP servers) so subprocess can start without MCP auth
     assert mcp == {}, f"Expected empty dict mcp_servers on fallback, got: {mcp!r}"
+
+
+@pytest.mark.asyncio
+async def test_spawn_uses_get_conn_for_rls():
+    """_spawn_and_prime must use db.postgres.get_conn (not raw pool.acquire) so that
+    app.current_user_id is set before the INSERT — required by the api_keys RLS policy."""
+    from contextlib import asynccontextmanager
+
+    fake_raw_key = "ttr_fakerawkey123"
+    fake_key_record = {"id": "key-uuid-rls", "name": "pool_mcp_abcdef01"}
+
+    mock_pg_pool = MagicMock()
+    mock_conn = AsyncMock()
+
+    get_conn_calls: list[dict] = []
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, *, user_id=None):
+        get_conn_calls.append({"pool": pool, "user_id": user_id})
+        yield mock_conn
+
+    mock_client = MagicMock()
+    mock_client.connect = AsyncMock()
+
+    pool = _make_pool(pg_pool=mock_pg_pool)
+
+    with (
+        patch("db.postgres.get_conn", side_effect=fake_get_conn),
+        patch(
+            "db.pg_queries.api_keys.create_key",
+            new=AsyncMock(return_value=(fake_raw_key, fake_key_record)),
+        ),
+        patch.object(Pool, "_build_sdk_options", return_value=MagicMock()),
+        patch("agent_pool_manager.pool.ClaudeSDKClient", return_value=mock_client),
+        patch.object(Pool, "_do_prime", new=AsyncMock()),
+    ):
+        sub = await pool._spawn_and_prime(
+            options_hash="abcdef01abcdef01",
+            options=_base_options(),
+            user_id="user-uuid-rls",
+        )
+
+    # get_conn must have been called with the correct user_id
+    assert len(get_conn_calls) == 1, f"Expected 1 get_conn call, got {len(get_conn_calls)}"
+    assert get_conn_calls[0]["user_id"] == "user-uuid-rls"
+    assert sub.mcp_key_id == "key-uuid-rls"
+
+
+@pytest.mark.asyncio
+async def test_terminate_uses_get_conn_for_rls():
+    """_terminate must use db.postgres.get_conn (not raw pool.acquire) for revoke_key
+    so that app.current_user_id is set — required by the api_keys RLS policy."""
+    from contextlib import asynccontextmanager
+
+    mock_pg_pool = MagicMock()
+    mock_conn = AsyncMock()
+
+    get_conn_calls: list[dict] = []
+
+    @asynccontextmanager
+    async def fake_get_conn(pool, *, user_id=None):
+        get_conn_calls.append({"pool": pool, "user_id": user_id})
+        yield mock_conn
+
+    pool = _make_pool(pg_pool=mock_pg_pool)
+
+    sub = MagicMock()
+    sub.mcp_key_id = "key-uuid-revoke"
+    sub.mcp_user_id = "user-uuid-rls"
+    sub.options_hash = "abcdef01"
+    sub.proc = AsyncMock()
+
+    with (
+        patch("db.postgres.get_conn", side_effect=fake_get_conn),
+        patch(
+            "db.pg_queries.api_keys.revoke_key",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        await pool._terminate(sub)
+
+    assert len(get_conn_calls) == 1, f"Expected 1 get_conn call, got {len(get_conn_calls)}"
+    assert get_conn_calls[0]["user_id"] == "user-uuid-rls"
