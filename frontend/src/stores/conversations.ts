@@ -77,8 +77,9 @@ export const useConversationsStore = defineStore('conversations', () => {
     let page: MessagesPage
     try {
       page = await res.json()
-    } catch {
-      // Non-JSON response (e.g. HTML from SPA fallback on infrastructure error) — fail silently.
+    } catch (e) {
+      // Non-JSON response (e.g. HTML from SPA fallback on infrastructure error).
+      console.warn('[conversations] loadMessages: non-JSON response for', id, e)
       return
     }
     // API returns newest-first; reverse for display (oldest-first)
@@ -98,8 +99,9 @@ export const useConversationsStore = defineStore('conversations', () => {
     let page: MessagesPage
     try {
       page = await res.json()
-    } catch {
-      // Non-JSON response — fail silently; preserve existing messages.
+    } catch (e) {
+      // Non-JSON response — preserve existing messages to avoid data loss.
+      console.warn('[conversations] loadMessagesOlder: non-JSON response for', conversationId, e)
       return
     }
     const older = [...(page.messages ?? [])].reverse()

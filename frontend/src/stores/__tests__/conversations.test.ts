@@ -339,10 +339,8 @@ describe('useConversationsStore', () => {
       const store = useConversationsStore()
       // Must not throw
       await expect(store.loadMessages('conv-items')).resolves.toBeUndefined()
-      // Graceful degradation: empty array stored (not undefined)
-      const stored = store.messagesById.get('conv-items') ?? null
-      expect(stored).not.toBeNull()
-      expect(Array.isArray(stored)).toBe(true)
+      // Graceful degradation: empty array stored (not undefined or a junk array)
+      expect(store.messagesById.get('conv-items')).toEqual([])
     })
 
     it('does not throw in loadMessagesOlder when API returns HTML', async () => {
@@ -360,6 +358,21 @@ describe('useConversationsStore', () => {
       // Must not throw; existing messages must be preserved
       await expect(store.loadMessagesOlder('conv-older')).resolves.toBeUndefined()
       expect(store.messagesById.get('conv-older')).toEqual(existing)
+    })
+
+    it('does not throw in loadMessagesOlder when API returns wrong shape (items key)', async () => {
+      // Symmetric coverage: same schema-drift scenario for the pagination path.
+      mockApi.mockResolvedValue(mockResponse({ items: [makeMsg({ id: 'msg-old' })], has_more: false }))
+
+      const store = useConversationsStore()
+      const existing = [makeMsg({ id: 'msg-existing' })]
+      store.messagesById.set('conv-older-shape', existing)
+      store.hasMoreById.set('conv-older-shape', true)
+
+      await expect(store.loadMessagesOlder('conv-older-shape')).resolves.toBeUndefined()
+      // Existing messages preserved; empty older set prepended without crash
+      const stored = store.messagesById.get('conv-older-shape')!
+      expect(stored).toContainEqual(expect.objectContaining({ id: 'msg-existing' }))
     })
   })
 })
