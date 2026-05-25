@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Path to the running container user's .claude.json.  Isolated to a constant
+# so tests can monkeypatch without touching the filesystem at /home/tether.
+_AUTH_SOURCE_PATH: Path = Path("/home/tether/.claude.json")
+
 
 def _reset_home(home: Path, template: Path | None) -> None:
     """Synchronous reset called from a thread executor.
@@ -70,6 +74,31 @@ class HomeDirPool:
         # Re-discover template now (it may have been created since __init__)
         template_path = Path(self._config.home_dir_template)
         self._template = template_path if template_path.is_dir() else None
+
+        # Seed template with auth credentials at runtime if not already present.
+        # /home/tether/.claude.json is written by `claude setup-token` after
+        # the container first boots — it is never baked into the image (Fly
+        # secret).  Copying it into the template here means every warm
+        # subprocess starts with valid credentials without an extra setup step.
+        # Skips gracefully when: template dir absent, source absent, or
+        # template already has its own .claude.json.
+        if self._template is not None:
+            template_claude_json = self._template / ".claude.json"
+            if not template_claude_json.exists() and _AUTH_SOURCE_PATH.exists():
+                try:
+                    shutil.copy2(_AUTH_SOURCE_PATH, template_claude_json)
+                    log.info(
+                        "home_pool.seeded_template source=%s dest=%s",
+                        _AUTH_SOURCE_PATH,
+                        template_claude_json,
+                    )
+                except OSError:
+                    log.warning(
+                        "home_pool.seed_failed source=%s dest=%s",
+                        _AUTH_SOURCE_PATH,
+                        template_claude_json,
+                        exc_info=True,
+                    )
 
         for i in range(count):
             home = self._base / f"home-{i}"
