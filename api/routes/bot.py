@@ -266,7 +266,7 @@ async def bot_chat(websocket: WebSocket,
                     if etype == "agent_text_delta":
                         delta = event.get("delta", "")
                         if delta:
-                            await websocket.send_json({"type": "chunk", "content": delta})
+                            await websocket.send_json({"type": "agent_text_delta", "delta": delta})
                     else:
                         await websocket.send_json(event)
                 except Exception as e:
@@ -397,10 +397,8 @@ async def bot_chat(websocket: WebSocket,
                 continue
 
             session_task = None
-            response = "\n\n".join(response_parts) if response_parts else None
-            if response:
-                await websocket.send_json({"type": "chunk", "content": response})
-            await websocket.send_json({"type": "done"})
+            response = "\n\n".join(response_parts) if response_parts else ""
+            await websocket.send_json({"type": "turn_complete", "final_text": response})
 
     except WebSocketDisconnect:
         await _cancel_and_wait(session_task) if session_task else None

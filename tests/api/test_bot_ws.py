@@ -88,7 +88,7 @@ def test_bot_ws_invalid_token_rejected_1008():
 # ---------------------------------------------------------------------------
 
 def test_bot_ws_valid_cookie_accepted():
-    """A valid JWT allows connection; a user message produces chunk + done.
+    """A valid JWT allows connection; a user message produces turn_complete.
 
     handle_message delivers the response via send_fn (not its return value).
     The mock mirrors real behaviour: call send_fn, return None.
@@ -107,15 +107,13 @@ def test_bot_ws_valid_cookie_accepted():
                 cookies={"tether_token": token},
             ) as ws:
                 ws.send_json({"type": "user", "content": "ping", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                assert chunk["content"] == "pong"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg["final_text"] == "pong"
 
 
 def test_bot_ws_none_response_skips_chunk():
-    """When handle_message never calls send_fn, no chunk frame is sent — just done."""
+    """When handle_message never calls send_fn, a turn_complete with empty final_text is sent."""
     app = _make_app()
     token = _valid_token()
 
@@ -129,8 +127,9 @@ def test_bot_ws_none_response_skips_chunk():
                 cookies={"tether_token": token},
             ) as ws:
                 ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg.get("final_text") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +141,7 @@ def test_status_messages_pushed_immediately():
 
     The test verifies that the client receives:
       1. {"type": "status", "content": "Working on it..."}
-      2. {"type": "chunk", "content": "final answer"}
-      3. {"type": "done"}
+      2. {"type": "turn_complete", "final_text": "final answer"}
     in that order — confirming real-time push rather than accumulation.
     """
     app = _make_app()
@@ -167,12 +165,9 @@ def test_status_messages_pushed_immediately():
                 assert status["type"] == "status"
                 assert status["content"] == "Working on it..."
 
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                assert chunk["content"] == "final answer"
-
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg["final_text"] == "final answer"
 
 
 def test_multiple_status_messages_in_order():
@@ -201,11 +196,8 @@ def test_multiple_status_messages_in_order():
                 s2 = ws.receive_json()
                 assert s2 == {"type": "status", "content": "Step 2: Rescheduling blocks"}
 
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
 
 
 # ---------------------------------------------------------------------------
@@ -274,10 +266,8 @@ def test_idle_stop_ignored():
 
                 # Now send a real user message — should still work normally
                 ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
 
 
 # ---------------------------------------------------------------------------
@@ -306,10 +296,8 @@ def test_missing_content_sends_error_keeps_connection():
 
                 # Connection must still be alive — can send another message
                 ws.send_json({"type": "user", "content": "retry", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
 
 
 # ---------------------------------------------------------------------------
@@ -354,11 +342,9 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
 
                 # Second message — proves loop continued (connection still alive)
                 ws.send_json({"type": "user", "content": "try again", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                assert chunk["content"] == "recovered response"
-                done2 = ws.receive_json()
-                assert done2["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg["final_text"] == "recovered response"
 
 
 def test_session_error_sends_error_keeps_connection():
@@ -391,11 +377,9 @@ def test_session_error_sends_error_keeps_connection():
 
                 # Connection must still be alive — next message works
                 ws.send_json({"type": "user", "content": "second message", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                assert chunk["content"] == "recovered"
-                done2 = ws.receive_json()
-                assert done2["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg["final_text"] == "recovered"
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +426,13 @@ def test_disconnect_cancels_session_task():
 # send_fn capture — response delivered via callback, not return value
 # ---------------------------------------------------------------------------
 
-def test_send_fn_response_delivered_as_chunk():
-    """Response delivered via send_fn (not return value) must reach the browser.
+def test_send_fn_response_delivered_as_turn_complete():
+    """Response delivered via send_fn (not return value) must reach the browser as turn_complete.
 
     The real handle_message always calls send_fn(final) and returns None.
     The WebSocket handler must capture send_fn calls and forward them as
-    {"type": "chunk"} frames — not rely on the return value being non-None.
+    {"type": "turn_complete", "final_text": ...} — the only type the frontend
+    recognises for terminating the generator and rendering content.
     """
     app = _make_app()
     token = _valid_token()
@@ -463,15 +448,13 @@ def test_send_fn_response_delivered_as_chunk():
                 cookies={"tether_token": token},
             ) as ws:
                 ws.send_json({"type": "user", "content": "ping", "agent_version": "tether-agent-1.0"})
-                chunk = ws.receive_json()
-                assert chunk["type"] == "chunk"
-                assert chunk["content"] == "hello from send_fn"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg["final_text"] == "hello from send_fn"
 
 
-def test_no_send_fn_call_skips_chunk():
-    """When send_fn is never called (empty response), only done is sent."""
+def test_no_send_fn_call_sends_turn_complete_empty():
+    """When send_fn is never called (empty response), turn_complete with final_text='' is sent."""
     app = _make_app()
     token = _valid_token()
 
@@ -485,5 +468,6 @@ def test_no_send_fn_call_skips_chunk():
                 cookies={"tether_token": token},
             ) as ws:
                 ws.send_json({"type": "user", "content": "hello", "agent_version": "tether-agent-1.0"})
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                msg = ws.receive_json()
+                assert msg["type"] == "turn_complete"
+                assert msg.get("final_text") == ""
