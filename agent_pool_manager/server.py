@@ -276,6 +276,19 @@ def build_app(
         app.state.pool._metrics = app.state.metrics
         app.state.metrics.attach_pool(app.state.pool)
 
+        # Initialise the home directory pool so isolated HOME dirs are available
+        # before the first warm spawn.  Gracefully degrades if the base dir
+        # does not exist on this deployment (Pi vs Fly).
+        try:
+            await app.state.pool.initialize_home_pool()
+            log.info("agent_pool_manager: home directory pool initialised")
+        except Exception:
+            log.warning(
+                "agent_pool_manager: home directory pool unavailable"
+                " — subprocesses will share default HOME (lock contention possible)",
+                exc_info=True,
+            )
+
         app.state.refill.start()
         log.info("Agent pool manager started")
         yield

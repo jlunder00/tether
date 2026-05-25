@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import datetime
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -220,6 +221,15 @@ class Pool:
         self._pg_pool: Any = pg_pool
         # optional home directory pool — set via initialize_home_pool()
         self._home_pool: HomeDirPool | None = None
+
+        # The Python SDK reads CLAUDE_CODE_STREAM_CLOSE_TIMEOUT from the
+        # manager process os.environ (not from the subprocess env dict).
+        # Set it here so the SDK's _send_control_request timeout is honoured.
+        # Use setdefault so an operator-supplied env var takes precedence.
+        os.environ.setdefault(
+            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT",
+            str(config.initialize_timeout_ms),
+        )
 
     async def initialize_home_pool(self) -> None:
         """Create and seed the home directory pool.
