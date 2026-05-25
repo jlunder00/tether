@@ -5,6 +5,11 @@ import asyncio
 import dataclasses
 import json
 import logging
+import os
+import re
+import time
+import urllib.parse
+import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -18,6 +23,126 @@ from .pool import Pool, PoolExhausted
 from .refill import RefillLoop
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Setup-token pexpect helpers
+# ---------------------------------------------------------------------------
+
+_ANTHROPIC_URL_RE = re.compile(r"https://\S+")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+_OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
+_VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}
+_SETUP_TTL = 600  # seconds
+
+# Pending setup-token sessions: session_id → {"child": ..., "created_at": float}
+_setup_token_sessions: dict[str, dict] = {}
+
+
+def _extract_anthropic_url(text: str) -> str | None:
+    joined = text.replace("\r", "").replace("\n", "")
+    for match in _ANTHROPIC_URL_RE.finditer(joined):
+        candidate = match.group(0).rstrip(".,;)")
+        parsed = urllib.parse.urlparse(candidate)
+        if parsed.scheme == "https" and parsed.netloc in _VALID_ANTHROPIC_NETLOCS:
+            return candidate
+    return None
+
+
+def _start_pexpect_sync(env: dict) -> tuple:
+    """Spawn ``claude setup-token`` in a PTY, wait for the auth URL.
+
+    Returns ``(child, url)`` on success or ``(None, None)`` on failure.
+    The child stays alive waiting for the OAuth code via :func:`_complete_pexpect_sync`.
+    """
+    import pexpect  # lazy import — keeps module importable when pexpect absent
+
+    log.info("setup_token/start: spawning claude setup-token")
+    try:
+        child = pexpect.spawn("claude", args=["setup-token"], env=env, dimensions=(24, 500))
+    except Exception:
+        log.exception("setup_token/start: pexpect.spawn failed")
+        return None, None
+
+    buf = ""
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(4096, timeout=1)
+            buf += chunk.decode(errors="replace")
+            clean = _ANSI_ESCAPE_RE.sub("", buf)
+            url = _extract_anthropic_url(clean)
+            if url:
+                log.info("setup_token/start: auth URL extracted: %s", url)
+                return child, url
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            log.warning("setup_token/start: EOF before URL found; output: %r", buf[-500:])
+            break
+        except Exception:
+            log.exception("setup_token/start: unexpected error reading child output")
+            break
+
+    log.error("setup_token/start: timed out waiting for auth URL")
+    try:
+        child.close(force=True)
+    except Exception:
+        pass
+    return None, None
+
+
+def _complete_pexpect_sync(child, code: str) -> tuple[str, str]:
+    """Send the OAuth code to the waiting child and capture the OAuth token.
+
+    Returns ``(result, token)`` where result is ``"ok"``, ``"failed"``,
+    ``"timeout"``, or ``"error"``.
+    """
+    import pexpect  # lazy import
+
+    log.info("setup_token/complete: sending code to pexpect child")
+    try:
+        child.send(code + "\r")
+    except Exception:
+        log.exception("setup_token/complete: pexpect send failed")
+        return "error", ""
+
+    buf = b""
+    token: str | None = None
+    sent_confirm = False
+    deadline = time.time() + 120
+
+    while time.time() < deadline:
+        try:
+            chunk = child.read_nonblocking(4096, timeout=1)
+            buf += chunk
+            clean = _ANSI_ESCAPE_RE.sub("", chunk.decode(errors="replace"))
+            match = _OAUTH_TOKEN_RE.search(clean)
+            if match:
+                token = match.group(0)
+                break
+            if not sent_confirm and b"\r\r\n\r\r\n" in buf:
+                child.send("\r")
+                sent_confirm = True
+        except pexpect.TIMEOUT:
+            continue
+        except pexpect.EOF:
+            full_clean = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
+            match = _OAUTH_TOKEN_RE.search(full_clean)
+            if match:
+                token = match.group(0)
+            break
+        except Exception:
+            log.exception("setup_token/complete: unexpected error")
+            return "error", ""
+    else:
+        return "timeout", ""
+
+    try:
+        child.close()
+    except Exception:
+        pass
+
+    return ("ok", token) if token else ("failed", "")
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +180,11 @@ class ControlResponseRequest(BaseModel):
     subtype: str
     decision: str  # "allow" | "deny"
     denial_message: str | None = None
+
+
+class SetupTokenCompleteRequest(BaseModel):
+    session_id: str
+    code: str
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +461,69 @@ def build_app(
                 detail=f"request_id {req.request_id!r} not found or already resolved",
             )
 
+    # -----------------------------------------------------------------------
+    # POST /setup-token
+    #
+    # Spawns ``claude setup-token`` in a PTY, waits for the Anthropic auth
+    # URL, and returns it along with a session_id the caller uses to submit
+    # the OAuth code via POST /setup-token/complete.
+    # -----------------------------------------------------------------------
+    @app.post("/setup-token")
+    async def setup_token_start(request: Request) -> JSONResponse:
+        # Sweep expired sessions before starting a new one
+        now = time.time()
+        expired = [sid for sid, s in _setup_token_sessions.items()
+                   if now - s["created_at"] > _SETUP_TTL]
+        for sid in expired:
+            entry = _setup_token_sessions.pop(sid, None)
+            if entry:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, lambda c=entry["child"]: _close_child(c))
+
+        env = {**os.environ}
+        loop = asyncio.get_running_loop()
+        child, url = await loop.run_in_executor(None, _start_pexpect_sync, env)
+
+        if child is None or url is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "setup_token_failed", "detail": "claude setup-token did not produce an auth URL"},
+            )
+
+        session_id = str(uuid.uuid4())
+        _setup_token_sessions[session_id] = {"child": child, "created_at": now}
+        log.info("setup_token/start: session_id=%s url=%s", session_id, url)
+        return JSONResponse({"session_id": session_id, "url": url})
+
+    # -----------------------------------------------------------------------
+    # POST /setup-token/complete
+    #
+    # Sends the OAuth code to the waiting pexpect child identified by
+    # session_id and returns the resulting OAuth token.
+    # -----------------------------------------------------------------------
+    @app.post("/setup-token/complete")
+    async def setup_token_complete(req: SetupTokenCompleteRequest) -> JSONResponse:
+        entry = _setup_token_sessions.pop(req.session_id, None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="session not found or expired")
+
+        child = entry["child"]
+        loop = asyncio.get_running_loop()
+        result, token = await loop.run_in_executor(
+            None, _complete_pexpect_sync, child, req.code
+        )
+        log.info("setup_token/complete: session_id=%s result=%s", req.session_id, result)
+        return JSONResponse({"result": result, "token": token if token else None})
+
     return app
+
+
+def _close_child(child) -> None:
+    """Kill a pexpect child — used for TTL cleanup."""
+    try:
+        child.close(force=True)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
