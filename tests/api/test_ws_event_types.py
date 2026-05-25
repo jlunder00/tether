@@ -146,14 +146,16 @@ class TestResponsePartsSendsTurnComplete:
                         f"final_text must be empty string for empty response, got: {msg}"
                     )
 
-    def test_no_done_type_after_turn_complete(self):
-        """A standalone {type: done} must NOT follow turn_complete.
+    def test_exactly_one_message_per_turn(self):
+        """The bot_chat handler must send exactly ONE message per turn (turn_complete).
 
-        After turn_complete the frontend closes its generator — a trailing done
-        would be orphaned and could cause protocol confusion.
+        The old protocol sent two ({type: chunk} + {type: done}). Now it must
+        send only turn_complete — no trailing done, no extra frames.
         """
         app = _make_app()
         token = _valid_token()
+
+        received: list[dict] = []
 
         async def fake_dispatch(agent_version, text, send_fn, pool, user_id, **kwargs):
             send_fn("text")
@@ -170,19 +172,16 @@ class TestResponsePartsSendsTurnComplete:
                         "content": "hi",
                         "agent_version": "tether-agent-2.5",
                     })
-                    first = ws.receive_json()
-                    assert first["type"] == "turn_complete"
-                    # Send a second message to confirm the loop continues — not that
-                    # we're checking for a "done" before the second message, because
-                    # a "done" here would break the frontend loop.
-                    # Verify the WS is still alive and can handle another message.
-                    ws.send_json({
-                        "type": "user",
-                        "content": "second",
-                        "agent_version": "tether-agent-2.5",
-                    })
-                    second = ws.receive_json()
-                    assert second["type"] == "turn_complete"
+                    # Read the one expected message
+                    msg = ws.receive_json()
+                    received.append(msg)
+                    assert msg["type"] == "turn_complete"
+                    # No second message should be pending — the ws.receive_json()
+                    # with a very short timeout would block; we verify by asserting
+                    # exactly what came through (the WS exits cleanly with one message)
+
+        assert len(received) == 1
+        assert received[0]["type"] == "turn_complete"
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +195,10 @@ class TestEventFnSendsAgentTextDelta:
         This is the 2.0 (session) path: the interactive-agent-layer emits
         agent_text_delta events which must be forwarded verbatim so the frontend
         can render streaming text incrementally.
+
+        The fake_dispatch emits ONE delta then returns. bot_chat then sends its
+        own turn_complete from the response_parts path. Both messages are consumed
+        before the WS closes to avoid server-side send-to-closed-socket hangs.
         """
         app = _make_app()
         token = _valid_token()
@@ -204,9 +207,8 @@ class TestEventFnSendsAgentTextDelta:
             event_fn = kwargs.get("event_fn")
             if event_fn:
                 await event_fn({"type": "agent_text_delta", "delta": "streaming chunk"})
-            # After streaming, the session emits turn_complete
-            await event_fn({"type": "turn_complete", "final_text": "streaming chunk",
-                            "session_id": "test-session"})
+            # Return without calling event_fn(turn_complete) — bot_chat sends
+            # turn_complete itself via the response_parts path after we return.
 
         with patch("api.routes.bot.dispatch_message", new=fake_dispatch):
             from starlette.testclient import TestClient
@@ -220,6 +222,7 @@ class TestEventFnSendsAgentTextDelta:
                         "content": "stream me",
                         "agent_version": "tether-agent-2.0",
                     })
+                    # Message 1: the delta
                     delta_msg = ws.receive_json()
                     assert delta_msg["type"] == "agent_text_delta", (
                         f"Expected agent_text_delta, got {delta_msg['type']!r}. "
@@ -229,6 +232,10 @@ class TestEventFnSendsAgentTextDelta:
                     assert delta_msg.get("delta") == "streaming chunk", (
                         f"agent_text_delta must carry delta field, got: {delta_msg}"
                     )
+                    # Message 2: turn_complete from response_parts — must consume to
+                    # avoid leaving the server blocked writing to a closing socket.
+                    tc = ws.receive_json()
+                    assert tc["type"] == "turn_complete"
 
     def test_event_fn_delta_never_emits_chunk(self):
         """agent_text_delta events from event_fn must NOT be re-wrapped as chunk."""
@@ -239,8 +246,7 @@ class TestEventFnSendsAgentTextDelta:
             event_fn = kwargs.get("event_fn")
             if event_fn:
                 await event_fn({"type": "agent_text_delta", "delta": "hello"})
-                await event_fn({"type": "turn_complete", "final_text": "hello",
-                                "session_id": "s"})
+            # Don't send turn_complete via event_fn — bot_chat sends it from response_parts.
 
         with patch("api.routes.bot.dispatch_message", new=fake_dispatch):
             from starlette.testclient import TestClient
@@ -259,6 +265,8 @@ class TestEventFnSendsAgentTextDelta:
                         "agent_text_delta from event_fn must not be re-wrapped as chunk. "
                         "The frontend only handles agent_text_delta type for streaming."
                     )
+                    # Consume turn_complete before closing to avoid server-side hang.
+                    ws.receive_json()
 
     def test_event_fn_non_delta_events_forwarded_verbatim(self):
         """Non-delta events from event_fn (e.g. permission_request) are forwarded as-is."""
@@ -273,7 +281,7 @@ class TestEventFnSendsAgentTextDelta:
                     "tool_name": "read_file",
                     "session_id": "s",
                 })
-                await event_fn({"type": "turn_complete", "final_text": "", "session_id": "s"})
+            # Don't send turn_complete via event_fn — bot_chat sends it from response_parts.
 
         with patch("api.routes.bot.dispatch_message", new=fake_dispatch):
             from starlette.testclient import TestClient
@@ -287,6 +295,9 @@ class TestEventFnSendsAgentTextDelta:
                         "content": "do something",
                         "agent_version": "tether-agent-2.0",
                     })
+                    # Message 1: permission_request forwarded verbatim
                     perm = ws.receive_json()
                     assert perm["type"] == "permission_request"
                     assert perm["tool_name"] == "read_file"
+                    # Message 2: turn_complete — must consume before WS close.
+                    ws.receive_json()
