@@ -76,7 +76,9 @@ class RefillLoop:
     async def run_once(self) -> None:
         """Run one full refill cycle across all registered hashes."""
         for options_hash, options in list(self._registry.items()):
-            user_id = self._user_ids.get(options_hash)
+            # Defensive: normalise "" → None so create_key never receives an
+            # empty UUID regardless of how the value entered _user_ids.
+            user_id = self._user_ids.get(options_hash) or None
             deficit = self._deficit(options_hash)
             if deficit > 0:
                 log.info(
