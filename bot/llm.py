@@ -24,6 +24,16 @@ _llm_env_extras: contextvars.ContextVar[dict[str, str] | None] = contextvars.Con
     "_llm_env_extras", default=None
 )
 
+# Per-request user ID — set by _dispatch_v25 before invoking the premium handler so
+# that PipelineBackend.complete() uses the *current* user_id at call time instead of
+# the frozen one baked into the singleton LLMRouter/PipelineBackend instance.
+# This is the fix for the singleton user_id capture bug: without this contextvar,
+# all requests after the first would use the first caller's user_id when acquiring
+# pool handles. Never set at module level; always use .set()/.reset().
+_llm_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_llm_user_id", default=None
+)
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -110,8 +120,25 @@ class PipelineBackend(LLMBackend):
         model: str,
         env: dict[str, str],
     ) -> str:
-        """Acquire a warm handle from the pool, stream result, release."""
+        """Acquire a warm handle from the pool, stream result, release.
+
+        Uses _llm_user_id contextvar at call time (not self._user_id) so that the
+        singleton PipelineBackend correctly routes each request to its own user's pool
+        handle rather than the first caller's user_id that was baked in at construction.
+
+        Only accumulates text from the final result event (subtype=success).  The pool
+        also emits intermediate assistant events with the same text — using both sources
+        would double-count the output.
+
+        reusable is set to True only on clean completion; on any error the handle is
+        released with reusable=False so the pool knows not to reuse a potentially
+        corrupted subprocess.
+        """
         from interactive_agent_layer.session import _stable_options_hash
+
+        # Prefer contextvar user_id (set by _dispatch_v25 per-request) over the
+        # instance attribute (frozen at singleton construction time).
+        effective_user_id = _llm_user_id.get() or self._user_id
 
         options: dict = {
             "model": model,
@@ -121,25 +148,24 @@ class PipelineBackend(LLMBackend):
         options_hash = _stable_options_hash(options)
 
         handle_id = await self._pool_client.acquire(  # type: ignore[union-attr]
-            self._user_id, options_hash, options
+            effective_user_id, options_hash, options
         )
+        ok = False
         try:
-            output_parts: list[str] = []
+            output: str = ""
             async for event in self._pool_client.query_stream(handle_id, prompt):  # type: ignore[union-attr]
                 etype = event.get("type")
-                # result event carries the final text from the subprocess
+                # Use only the final result event — it is the authoritative complete
+                # response from the pool subprocess.  Intermediate assistant events
+                # carry the same text; accumulating both would double the output.
                 if etype == "result" and event.get("subtype") == "success":
-                    text = event.get("result", "")
-                    if text:
-                        output_parts.append(text)
-                # assistant text deltas streamed mid-turn
-                elif etype == "assistant":
-                    for block in event.get("message", {}).get("content", []):
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            output_parts.append(block.get("text", ""))
-            return "".join(output_parts).strip()
+                    output = event.get("result", "")
+                    break
+            ok = True
+            return output.strip()
         finally:
-            await self._pool_client.release(handle_id, reusable=True)  # type: ignore[union-attr]
+            # reusable=True only on clean completion; poisoned handles must not re-enter pool
+            await self._pool_client.release(handle_id, reusable=ok)  # type: ignore[union-attr]
 
     async def _complete_inline(
         self,
@@ -181,11 +207,29 @@ class PipelineBackend(LLMBackend):
         if extras:
             env.update(extras)
 
-        if self._pool_client is not None and self._user_id is not None:
-            output = await asyncio.wait_for(
-                self._complete_via_pool(prompt, model, env),
-                timeout=180,
-            )
+        # Determine effective user_id — prefer the per-request contextvar (set by
+        # _dispatch_v25) over the instance attribute (frozen at construction for singletons).
+        effective_user_id = _llm_user_id.get() or self._user_id
+
+        if self._pool_client is not None and effective_user_id is not None:
+            try:
+                output = await asyncio.wait_for(
+                    self._complete_via_pool(prompt, model, env),
+                    timeout=180,
+                )
+            except Exception as exc:
+                # Pool unreachable / exhausted — fall back to inline spawn so the
+                # request still gets a response.  Log at warning so ops can see
+                # when pool routing is degraded.
+                logger.warning(
+                    "PipelineBackend: pool path failed for user_id=%s, falling back to inline: %s",
+                    effective_user_id,
+                    exc,
+                )
+                output = await asyncio.wait_for(
+                    self._complete_inline(prompt, model, env),
+                    timeout=180,
+                )
         else:
             output = await asyncio.wait_for(
                 self._complete_inline(prompt, model, env),

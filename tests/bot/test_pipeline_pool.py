@@ -394,7 +394,11 @@ class TestPipelineBackendPoolAcquire:
 
     @pytest.mark.asyncio
     async def test_pool_release_called_even_on_query_error(self):
-        """release() must be called in a finally block even if query_stream raises."""
+        """release() must be called in a finally block even if query_stream raises.
+
+        When query_stream fails, _complete_via_pool's finally block must still call
+        release before the error propagates.  The pool path then falls back to inline.
+        """
         from bot.llm import PipelineBackend
 
         pool_client = MagicMock()
@@ -403,19 +407,21 @@ class TestPipelineBackendPoolAcquire:
 
         async def _failing_stream(hid, prompt, session_id="default"):
             raise RuntimeError("pool query failed")
-            yield  # make it a generator
+            yield  # make it a true async generator
 
         pool_client.query_stream = _failing_stream
 
         backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
 
-        with pytest.raises(RuntimeError, match="pool query failed"):
+        # Pool error now triggers inline fallback — mock inline so we don't need claude_agent_sdk
+        with patch.object(backend, "_complete_inline", AsyncMock(return_value="inline-fallback")):
             await backend.complete(
                 messages=[{"role": "user", "content": "test"}],
                 system="sys",
                 model="claude-haiku-4-5-20251001",
             )
 
+        # release must be called despite the stream error (via finally block in _complete_via_pool)
         pool_client.release.assert_awaited_once()
 
     def test_pipeline_backend_without_pool_client_is_pool_unaware(self):
@@ -434,3 +440,247 @@ class TestPipelineBackendPoolAcquire:
         assert user_id_val is None, (
             "PipelineBackend() without args must have no user_id"
         )
+
+
+# ---------------------------------------------------------------------------
+# Code-review findings (post-PR fixes)
+# ---------------------------------------------------------------------------
+
+class TestCodeReviewFindings:
+    """Tests for the 6 code-review findings from the pipeline-pool PR.
+
+    Each test is written to FAIL before the fix is applied, confirming
+    the fix is actually necessary (TDD red → green).
+    """
+
+    # Fix 3 — release reusable=False on error
+    @pytest.mark.asyncio
+    async def test_pool_release_reusable_false_on_query_error(self):
+        """release must be called with reusable=False when query_stream raises.
+
+        Previously reusable=True was unconditional — poisoned handles were
+        returned to the pool and given to the next request.  After Fix 5 the pool
+        path falls back to inline on error, but the finally block in _complete_via_pool
+        still calls release before the error propagates up to the fallback logic.
+        """
+        from bot.llm import PipelineBackend
+
+        pool_client = MagicMock()
+        pool_client.acquire = AsyncMock(return_value="handle-err")
+        pool_client.release = AsyncMock()
+
+        async def _failing_stream(hid, prompt, session_id="default"):
+            raise RuntimeError("stream error")
+            yield  # make it a true async generator
+
+        pool_client.query_stream = _failing_stream
+
+        backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
+
+        # Pool path falls back to inline after stream error — mock inline
+        with patch.object(backend, "_complete_inline", AsyncMock(return_value="inline-fallback")):
+            await backend.complete(
+                messages=[{"role": "user", "content": "test"}],
+                system="sys",
+                model="claude-haiku-4-5-20251001",
+            )
+
+        pool_client.release.assert_awaited_once()
+        _, kwargs = pool_client.release.await_args
+        assert kwargs.get("reusable") is False, (
+            "release must use reusable=False on error — poisoned handle must not re-enter pool"
+        )
+
+    # Fix 4 — no double-counted text
+    @pytest.mark.asyncio
+    async def test_no_double_text_from_result_and_assistant_events(self):
+        """Text from result event must not be duplicated by assistant event text.
+
+        Previously _complete_via_pool appended from BOTH assistant blocks and
+        the result event, producing doubled output when both are emitted by the pool.
+        """
+        from bot.llm import PipelineBackend
+
+        RESPONSE_TEXT = "the answer is forty-two"
+
+        # Pool emits both an assistant text block AND a result event containing the same text.
+        # After the fix only one source should be used.
+        async def _double_emit_stream(hid, prompt, session_id="default"):
+            yield {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": RESPONSE_TEXT}]},
+            }
+            yield {"type": "result", "result": RESPONSE_TEXT, "subtype": "success"}
+
+        pool_client = MagicMock()
+        pool_client.acquire = AsyncMock(return_value="handle-double")
+        pool_client.release = AsyncMock()
+        pool_client.query_stream = _double_emit_stream
+
+        backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
+        result = await backend.complete(
+            messages=[{"role": "user", "content": "question"}],
+            system="sys",
+            model="claude-haiku-4-5-20251001",
+        )
+
+        count = result.content.count(RESPONSE_TEXT)
+        assert count == 1, (
+            f"Text must appear exactly once in output, got {count} copies. "
+            f"Content: {result.content!r}"
+        )
+
+    # Fix 5 — pool fallback to inline on acquire failure
+    @pytest.mark.asyncio
+    async def test_pool_acquire_failure_falls_back_to_inline(self):
+        """When pool acquire() raises, PipelineBackend must fall back to _complete_inline.
+
+        Pool may be exhausted or unreachable; inline spawn must be the safety net.
+        """
+        from bot.llm import PipelineBackend
+
+        pool_client = MagicMock()
+        pool_client.acquire = AsyncMock(side_effect=RuntimeError("pool exhausted"))
+
+        backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
+
+        inline_calls: list = []
+
+        async def _fake_inline(prompt: str, model: str, env: dict) -> str:
+            inline_calls.append(prompt)
+            return "inline-response"
+
+        with patch.object(backend, "_complete_inline", side_effect=_fake_inline):
+            result = await backend.complete(
+                messages=[{"role": "user", "content": "test"}],
+                system="sys",
+                model="claude-haiku-4-5-20251001",
+            )
+
+        assert len(inline_calls) == 1, "_complete_inline must be called as fallback on pool error"
+        assert result.content == "inline-response"
+
+    # Fix 1 — _llm_user_id contextvar overrides frozen self._user_id
+    @pytest.mark.asyncio
+    async def test_llm_user_id_contextvar_overrides_stored_user_id(self):
+        """_llm_user_id contextvar at call time must take precedence over self._user_id.
+
+        This is the singleton fix: LLMRouter/PipelineBackend are created once (singleton)
+        with the first caller's user_id baked in.  The contextvar ensures every subsequent
+        request uses the *current* user_id at call time instead of the frozen one.
+        """
+        from bot.llm import PipelineBackend, _llm_user_id
+
+        acquired_user_ids: list[str] = []
+
+        pool_client = MagicMock()
+
+        async def _acquire(user_id, options_hash, options, timeout_seconds=None):
+            acquired_user_ids.append(user_id)
+            return "handle"
+
+        async def _query_stream(hid, prompt, session_id="default"):
+            yield {"type": "result", "result": "text", "subtype": "success"}
+
+        pool_client.acquire = AsyncMock(side_effect=_acquire)
+        pool_client.release = AsyncMock()
+        pool_client.query_stream = _query_stream
+
+        # Backend created (as if singleton first-call) with user-A
+        backend = PipelineBackend(pool_client=pool_client, user_id="user-id-A")
+
+        # Simulate a different request: contextvar says user-B
+        token = _llm_user_id.set("user-id-B")
+        try:
+            await backend.complete(
+                messages=[{"role": "user", "content": "test"}],
+                system="sys",
+                model="claude-haiku-4-5-20251001",
+            )
+        finally:
+            _llm_user_id.reset(token)
+
+        assert acquired_user_ids == ["user-id-B"], (
+            "acquire() must use _llm_user_id contextvar, not frozen self._user_id. "
+            f"Got: {acquired_user_ids}"
+        )
+
+    # Fix 1 (dispatch side) — _dispatch_v25 sets _llm_user_id
+    @pytest.mark.asyncio
+    async def test_dispatch_v25_sets_llm_user_id_contextvar(self):
+        """_dispatch_v25 must set _llm_user_id contextvar before invoking the premium handler."""
+        import sys
+        from bot.llm import _llm_user_id
+
+        captured: list = []
+
+        async def _capturing_handler(*args, **kwargs):
+            captured.append(_llm_user_id.get())
+            return None
+
+        vault = _make_vault()
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_capturing_handler)
+
+        with patch("bot.agent_dispatch.handle_message", new=AsyncMock()), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, {
+                 "tether_premium": MagicMock(),
+                 "tether_premium.register": mock_register,
+             }):
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", lambda x: None, None, TEST_USER_ID, vault=vault)
+
+        assert captured == [TEST_USER_ID], (
+            f"_dispatch_v25 must set _llm_user_id={TEST_USER_ID!r} before calling handler. "
+            f"Got: {captured}"
+        )
+
+    # Fix 2 — ValueError from handler must not trigger double-invocation
+    @pytest.mark.asyncio
+    async def test_handler_value_error_not_double_invoked(self):
+        """ValueError raised by the premium handler must not trigger a second invocation.
+
+        Previously, ValueError raised inside the vault.materialize block was caught
+        by the same except ValueError clause that handles 'no vault credentials',
+        causing the handler to be called a second time.
+        """
+        import sys
+
+        invocations: list[int] = []
+
+        async def _raising_handler(*args, **kwargs):
+            invocations.append(len(invocations) + 1)
+            raise ValueError("handler internal error")
+
+        vault = _make_vault()  # vault materializes fine — not the source of ValueError
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_raising_handler)
+
+        sent = []
+
+        async def _fake_1_0(text, send_fn, pool, user_id, vault=None, status_fn=None):
+            send_fn("1.0-response")
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, {
+                 "tether_premium": MagicMock(),
+                 "tether_premium.register": mock_register,
+             }):
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", sent.append, None, TEST_USER_ID, vault=vault)
+
+        assert invocations == [1], (
+            f"Handler must be invoked exactly once; invocation count: {invocations}"
+        )
+        # 1.0 fallback should have run (handler raised before sending anything)
+        assert "1.0-response" in sent
