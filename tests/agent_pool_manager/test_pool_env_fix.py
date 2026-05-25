@@ -116,7 +116,7 @@ def test_server_lifespan_initializes_home_pool():
 
 
 @pytest.mark.asyncio
-async def test_spawn_sets_home_env_when_home_pool_active():
+async def test_spawn_sets_home_env_when_home_pool_active(monkeypatch):
     """When HomeDirPool is configured, _spawn_and_prime must set HOME in subprocess env.
 
     If initialize_home_pool() was never called (Bug 2), this HOME injection
@@ -125,6 +125,7 @@ async def test_spawn_sets_home_env_when_home_pool_active():
     from pathlib import Path
     from agent_pool_manager.homes import HomeDirPool
 
+    monkeypatch.delenv("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", raising=False)
     cfg = _make_config()
     pool = Pool(cfg)
 
