@@ -551,6 +551,17 @@ class Pool:
                 options = dict(options)
                 options["mcp_servers"] = {}
 
+        # Inject initialize timeout — tells the SDK how long to wait before
+        # treating a connect() call as failed.  Use setdefault so a caller-
+        # supplied value is not overridden.
+        env = dict(options.get("env") or {})
+        env.setdefault(
+            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT",
+            str(self.config.initialize_timeout_ms),
+        )
+        options = dict(options)
+        options["env"] = env
+
         # Wire subprocess stderr to our logger so CLI errors surface in
         # fly.io's log stream.  Without this, stderr is dropped on the floor.
         def _stderr_cb(line: str) -> None:
