@@ -159,3 +159,28 @@ async def test_interrupt_unknown_handle_returns_404(client_and_pool):
     ac, pool, refill = client_and_pool
     resp = await ac.post("/handle/does-not-exist/interrupt")
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_hint_rejects_empty_user_id(client_and_pool):
+    """POST /hint with user_id='' returns 422 — prevents '' reaching create_key."""
+    ac, pool, refill = client_and_pool
+    resp = await ac.post("/hint", json={
+        "user_id": "",
+        "options_hash": HASH_A,
+        "options": OPTIONS_A,
+    })
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_acquire_rejects_empty_user_id(client_and_pool):
+    """POST /acquire with user_id='' returns 422 — prevents '' reaching pool."""
+    ac, pool, refill = client_and_pool
+    resp = await ac.post("/acquire", json={
+        "user_id": "",
+        "options_hash": HASH_A,
+        "options": OPTIONS_A,
+        "timeout_seconds": 0.1,
+    })
+    assert resp.status_code == 422

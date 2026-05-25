@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class AcquireRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(..., min_length=1)
     options_hash: str
     options: dict[str, Any] = Field(default_factory=dict)
     timeout_seconds: float | None = None
@@ -45,7 +45,7 @@ class QueryRequest(BaseModel):
 
 
 class HintRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(..., min_length=1)
     options_hash: str
     options: dict[str, Any] = Field(default_factory=dict)
 
