@@ -320,3 +320,148 @@ class TestDoubleSendGuard:
             f"Fallback must run when premium never sent output. Got: {sent}"
         assert "premium-partial" not in sent
 
+
+# ---------------------------------------------------------------------------
+# tracked_send must always be called — even for falsy responses
+# ---------------------------------------------------------------------------
+
+class TestTrackedSendAlwaysCalled:
+    """Regression tests for the 'if response:' silent-swallow bug.
+
+    When the premium handler returns '' (empty string) or None, the old gate
+        if response:
+            tracked_send(response)
+    silently skipped send_fn entirely.  response_parts stayed [] and
+    turn_complete was sent with final_text='', causing a blank UI message.
+
+    After the fix (tracked_send(response or '')), send_fn must always be
+    called once — even for falsy responses — so the WS handler's
+    response_parts list is populated and turn_complete carries final_text=''.
+    """
+
+    def _make_paid_patches(self, fake_handler):
+        """Return the common patch context for a paid user calling fake_handler."""
+        import sys
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=fake_handler)
+        mock_tether_premium = MagicMock()
+        return {
+            "sys_modules": {
+                "tether_premium": mock_tether_premium,
+                "tether_premium.register": mock_register,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_empty_string_response_still_calls_send_fn(self):
+        """Premium handler returns '' → send_fn must be called once with ''.
+
+        Before fix: `if response:` evaluates False for '' → send_fn never called
+        → response_parts=[] → final_text=''.
+        After fix: tracked_send(response or '') always fires → response_parts=['']
+        → final_text='' (but send_fn WAS called, preserving tracked_send.called=True).
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_empty(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return ""
+
+        patches = self._make_paid_patches(_returns_empty)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once even for '' response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "", (
+            f"send_fn must be called with '' for empty response. Got: {send_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_none_response_still_calls_send_fn_with_empty_string(self):
+        """Premium handler returns None → send_fn must be called once with ''.
+
+        Session driver (mgr.run_in_session_async) can return None. The gate
+        `if response:` evaluates False for None, silently swallowing the
+        response. Fix: tracked_send(response or '') coerces None → ''.
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_none(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return None
+
+        patches = self._make_paid_patches(_returns_none)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once even for None response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "", (
+            f"send_fn must be called with '' for None response. Got: {send_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_empty_response_still_calls_send_fn_once(self):
+        """Smoke test: non-empty response → send_fn called once with that text.
+
+        Ensures the fix doesn't break the normal (non-empty) happy path.
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_text(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return "Hello from premium"
+
+        patches = self._make_paid_patches(_returns_text)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once for non-empty response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "Hello from premium", (
+            f"send_fn must receive the full response text. Got: {send_calls}"
+        )
+
