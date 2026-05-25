@@ -324,7 +324,7 @@ async def bot_chat(websocket: WebSocket,
                     # further status frames from the session arrive after the ack.
                     await _cancel_and_wait(session_task)
                     await websocket.send_json({"type": "status", "content": "Stopped."})
-                    await websocket.send_json({"type": "done"})
+                    await websocket.send_json({"type": "turn_complete", "final_text": "", "session_id": ""})
                     session_task = None
                     continue  # Back to outer loop — ready for next message
 
@@ -380,7 +380,7 @@ async def bot_chat(websocket: WebSocket,
                         "send another message to continue."
                     ),
                 })
-                await websocket.send_json({"type": "done"})
+                await websocket.send_json({"type": "turn_complete", "final_text": "", "session_id": ""})
                 session_task = None
                 continue
             except Exception as e:
@@ -392,13 +392,13 @@ async def bot_chat(websocket: WebSocket,
                     "type": "error",
                     "message": "Something went wrong. Please try again.",
                 })
-                await websocket.send_json({"type": "done"})
+                await websocket.send_json({"type": "turn_complete", "final_text": "", "session_id": ""})
                 session_task = None
                 continue
 
             session_task = None
             response = "\n\n".join(response_parts) if response_parts else ""
-            await websocket.send_json({"type": "turn_complete", "final_text": response})
+            await websocket.send_json({"type": "turn_complete", "final_text": response, "session_id": ""})
 
     except WebSocketDisconnect:
         await _cancel_and_wait(session_task) if session_task else None

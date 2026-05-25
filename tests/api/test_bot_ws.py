@@ -238,8 +238,9 @@ def test_stop_message_cancels_session():
                 assert status["type"] == "status"
                 assert status["content"] == "Stopped."
 
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                tc = ws.receive_json()
+                assert tc["type"] == "turn_complete"
+                assert tc["final_text"] == ""
 
     # Give the background task a moment to propagate CancelledError
     session_cancelled.wait(timeout=3)
@@ -337,8 +338,9 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
                 assert "timed out" in msg_lower or "timeout" in msg_lower
                 assert "state is saved" in msg_lower or "continue" in msg_lower
                 assert "Internal error" not in error_msg["message"]
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                tc = ws.receive_json()
+                assert tc["type"] == "turn_complete"
+                assert tc["final_text"] == ""
 
                 # Second message — proves loop continued (connection still alive)
                 ws.send_json({"type": "user", "content": "try again", "agent_version": "tether-agent-1.0"})
@@ -348,7 +350,7 @@ def test_bot_ws_timeout_sends_helpful_error_and_continues_loop():
 
 
 def test_session_error_sends_error_keeps_connection():
-    """If handle_message raises a non-timeout error, the WS receives error+done
+    """If handle_message raises a non-timeout error, the WS receives error+turn_complete
     and stays open — the redesigned handler is resilient for all error types."""
     app = _make_app()
     token = _valid_token()
@@ -372,8 +374,9 @@ def test_session_error_sends_error_keeps_connection():
                 ws.send_json({"type": "user", "content": "first message", "agent_version": "tether-agent-1.0"})
                 error = ws.receive_json()
                 assert error["type"] == "error"
-                done = ws.receive_json()
-                assert done["type"] == "done"
+                tc = ws.receive_json()
+                assert tc["type"] == "turn_complete"
+                assert tc["final_text"] == ""
 
                 # Connection must still be alive — next message works
                 ws.send_json({"type": "user", "content": "second message", "agent_version": "tether-agent-1.0"})
