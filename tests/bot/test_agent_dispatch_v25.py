@@ -249,7 +249,8 @@ class TestDoubleSendGuard:
         sent = []
 
         async def _streaming_then_crashing(
-            text, pool, user_id, anchors, current_anchor, *, send_fn, status_fn=None
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
         ):
             send_fn("premium-partial")  # streams something first
             raise RuntimeError("handler crashed mid-stream")
@@ -291,7 +292,8 @@ class TestDoubleSendGuard:
         sent = []
 
         async def _crashing_immediately(
-            text, pool, user_id, anchors, current_anchor, *, send_fn, status_fn=None
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
         ):
             raise RuntimeError("handler failed before sending anything")
 

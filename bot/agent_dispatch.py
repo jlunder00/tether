@@ -243,6 +243,7 @@ async def _dispatch_v25(
     vault: Any = None,
     status_fn: Any = None,
     is_admin: bool = False,
+    pool_client: Any = None,
 ) -> None:
     """Handle tether-agent-2.5: premium session for paid/admin users, 1.0 fallback for free.
 
@@ -250,6 +251,11 @@ async def _dispatch_v25(
     Admin users bypass the subscription check entirely — no subscription row required.
     Free users (non-admin, non-paid) receive an upgrade notice and fall back to tether-agent-1.0.
     If tether-premium is not installed, paid/admin users also fall back to 1.0.
+
+    pool_client is the agent-pool-manager PoolClient.  When provided it is threaded through
+    to the premium handler so PipelineBackend can acquire warm subprocesses instead of spawning
+    inline.  When absent, it is created from config automatically so callers that don't have
+    it on hand still get pool routing.
 
     This function is a clean boundary that maps to a future HTTP endpoint in the
     self-hosted premium access plan (phase P1+).
@@ -275,6 +281,23 @@ async def _dispatch_v25(
             )
 
     if is_admin or is_paid:
+        # Resolve pool_client: use caller-supplied one, or create from config.
+        # Mirror the LayerClient pattern in _dispatch_v2_0: construct lazily from
+        # config rather than requiring callers to pass it explicitly.
+        effective_pool_client = pool_client
+        if effective_pool_client is None:
+            try:
+                from agent_pool_manager.client import from_config
+                from config.loader import config as _cfg
+                effective_pool_client = from_config(_cfg)
+            except Exception:
+                logger.warning(
+                    "dispatch_v25: could not create pool_client from config for user_id=%s"
+                    " — premium handler will run without pool routing",
+                    user_id,
+                    exc_info=True,
+                )
+
         # Wrap send_fn so we can detect whether the premium handler streamed
         # any output before raising.  If it did, we must NOT run handle_message
         # (1.0 fallback) — doing so would splice a second response on top of
@@ -284,15 +307,66 @@ async def _dispatch_v25(
             from tether_premium.register import get_premium_handler
             from db.pg_queries import get_anchors
             from bot.handler_utils import get_current_anchor
+            from bot.llm import _llm_env_extras, _llm_user_id
 
             async with pg.get_conn(pool, user_id) as conn:
                 anchors = await get_anchors(conn)
             current_anchor = get_current_anchor(anchors)
 
-            response = await get_premium_handler()(
-                text, pool, user_id, anchors, current_anchor,
-                send_fn=tracked_send, status_fn=status_fn,
-            )
+            # Inner coroutine to call the handler — defined once and used in
+            # both the vault-materialized and no-vault branches below.
+            async def _invoke_handler() -> Any:
+                return await get_premium_handler()(
+                    text, pool, user_id, anchors, current_anchor,
+                    send_fn=tracked_send, status_fn=status_fn,
+                    pool_client=effective_pool_client,
+                )
+
+            # Set _llm_user_id contextvar so PipelineBackend._complete_via_pool() uses
+            # the current request's user_id at call time, not the frozen one baked into
+            # the singleton LLMRouter/PipelineBackend instance.  This is the fix for the
+            # singleton user_id capture bug: without this, all requests after the first
+            # would route pool handles to the first caller's user_id.
+            uid_token = _llm_user_id.set(user_id)
+            try:
+                # Materialize vault credentials and set _llm_env_extras so every LLM
+                # call inside the premium handler (PipelineBackend, AgentSDKBackend)
+                # inherits the user's OAuth token via the subprocess env.
+                # Pattern mirrors handle_message() in bot/message_handler.py.
+                if vault is not None:
+                    async with vault.with_lock(user_id):
+                        # Sentinel flag: True once we have entered the vault.materialize
+                        # context manager.  Used in except ValueError below to distinguish
+                        # "no credentials stored" (flag=False, safe to call handler without
+                        # vault) from "ValueError raised inside the handler itself" (flag=True,
+                        # must re-raise — otherwise the handler is invoked a second time).
+                        _vault_materialized = False
+                        try:
+                            async with vault.materialize(user_id) as env_extras:
+                                _vault_materialized = True
+                                token = _llm_env_extras.set(dict(env_extras))
+                                try:
+                                    response = await _invoke_handler()
+                                finally:
+                                    _llm_env_extras.reset(token)
+                        except ValueError:
+                            if _vault_materialized:
+                                # ValueError came from inside the handler, not from
+                                # vault.materialize().  Re-raise so the outer except
+                                # Exception handler deals with it (and runs 1.0 fallback).
+                                raise
+                            # No credentials stored for this user — run without env injection.
+                            logger.warning(
+                                "dispatch_v25: no vault credentials for user_id=%s"
+                                " — running premium handler without OAuth env",
+                                user_id,
+                            )
+                            response = await _invoke_handler()
+                else:
+                    response = await _invoke_handler()
+            finally:
+                _llm_user_id.reset(uid_token)
+
             if response:
                 tracked_send(response)
             return
