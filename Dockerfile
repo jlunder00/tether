@@ -58,6 +58,17 @@ RUN mkdir -p /run/tether/creds \
     && chown tether:tether /run/tether/creds \
     && chmod 0700 /run/tether/creds
 
+# Agent pool manager home directory base.
+# /var/lib/ is root-owned — the tether user cannot mkdir here at runtime,
+# so the pool base dir must be pre-created and handed off in the image.
+# Also hand ownership of the Claude home template to tether so that
+# initialize() can write .claude.json into it at first boot (auth seeding).
+RUN mkdir -p /var/lib/tether/claude-homes \
+    && chown tether:tether /var/lib/tether/claude-homes \
+    && chmod 755 /var/lib/tether/claude-homes \
+    && chown tether:tether /etc/claude-home-template \
+    && chmod 755 /etc/claude-home-template
+
 WORKDIR /app
 
 # External dependencies (cached layer — only reruns when requirements.txt changes)

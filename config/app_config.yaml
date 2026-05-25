@@ -30,7 +30,7 @@ agent_pool:
   base_url: "http://127.0.0.1:5002"  # override for remote pool deployments
   enabled: true                 # false = callers fall back to direct spawn (local dev)
   control_response_timeout_seconds: 60  # seconds pool waits for control_response before denying
-  initialize_timeout_ms: 120000         # CLAUDE_CODE_STREAM_CLOSE_TIMEOUT injected into subprocess env (ms)
+  initialize_timeout_ms: 240000         # CLAUDE_CODE_STREAM_CLOSE_TIMEOUT injected into subprocess env (ms)
   home_dir_base: /var/lib/tether/claude-homes    # isolated home dirs for subprocesses
   home_dir_template: /etc/claude-home-template   # seed state copied into each home dir at init
 
