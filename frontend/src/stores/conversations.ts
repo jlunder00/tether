@@ -74,10 +74,16 @@ export const useConversationsStore = defineStore('conversations', () => {
   async function loadMessages(id: string): Promise<void> {
     const res = await api(`/api/conversations/${id}/messages?limit=50`)
     if (!res.ok) return
-    const page: MessagesPage = await res.json()
+    let page: MessagesPage
+    try {
+      page = await res.json()
+    } catch {
+      // Non-JSON response (e.g. HTML from SPA fallback on infrastructure error) — fail silently.
+      return
+    }
     // API returns newest-first; reverse for display (oldest-first)
-    setMessages(id, [...page.messages].reverse())
-    setHasMore(id, page.has_more)
+    setMessages(id, [...(page.messages ?? [])].reverse())
+    setHasMore(id, page.has_more ?? false)
   }
 
   async function loadMessagesOlder(conversationId: string): Promise<void> {
@@ -89,10 +95,16 @@ export const useConversationsStore = defineStore('conversations', () => {
     const qs = new URLSearchParams({ limit: '50', before_id: beforeId })
     const res = await api(`/api/conversations/${conversationId}/messages?${qs}`)
     if (!res.ok) return
-    const page: MessagesPage = await res.json()
-    const older = [...page.messages].reverse()
+    let page: MessagesPage
+    try {
+      page = await res.json()
+    } catch {
+      // Non-JSON response — fail silently; preserve existing messages.
+      return
+    }
+    const older = [...(page.messages ?? [])].reverse()
     setMessages(conversationId, [...older, ...current])
-    setHasMore(conversationId, page.has_more)
+    setHasMore(conversationId, page.has_more ?? false)
   }
 
   function appendMessage(conversationId: string, msg: ConversationMessage): void {

@@ -272,7 +272,7 @@ async def list_conversation_messages(
     """Return messages for a conversation, newest first, with cursor pagination.
 
     Uses `before_id` cursor: returns rows with id < before_id so callers can
-    paginate backwards through history. Returns {"items": [...], "has_more": bool}.
+    paginate backwards through history. Returns {"messages": [...], "has_more": bool}.
 
     Note: `before_id` is an integer-typed primary key on conversation_history —
     this cursor approach is stable under concurrent inserts, unlike offset-based
@@ -292,7 +292,7 @@ async def list_conversation_messages(
         SELECT
             ch.id::text           AS id,
             ch.role,
-            ch.body               AS content,
+            ch.body,
             ch.conversation_id::text AS conversation_id,
             ch.ts                 AS created_at,
             ch.source,
@@ -307,5 +307,5 @@ async def list_conversation_messages(
     )
 
     has_more = len(rows) > limit
-    items = [dict(r) for r in rows[:limit]]
-    return {"items": items, "has_more": has_more}
+    messages = [dict(r) for r in rows[:limit]]
+    return {"messages": messages, "has_more": has_more}
