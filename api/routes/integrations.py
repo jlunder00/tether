@@ -490,8 +490,22 @@ async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
     logger.info("anthropic/start: request for user_id=%s", user_id)
 
     if user_id in _pending_setups:
-        logger.info("anthropic/start: discarding stale pending setup for user_id=%s", user_id)
-        _pending_setups.pop(user_id)
+        old_entry = _pending_setups.pop(user_id)
+        old_session_id = old_entry.get("session_id")
+        logger.info(
+            "anthropic/start: canceling stale pending setup for user_id=%s session_id=%s",
+            user_id, old_session_id,
+        )
+        if old_session_id:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.delete(f"{_POOL_MANAGER_BASE_URL}/setup-token/{old_session_id}")
+            except Exception:
+                logger.warning(
+                    "anthropic/start: failed to cancel stale session_id=%s (continuing)",
+                    old_session_id,
+                    exc_info=True,
+                )
 
     try:
         async with httpx.AsyncClient(timeout=90.0) as client:

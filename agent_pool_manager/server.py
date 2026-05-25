@@ -183,8 +183,8 @@ class ControlResponseRequest(BaseModel):
 
 
 class SetupTokenCompleteRequest(BaseModel):
-    session_id: str
-    code: str
+    session_id: str = Field(..., min_length=1)
+    code: str = Field(..., min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +467,11 @@ def build_app(
     # Spawns ``claude setup-token`` in a PTY, waits for the Anthropic auth
     # URL, and returns it along with a session_id the caller uses to submit
     # the OAuth code via POST /setup-token/complete.
+    #
+    # Security note: this endpoint is unauthenticated at the pool-manager
+    # layer (consistent with /acquire and /hint).  Access control is enforced
+    # by the API service that proxies here — callers must not expose the pool
+    # manager port (5002) to untrusted networks.
     # -----------------------------------------------------------------------
     @app.post("/setup-token")
     async def setup_token_start(request: Request) -> JSONResponse:
@@ -514,6 +519,23 @@ def build_app(
         )
         log.info("setup_token/complete: session_id=%s result=%s", req.session_id, result)
         return JSONResponse({"result": result, "token": token if token else None})
+
+    # -----------------------------------------------------------------------
+    # DELETE /setup-token/{session_id}
+    #
+    # Cancels a pending setup-token session, killing the pexpect child.
+    # Called by the API proxy when a user restarts /start to prevent
+    # orphaned subprocess accumulation.
+    # -----------------------------------------------------------------------
+    @app.delete("/setup-token/{session_id}", status_code=204)
+    async def setup_token_cancel(session_id: str, request: Request) -> None:
+        entry = _setup_token_sessions.pop(session_id, None)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="session not found or expired")
+        child = entry["child"]
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _close_child, child)
+        log.info("setup_token/cancel: session_id=%s child reaped", session_id)
 
     return app
 

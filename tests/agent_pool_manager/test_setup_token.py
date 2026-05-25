@@ -98,3 +98,43 @@ async def test_setup_token_complete_unknown_session(client_and_pool):
         "code": "whatever",
     })
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_setup_token_cancel_reaps_session(client_and_pool):
+    """DELETE /setup-token/{session_id} removes the session and returns 204."""
+    ac, pool, refill = client_and_pool
+    fake_child = MagicMock()
+    fake_url = "https://console.anthropic.com/oauth/authorize?code=abc"
+
+    with patch("agent_pool_manager.server._start_pexpect_sync", return_value=(fake_child, fake_url)):
+        start_resp = await ac.post("/setup-token", json={})
+    session_id = start_resp.json()["session_id"]
+
+    resp = await ac.delete(f"/setup-token/{session_id}")
+    assert resp.status_code == 204
+
+    # Session should be gone — complete now 404s
+    complete_resp = await ac.post("/setup-token/complete", json={
+        "session_id": session_id,
+        "code": "code",
+    })
+    assert complete_resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_setup_token_cancel_unknown_session_returns_404(client_and_pool):
+    """DELETE /setup-token/{unknown} returns 404."""
+    ac, pool, refill = client_and_pool
+    resp = await ac.delete("/setup-token/does-not-exist")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_setup_token_complete_rejects_empty_fields(client_and_pool):
+    """POST /setup-token/complete with empty session_id or code returns 422."""
+    ac, pool, refill = client_and_pool
+    resp = await ac.post("/setup-token/complete", json={"session_id": "", "code": "code"})
+    assert resp.status_code == 422
+    resp2 = await ac.post("/setup-token/complete", json={"session_id": "sess", "code": ""})
+    assert resp2.status_code == 422
