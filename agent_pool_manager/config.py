@@ -44,6 +44,18 @@ class AgentPoolConfig:
     as failed.  Must be shorter than prime_timeout_seconds so a hung transport
     is detected and killed before the priming phase would time out anyway."""
 
+    initialize_timeout_ms: int = 120000
+    """Value injected as CLAUDE_CODE_STREAM_CLOSE_TIMEOUT (ms) in subprocess env.
+    The SDK uses this as its internal initialize timeout (floor: 60 000 ms).
+    Default: 120 000 ms (2 min)."""
+
+    home_dir_base: str = "/var/lib/tether/claude-homes"
+    """Directory where isolated per-subprocess home dirs are created."""
+
+    home_dir_template: str = "/etc/claude-home-template"
+    """Directory copied into each home dir at initialization.
+    If it does not exist, home dirs start empty (lock-contention fix still applies)."""
+
 
 _FIELD_NAMES = {f.name for f in fields(AgentPoolConfig)}
 

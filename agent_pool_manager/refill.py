@@ -98,6 +98,10 @@ class RefillLoop:
                     )
                     break
 
+        # TTL sweep — evict any stale home dir assignments each cycle.
+        if self._pool._home_pool is not None:
+            await self._pool._home_pool.sweep()
+
     async def run(self) -> None:
         """Continuous refill loop — run as an asyncio task."""
         self._running = True

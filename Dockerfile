@@ -34,6 +34,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 ARG CLAUDE_CODE_VERSION=2.1.116
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
+# Home directory template for the agent pool manager.
+# Running `claude --version` once causes the CLI to write its initial config
+# (~/.claude.json, ~/.claude/) into the temp home.  We snapshot that state so
+# each warm subprocess gets a pre-seeded home dir, eliminating first-run setup
+# time and ~/.claude.json lock contention on concurrent spawns.
+# If the CLI produces no files (e.g. newer version skips auto-init), the
+# template dir is left empty — the isolation benefit still applies.
+RUN HOME=/tmp/claude-template \
+      claude --version 2>/dev/null || true \
+    && mkdir -p /etc/claude-home-template \
+    && cp -r /tmp/claude-template/. /etc/claude-home-template/ 2>/dev/null || true \
+    && chmod -R a+rX /etc/claude-home-template
+
 # Non-root user for running services. UID 1000 matches the default Pi user
 # so bind-mounted /data files are accessible without permission issues.
 RUN useradd -m -u 1000 -s /bin/bash tether
