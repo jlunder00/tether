@@ -188,7 +188,7 @@ async def test_dispatch_2_0_creates_layer_session_with_correct_options():
     assert call_kwargs.kwargs.get("agent_version") == "tether-agent-2.0"
 
     opts = call_kwargs.kwargs.get("options", {})
-    assert opts.get("model") == "haiku-4.5"
+    assert opts.get("model") == "claude-haiku-4-5-20251001"
     assert opts.get("max_turns") == 2
     assert opts.get("permission_mode") == "auto"
     expected_tools = [

@@ -27,7 +27,7 @@ def _make_pool(**overrides) -> Pool:
 
 def _base_options() -> dict:
     return {
-        "model": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5-20251001",
         "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"},
         "mcp_servers": ["tether"],
     }
