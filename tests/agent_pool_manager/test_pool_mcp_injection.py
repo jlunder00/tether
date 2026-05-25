@@ -25,7 +25,7 @@ from agent_pool_manager.config import AgentPoolConfig
 
 def test_expand_list_tether_placeholder():
     """['tether'] placeholder → full SSE config dict with Bearer header."""
-    options = {"model": "haiku-4.5", "mcp_servers": ["tether"]}
+    options = {"model": "claude-haiku-4-5-20251001", "mcp_servers": ["tether"]}
     result = _expand_mcp_placeholders(options, mcp_key="test-key-abc")
     assert isinstance(result["mcp_servers"], dict)
     assert "tether" in result["mcp_servers"]
@@ -60,7 +60,7 @@ def test_expand_passthrough_none():
 
 def test_expand_passthrough_no_key():
     """Options without mcp_servers key are returned unchanged."""
-    options = {"model": "haiku-4.5"}
+    options = {"model": "claude-haiku-4-5-20251001"}
     result = _expand_mcp_placeholders(options, mcp_key="ignored")
     assert "mcp_servers" not in result
 
@@ -83,7 +83,7 @@ def _make_pool(pg_pool=None) -> Pool:
 
 def _base_options() -> dict[str, Any]:
     return {
-        "model": "haiku-4.5",
+        "model": "claude-haiku-4-5-20251001",
         "max_turns": 2,
         "permission_mode": "auto",
         "mcp_servers": ["tether"],

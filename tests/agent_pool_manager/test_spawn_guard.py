@@ -30,13 +30,13 @@ from .fake_client import FakeClient
 
 HASH_A = "aaa111"
 OPTIONS_WITH_TOKEN = {
-    "model": "claude-haiku-4-5",
+    "model": "claude-haiku-4-5-20251001",
     "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token-abc123"},
 }
-OPTIONS_NO_ENV = {"model": "claude-haiku-4-5"}
-OPTIONS_EMPTY_ENV = {"model": "claude-haiku-4-5", "env": {}}
+OPTIONS_NO_ENV = {"model": "claude-haiku-4-5-20251001"}
+OPTIONS_EMPTY_ENV = {"model": "claude-haiku-4-5-20251001", "env": {}}
 OPTIONS_EMPTY_TOKEN = {
-    "model": "claude-haiku-4-5",
+    "model": "claude-haiku-4-5-20251001",
     "env": {"CLAUDE_CODE_OAUTH_TOKEN": ""},
 }
 

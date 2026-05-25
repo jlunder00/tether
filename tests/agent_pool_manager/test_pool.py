@@ -13,7 +13,7 @@ from agent_pool_manager.pool import Pool, PoolExhausted
 
 HASH_A = "aaa111"
 HASH_B = "bbb222"
-OPTIONS_A = {"model": "claude-haiku-4-5", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
+OPTIONS_A = {"model": "claude-haiku-4-5-20251001", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
 OPTIONS_B = {"model": "claude-sonnet-4-5", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token-b"}}
 
 

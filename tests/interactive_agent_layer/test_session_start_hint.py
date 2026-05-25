@@ -108,7 +108,7 @@ async def test_session_start_fires_pool_hint(hint_client):
             "user_id": "user-hint-1",
             "user_ws_id": "ws-1",
             "agent_version": "tether-agent-2.0",
-            "options": {"model": "haiku-4.5"},
+            "options": {"model": "claude-haiku-4-5-20251001"},
             "user_message": "hello",
         },
     )

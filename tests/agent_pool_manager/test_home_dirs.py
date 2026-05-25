@@ -246,7 +246,7 @@ async def test_spawn_sets_home_env_var():
             sub = await pool._spawn_and_prime(
                 options_hash="aabbccdd",
                 options={
-                    "model": "claude-haiku-4-5",
+                    "model": "claude-haiku-4-5-20251001",
                     "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test"},
                     "mcp_servers": ["tether"],
                 },
@@ -339,7 +339,7 @@ async def test_spawn_without_home_pool_no_home_env():
         sub = await pool._spawn_and_prime(
             options_hash="aabbccdd",
             options={
-                "model": "claude-haiku-4-5",
+                "model": "claude-haiku-4-5-20251001",
                 "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test"},
             },
             user_id=None,

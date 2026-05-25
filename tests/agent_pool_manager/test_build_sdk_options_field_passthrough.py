@@ -151,8 +151,8 @@ def test_build_sdk_options_drops_unknown_keys():
     # This must not raise (i.e. the unknown key was filtered out before
     # being passed to ClaudeAgentOptions(...)).
     sdk_options = Pool._build_sdk_options({
-        "model": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5-20251001",
         "_some_internal_unknown_key": "should be dropped",
         "nonsense": 123,
     })
-    assert sdk_options.model == "claude-haiku-4-5"
+    assert sdk_options.model == "claude-haiku-4-5-20251001"
