@@ -20,8 +20,10 @@ from claude_agent_sdk.types import (
 
 from .config import AgentPoolConfig
 from .control import ControlBridge, ControlTimeout
+from .homes import HomeDirPool
 
 if TYPE_CHECKING:
+    from pathlib import Path
     from .metrics import PoolMetrics
 
 log = logging.getLogger(__name__)
@@ -182,6 +184,9 @@ class Subprocess:
     # None when pool has no DB access or no user_id was available at spawn.
     mcp_key_id: str | None = None
     mcp_user_id: str | None = None
+    # Isolated home directory assigned at spawn time; released on _terminate.
+    # None when home pool is not configured.
+    home_path: "Path | None" = None
 
     def is_expired(self, max_age_seconds: int) -> bool:
         return (time.monotonic() - self.spawned_at) > max_age_seconds
@@ -213,6 +218,18 @@ class Pool:
         self._metrics: "PoolMetrics | None" = None
         # optional asyncpg pool for ephemeral MCP key creation/revocation
         self._pg_pool: Any = pg_pool
+        # optional home directory pool — set via initialize_home_pool()
+        self._home_pool: HomeDirPool | None = None
+
+    async def initialize_home_pool(self) -> None:
+        """Create and seed the home directory pool.
+
+        Must be called once before _spawn_and_prime if home isolation is
+        desired.  Safe to call multiple times (idempotent).
+        """
+        if self._home_pool is None:
+            self._home_pool = HomeDirPool(self.config)
+        await self._home_pool.initialize()
 
     # ------------------------------------------------------------------
     # Public API
@@ -562,6 +579,16 @@ class Pool:
         options = dict(options)
         options["env"] = env
 
+        # Assign an isolated home directory if the home pool is available.
+        # This eliminates ~/.claude.json file-lock contention when multiple
+        # subprocesses spawn simultaneously.
+        home_path: "Path | None" = None
+        if self._home_pool is not None:
+            home_path = await self._home_pool.acquire()
+            env = dict(options["env"])
+            env["HOME"] = str(home_path)
+            options["env"] = env
+
         # Wire subprocess stderr to our logger so CLI errors surface in
         # fly.io's log stream.  Without this, stderr is dropped on the floor.
         def _stderr_cb(line: str) -> None:
@@ -681,6 +708,8 @@ class Pool:
                         mcp_key_id,
                         exc_info=True,
                     )
+            if home_path is not None and self._home_pool is not None:
+                self._home_pool.release(home_path)
             raise
 
         now = time.monotonic()
@@ -693,6 +722,7 @@ class Pool:
             callback_ctx=ctx,
             mcp_key_id=mcp_key_id,
             mcp_user_id=user_id,
+            home_path=home_path,
         )
 
     @staticmethod
@@ -800,3 +830,7 @@ class Pool:
                     sub.mcp_key_id,
                     exc_info=True,
                 )
+
+        # Return the isolated home directory to the pool.
+        if sub.home_path is not None and self._home_pool is not None:
+            self._home_pool.release(sub.home_path)
