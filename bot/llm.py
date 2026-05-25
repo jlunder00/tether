@@ -64,10 +64,105 @@ class LLMBackend(ABC):
 # ---------------------------------------------------------------------------
 
 class PipelineBackend(LLMBackend):
-    """Invokes the Claude agent SDK. Always available as fallback."""
+    """Invokes the Claude agent SDK.
+
+    When constructed with pool_client + user_id, routes through the agent-pool-manager
+    (acquire → query_stream → release) instead of spawning a subprocess inline.  This
+    is the preferred path for the 2.5 premium pipeline where subprocesses are kept warm
+    and reused across requests.
+
+    Without pool_client (default), falls back to the original inline SDK spawn.  This
+    preserves backward compatibility for the 1.0 pipeline and any caller that constructs
+    PipelineBackend directly without pool wiring.
+    """
+
+    def __init__(
+        self,
+        pool_client: object | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        self._pool_client = pool_client
+        self._user_id = user_id
 
     def is_available(self) -> bool:
         return True
+
+    def _build_prompt(
+        self,
+        messages: list[dict],
+        system: str | list[str],
+    ) -> str:
+        """Flatten system + messages into a single text prompt."""
+        parts = []
+        if isinstance(system, list):
+            parts.append("\n".join(system))
+        else:
+            parts.append(system)
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            parts.append(f"\n[{role}]\n{content}")
+        return "\n".join(parts)
+
+    async def _complete_via_pool(
+        self,
+        prompt: str,
+        model: str,
+        env: dict[str, str],
+    ) -> str:
+        """Acquire a warm handle from the pool, stream result, release."""
+        from interactive_agent_layer.session import _stable_options_hash
+
+        options: dict = {
+            "model": model,
+            "permission_mode": "bypassPermissions",
+            "env": env,
+        }
+        options_hash = _stable_options_hash(options)
+
+        handle_id = await self._pool_client.acquire(  # type: ignore[union-attr]
+            self._user_id, options_hash, options
+        )
+        try:
+            output_parts: list[str] = []
+            async for event in self._pool_client.query_stream(handle_id, prompt):  # type: ignore[union-attr]
+                etype = event.get("type")
+                # result event carries the final text from the subprocess
+                if etype == "result" and event.get("subtype") == "success":
+                    text = event.get("result", "")
+                    if text:
+                        output_parts.append(text)
+                # assistant text deltas streamed mid-turn
+                elif etype == "assistant":
+                    for block in event.get("message", {}).get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            output_parts.append(block.get("text", ""))
+            return "".join(output_parts).strip()
+        finally:
+            await self._pool_client.release(handle_id, reusable=True)  # type: ignore[union-attr]
+
+    async def _complete_inline(
+        self,
+        prompt: str,
+        model: str,
+        env: dict[str, str],
+    ) -> str:
+        """Original inline SDK spawn path (fallback when no pool_client)."""
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+        opts = ClaudeAgentOptions(
+            model=model,
+            permission_mode="bypassPermissions",
+            env=env,
+        )
+
+        parts: list[str] = []
+        async for msg in query(prompt=prompt, options=opts):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        parts.append(block.text)
+        return "".join(parts).strip()
 
     async def complete(
         self,
@@ -79,40 +174,24 @@ class PipelineBackend(LLMBackend):
         thinking_budget: int = 8000,
         max_tokens: int = 8096,
     ) -> LLMResponse:
-        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
-
-        prompt_parts = []
-        if isinstance(system, list):
-            prompt_parts.append("\n".join(system))
-        else:
-            prompt_parts.append(system)
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            prompt_parts.append(f"\n[{role}]\n{content}")
-        prompt = "\n".join(prompt_parts)
+        prompt = self._build_prompt(messages, system)
 
         env: dict[str, str] = {}
         extras = _llm_env_extras.get()
         if extras:
             env.update(extras)
 
-        opts = ClaudeAgentOptions(
-            model=model,
-            permission_mode="bypassPermissions",
-            env=env,
-        )
+        if self._pool_client is not None and self._user_id is not None:
+            output = await asyncio.wait_for(
+                self._complete_via_pool(prompt, model, env),
+                timeout=180,
+            )
+        else:
+            output = await asyncio.wait_for(
+                self._complete_inline(prompt, model, env),
+                timeout=180,
+            )
 
-        async def _collect() -> str:
-            parts: list[str] = []
-            async for msg in query(prompt=prompt, options=opts):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            parts.append(block.text)
-            return "".join(parts).strip()
-
-        output = await asyncio.wait_for(_collect(), timeout=180)
         return LLMResponse(
             content=output,
             tool_calls=[],
