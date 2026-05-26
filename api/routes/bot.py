@@ -406,6 +406,11 @@ async def bot_chat(websocket: WebSocket,
             session_task = None
             if not turn_complete_sent[0]:
                 response = "\n\n".join(response_parts) if response_parts else ""
+                logger.info(
+                    "bot_chat: sending turn_complete final_text_chars=%d user_id=%s",
+                    len(response),
+                    user_id,
+                )
                 await websocket.send_json({"type": "turn_complete", "final_text": response, "session_id": ""})
 
     except WebSocketDisconnect:

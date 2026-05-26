@@ -465,3 +465,112 @@ class TestTrackedSendAlwaysCalled:
             f"send_fn must receive the full response text. Got: {send_calls}"
         )
 
+
+# ---------------------------------------------------------------------------
+# delivery log — logger.info must be emitted after tracked_send
+# ---------------------------------------------------------------------------
+
+class TestDeliveryLog:
+    """Regression tests for the delivery log added to _dispatch_v25.
+
+    After tracked_send(response or ""), a logger.info line must be emitted
+    recording the number of chars delivered. This is the ops signal that
+    lets us confirm end-to-end delivery in production logs without digging
+    through WS frames.
+
+    Tests assert:
+    - logger.info is called with content that includes "dispatch_v25" and
+      "response delivered" for non-empty response
+    - the chars= field reflects len(response) for a non-empty response
+    - the log is also emitted for empty-string response (chars=0)
+    """
+
+    def _make_paid_patches(self, fake_handler):
+        import sys
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=fake_handler)
+        mock_tether_premium = MagicMock()
+        return {
+            "sys_modules": {
+                "tether_premium": mock_tether_premium,
+                "tether_premium.register": mock_register,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_delivery_log_emitted_with_correct_char_count(self):
+        """Non-empty premium response → logger.info emitted with chars=len(response)."""
+        import sys
+        import logging
+
+        response_text = "Hello from premium"
+
+        async def _returns_text(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return response_text
+
+        patches = self._make_paid_patches(_returns_text)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]), \
+             patch("bot.agent_dispatch.logger") as mock_logger:
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", lambda m: None, None, TEST_USER_ID)
+
+        # Find the delivery info call
+        info_calls = [
+            str(call) for call in mock_logger.info.call_args_list
+            if "dispatch_v25" in str(call) and "delivered" in str(call)
+        ]
+        assert info_calls, (
+            "logger.info must be called with 'dispatch_v25' and 'delivered' "
+            f"after tracked_send. info calls: {mock_logger.info.call_args_list}"
+        )
+        # The call should include the correct char count
+        delivery_call_str = info_calls[0]
+        assert str(len(response_text)) in delivery_call_str or \
+               f"chars={len(response_text)}" in delivery_call_str, (
+            f"Delivery log must include chars={len(response_text)}. Got: {delivery_call_str}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delivery_log_emitted_for_empty_response(self):
+        """Empty premium response → delivery log still emitted (chars=0)."""
+        import sys
+
+        async def _returns_empty(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return ""
+
+        patches = self._make_paid_patches(_returns_empty)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]), \
+             patch("bot.agent_dispatch.logger") as mock_logger:
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", lambda m: None, None, TEST_USER_ID)
+
+        info_calls = [
+            str(call) for call in mock_logger.info.call_args_list
+            if "dispatch_v25" in str(call) and "delivered" in str(call)
+        ]
+        assert info_calls, (
+            "Delivery logger.info must fire even for empty response. "
+            f"info calls: {mock_logger.info.call_args_list}"
+        )

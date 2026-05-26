@@ -368,6 +368,11 @@ async def _dispatch_v25(
                 _llm_user_id.reset(uid_token)
 
             tracked_send(response or "")
+            logger.info(
+                "dispatch_v25: response delivered via tracked_send, chars=%d user_id=%s",
+                len(response or ""),
+                user_id,
+            )
             return
         except (ImportError, NotImplementedError) as exc:
             # Log exc_info so the actual missing symbol or not-implemented site
