@@ -212,24 +212,10 @@ class PipelineBackend(LLMBackend):
         effective_user_id = _llm_user_id.get() or self._user_id
 
         if self._pool_client is not None and effective_user_id is not None:
-            try:
-                output = await asyncio.wait_for(
-                    self._complete_via_pool(prompt, model, env),
-                    timeout=180,
-                )
-            except Exception as exc:
-                # Pool unreachable / exhausted — fall back to inline spawn so the
-                # request still gets a response.  Log at warning so ops can see
-                # when pool routing is degraded.
-                logger.warning(
-                    "PipelineBackend: pool path failed for user_id=%s, falling back to inline: %s",
-                    effective_user_id,
-                    exc,
-                )
-                output = await asyncio.wait_for(
-                    self._complete_inline(prompt, model, env),
-                    timeout=180,
-                )
+            output = await asyncio.wait_for(
+                self._complete_via_pool(prompt, model, env),
+                timeout=180,
+            )
         else:
             output = await asyncio.wait_for(
                 self._complete_inline(prompt, model, env),
