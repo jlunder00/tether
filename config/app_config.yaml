@@ -35,6 +35,7 @@ agent_pool:
   home_dir_template: /etc/claude-home-template   # seed state copied into each home dir at init
 
 llm:
+  layer_base_url: "http://127.0.0.1:5003"
   use_v3: false
   v2_fallback: true
   mcp_server_url: "http://localhost:5001/sse"
