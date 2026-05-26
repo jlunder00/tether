@@ -143,19 +143,21 @@ async function onSend() {
   streamingBubble.value = ''
   const convId = selectedId.value
 
-  await chat.send(text, (chunk: string) => {
+  const finalText = await chat.send(text, (chunk: string) => {
     if (streamingBubble.value !== null) {
       streamingBubble.value += chunk
     }
     scrollToBottom()
   })
 
-  // Finalize streaming bubble as assistant message
-  if (streamingBubble.value) {
+  // Prefer turn_complete.final_text as the authoritative message body; fall back
+  // to accumulated delta text for transports that omit final_text.
+  const messageBody = finalText || streamingBubble.value
+  if (messageBody) {
     const assistantMsg: ConversationMessage = {
       id: `local-assistant-${Date.now()}`,
       role: 'assistant',
-      body: streamingBubble.value,
+      body: messageBody,
       source: 'chat',
       channel: 'web',
       created_at: new Date().toISOString(),
