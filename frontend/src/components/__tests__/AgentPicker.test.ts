@@ -69,10 +69,12 @@ describe('AgentPicker', () => {
   })
 
   it('shows trial badge on 2.5 option', async () => {
+    const { useAgentPickerStore } = await import('../../stores/agentPicker')
+    const store = useAgentPickerStore()
+    store.setTrialRemaining(7)
+
     const { default: AgentPicker } = await import('../AgentPicker.vue')
-    const wrapper = mount(AgentPicker, {
-      props: { trialMessagesLeft: 7 },
-    })
+    const wrapper = mount(AgentPicker)
     await wrapper.find('button').trigger('click')
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('7')
@@ -151,8 +153,12 @@ describe('AgentPicker', () => {
     const authStore = useAuthStore()
     authStore.user = { user_id: 'u1', username: 'test', is_admin: false, is_paid: false }
 
+    const { useAgentPickerStore } = await import('../../stores/agentPicker')
+    const pickerStore = useAgentPickerStore()
+    pickerStore.setTrialRemaining(7)
+
     const { default: AgentPicker } = await import('../AgentPicker.vue')
-    const wrapper = mount(AgentPicker, { props: { trialMessagesLeft: 7 } })
+    const wrapper = mount(AgentPicker)
     await wrapper.find('button').trigger('click')
     await wrapper.vm.$nextTick()
 
@@ -165,8 +171,12 @@ describe('AgentPicker', () => {
     const authStore = useAuthStore()
     authStore.user = { user_id: 'u1', username: 'test', is_admin: false, is_paid: true }
 
+    const { useAgentPickerStore } = await import('../../stores/agentPicker')
+    const pickerStore = useAgentPickerStore()
+    pickerStore.setTrialRemaining(7)
+
     const { default: AgentPicker } = await import('../AgentPicker.vue')
-    const wrapper = mount(AgentPicker, { props: { trialMessagesLeft: 7 } })
+    const wrapper = mount(AgentPicker)
     await wrapper.find('button').trigger('click')
     await wrapper.vm.$nextTick()
 

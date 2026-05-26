@@ -1,0 +1,576 @@
+"""Tests for tether-agent-2.5 dispatch path in agent_dispatch.py.
+
+M4 wires a real 2.5 path: paid users get the premium session handler;
+free users receive an upgrade notice and fall back to tether-agent-1.0.
+
+M4 hotfix: admin users bypass the subscription check entirely and are
+routed directly to the premium path regardless of subscription row.
+
+All DB and premium-package interactions are fully mocked.
+"""
+from __future__ import annotations
+
+import os
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+# Must be set before config loading is triggered (jwt.secret is required).
+os.environ.setdefault("TETHER_JWT_SECRET", "test-secret-for-tests")
+
+TEST_USER_ID = "00000000-0000-0000-0000-000000000042"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+async def _fake_handle_1_0(text, send_fn, pool, user_id, vault=None, status_fn=None):
+    send_fn("1.0-response")
+
+
+def _make_conn_ctx(is_paid_return=False):
+    """Mock async context manager that yields a conn where get_user_is_paid returns is_paid_return."""
+    mock_conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx
+
+
+# ---------------------------------------------------------------------------
+# _dispatch_v25() — must exist and behave correctly
+# ---------------------------------------------------------------------------
+
+class TestDispatchV25:
+    @pytest.mark.asyncio
+    async def test_free_user_gets_notice_and_10_fallback(self):
+        """Free user: upgrade notice sent, 1.0 handle_message called."""
+        sent = []
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=False)):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        # An upgrade/fallback notice was sent before the 1.0 response
+        assert len(sent) >= 2, f"Expected notice + 1.0-response, got: {sent}"
+        assert any(
+            "pro" in s.lower() or "paid" in s.lower() or "1.0" in s or "free" in s.lower()
+            for s in sent
+        ), f"Free user must see upgrade/fallback notice. Got: {sent}"
+        assert "1.0-response" in sent
+
+    @pytest.mark.asyncio
+    async def test_paid_user_calls_premium_and_no_stub(self):
+        """Paid user: premium handler called, no upgrade/stub notice sent."""
+        import sys
+
+        sent = []
+        mock_premium_handler = AsyncMock(return_value="Premium reply")
+
+        # Inject a fake tether_premium.register into sys.modules so the
+        # lazy import inside _dispatch_v25 succeeds without tether-premium installed.
+        mock_register = MagicMock()
+        # get_premium_handler() → the handler callable
+        mock_register.get_premium_handler = MagicMock(return_value=mock_premium_handler)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        mock_premium_handler.assert_awaited_once()
+        assert "Premium reply" in sent
+        # No stub/upgrade notice for paid user
+        assert not any(
+            "1.0" in s or "free" in s.lower() or "not yet wired" in s
+            for s in sent
+        ), f"Paid user must not see 1.0/free/stub notices. Got: {sent}"
+
+    @pytest.mark.asyncio
+    async def test_subscription_failure_falls_back_gracefully(self):
+        """DB error on subscription check → treat as free, fall back to 1.0, no crash."""
+        sent = []
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(side_effect=RuntimeError("DB down"))):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        assert "1.0-response" in sent
+
+    @pytest.mark.asyncio
+    async def test_premium_import_error_falls_back_gracefully(self):
+        """If tether_premium is not installed, paid user still gets 1.0 fallback."""
+        sent = []
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}):
+
+            # Simulate premium package absent
+            import sys
+            fake_modules = {
+                "tether_premium": None,
+                "tether_premium.register": None,
+            }
+            with patch.dict(sys.modules, fake_modules):
+                from bot.agent_dispatch import _dispatch_v25
+                await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        # Should have fallen back to 1.0, not crashed
+        assert "1.0-response" in sent
+
+    @pytest.mark.asyncio
+    async def test_admin_user_bypasses_subscription_check_and_gets_premium(self):
+        """Admin user with no subscription row must reach premium handler, not 1.0 fallback.
+
+        is_admin=True must short-circuit the paid check entirely — no subscription
+        row is required.  get_user_is_paid returns False (simulates no row), but
+        the admin flag overrides and routes to the premium path.
+        """
+        import sys
+        sent = []
+        mock_premium_handler = AsyncMock(return_value="Premium reply for admin")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=mock_premium_handler)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx(is_paid_return=False)), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=False)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID, is_admin=True)
+
+        mock_premium_handler.assert_awaited_once()
+        assert "Premium reply for admin" in sent
+        # No upgrade/free-plan notice for admins
+        assert not any(
+            "free plan" in s.lower() or "pro plan" in s.lower()
+            for s in sent
+        ), f"Admin must not see free-plan upgrade notice. Got: {sent}"
+        # Must NOT have fallen back to 1.0
+        assert "1.0-response" not in sent, "Admin must not fall back to 1.0"
+
+    @pytest.mark.asyncio
+    async def test_admin_flag_forwarded_from_dispatch_message(self):
+        """dispatch_message passes is_admin through to _dispatch_v25."""
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("bot.agent_dispatch._dispatch_v25", AsyncMock()) as mock_v25:
+
+            from bot.agent_dispatch import dispatch_message
+            await dispatch_message(
+                "tether-agent-2.5", "hello",
+                send_fn=lambda m: None, pool=None, user_id=TEST_USER_ID,
+                is_admin=True,
+            )
+
+        _args, kwargs = mock_v25.call_args
+        assert kwargs.get("is_admin") is True, \
+            f"_dispatch_v25 must receive is_admin=True, got call_args={mock_v25.call_args}"
+
+
+# ---------------------------------------------------------------------------
+# dispatch_message() routing
+# ---------------------------------------------------------------------------
+
+class TestDispatchMessageRouting:
+    @pytest.mark.asyncio
+    async def test_v25_routes_to_dispatch_v25_function(self):
+        """dispatch_message('tether-agent-2.5') calls _dispatch_v25, not the generic stub."""
+        sent = []
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("bot.agent_dispatch._dispatch_v25", AsyncMock()) as mock_v25:
+
+            from bot.agent_dispatch import dispatch_message
+            await dispatch_message(
+                "tether-agent-2.5", "hello",
+                send_fn=sent.append, pool=None, user_id=TEST_USER_ID,
+            )
+
+        mock_v25.assert_awaited_once()
+        # Generic "not yet wired" stub must NOT appear
+        assert not any("not yet wired" in s for s in sent)
+
+
+# ---------------------------------------------------------------------------
+# _SendTracker / double-send guard
+# ---------------------------------------------------------------------------
+
+class TestDoubleSendGuard:
+    """Tests for the _SendTracker double-send protection.
+
+    When a premium handler streams output via send_fn and then raises an
+    exception, the 1.0 fallback path must NOT run (no double-send).
+    When the premium handler raises without ever calling send_fn, the 1.0
+    fallback MUST run so the user always gets a response.
+    """
+
+    @pytest.mark.asyncio
+    async def test_premium_streams_then_raises_skips_fallback(self):
+        """Premium handler streams partial output then raises → exactly one message, no 1.0 fallback.
+
+        This is the core double-send regression: previously, the exception
+        handler fell through to handle_message even after premium had already
+        called send_fn, producing spliced output (premium partial + 1.0 response).
+        """
+        import sys
+        sent = []
+
+        async def _streaming_then_crashing(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            send_fn("premium-partial")  # streams something first
+            raise RuntimeError("handler crashed mid-stream")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_streaming_then_crashing)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        assert "premium-partial" in sent, f"Premium output must be delivered. Got: {sent}"
+        assert "1.0-response" not in sent, (
+            f"Double-send: handle_message ran after premium already streamed. Got: {sent}"
+        )
+        assert sent.count("premium-partial") == 1, \
+            f"Premium output must appear exactly once. Got: {sent}"
+
+    @pytest.mark.asyncio
+    async def test_premium_raises_without_streaming_still_runs_fallback(self):
+        """Premium handler raises before sending anything → 1.0 fallback runs normally.
+
+        This is the regression guard: the double-send fix must NOT suppress
+        the fallback when premium never actually sent any output.
+        """
+        import sys
+        sent = []
+
+        async def _crashing_immediately(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            raise RuntimeError("handler failed before sending anything")
+
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=_crashing_immediately)
+        mock_tether_premium = MagicMock()
+        fake_modules = {
+            "tether_premium": mock_tether_premium,
+            "tether_premium.register": mock_register,
+        }
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, fake_modules):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("do a task", sent.append, None, TEST_USER_ID)
+
+        assert "1.0-response" in sent, \
+            f"Fallback must run when premium never sent output. Got: {sent}"
+        assert "premium-partial" not in sent
+
+
+# ---------------------------------------------------------------------------
+# tracked_send must always be called — even for falsy responses
+# ---------------------------------------------------------------------------
+
+class TestTrackedSendAlwaysCalled:
+    """Regression tests for the 'if response:' silent-swallow bug.
+
+    When the premium handler returns '' (empty string) or None, the old gate
+        if response:
+            tracked_send(response)
+    silently skipped send_fn entirely.  response_parts stayed [] and
+    turn_complete was sent with final_text='', causing a blank UI message.
+
+    After the fix (tracked_send(response or '')), send_fn must always be
+    called once — even for falsy responses — so the WS handler's
+    response_parts list is populated and turn_complete carries final_text=''.
+    """
+
+    def _make_paid_patches(self, fake_handler):
+        """Return the common patch context for a paid user calling fake_handler."""
+        import sys
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=fake_handler)
+        mock_tether_premium = MagicMock()
+        return {
+            "sys_modules": {
+                "tether_premium": mock_tether_premium,
+                "tether_premium.register": mock_register,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_empty_string_response_still_calls_send_fn(self):
+        """Premium handler returns '' → send_fn must be called once with ''.
+
+        Before fix: `if response:` evaluates False for '' → send_fn never called
+        → response_parts=[] → final_text=''.
+        After fix: tracked_send(response or '') always fires → response_parts=['']
+        → final_text='' (but send_fn WAS called, preserving tracked_send.called=True).
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_empty(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return ""
+
+        patches = self._make_paid_patches(_returns_empty)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once even for '' response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "", (
+            f"send_fn must be called with '' for empty response. Got: {send_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_none_response_still_calls_send_fn_with_empty_string(self):
+        """Premium handler returns None → send_fn must be called once with ''.
+
+        Session driver (mgr.run_in_session_async) can return None. The gate
+        `if response:` evaluates False for None, silently swallowing the
+        response. Fix: tracked_send(response or '') coerces None → ''.
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_none(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return None
+
+        patches = self._make_paid_patches(_returns_none)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once even for None response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "", (
+            f"send_fn must be called with '' for None response. Got: {send_calls}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_empty_response_still_calls_send_fn_once(self):
+        """Smoke test: non-empty response → send_fn called once with that text.
+
+        Ensures the fix doesn't break the normal (non-empty) happy path.
+        """
+        import sys
+        send_calls: list[str] = []
+
+        async def _returns_text(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return "Hello from premium"
+
+        patches = self._make_paid_patches(_returns_text)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]):
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", send_calls.append, None, TEST_USER_ID)
+
+        assert len(send_calls) == 1, (
+            f"send_fn must be called exactly once for non-empty response. "
+            f"Got calls: {send_calls}"
+        )
+        assert send_calls[0] == "Hello from premium", (
+            f"send_fn must receive the full response text. Got: {send_calls}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# delivery log — logger.info must be emitted after tracked_send
+# ---------------------------------------------------------------------------
+
+class TestDeliveryLog:
+    """Regression tests for the delivery log added to _dispatch_v25.
+
+    After tracked_send(response or ""), a logger.info line must be emitted
+    recording the number of chars delivered. This is the ops signal that
+    lets us confirm end-to-end delivery in production logs without digging
+    through WS frames.
+
+    Tests assert:
+    - logger.info is called with content that includes "dispatch_v25" and
+      "response delivered" for non-empty response
+    - the chars= field reflects len(response) for a non-empty response
+    - the log is also emitted for empty-string response (chars=0)
+    """
+
+    def _make_paid_patches(self, fake_handler):
+        import sys
+        mock_register = MagicMock()
+        mock_register.get_premium_handler = MagicMock(return_value=fake_handler)
+        mock_tether_premium = MagicMock()
+        return {
+            "sys_modules": {
+                "tether_premium": mock_tether_premium,
+                "tether_premium.register": mock_register,
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_delivery_log_emitted_with_correct_char_count(self):
+        """Non-empty premium response → logger.info emitted with chars=len(response)."""
+        import sys
+        import logging
+
+        response_text = "Hello from premium"
+
+        async def _returns_text(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return response_text
+
+        patches = self._make_paid_patches(_returns_text)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]), \
+             patch("bot.agent_dispatch.logger") as mock_logger:
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", lambda m: None, None, TEST_USER_ID)
+
+        # Find the delivery info call
+        info_calls = [
+            str(call) for call in mock_logger.info.call_args_list
+            if "dispatch_v25" in str(call) and "delivered" in str(call)
+        ]
+        assert info_calls, (
+            "logger.info must be called with 'dispatch_v25' and 'delivered' "
+            f"after tracked_send. info calls: {mock_logger.info.call_args_list}"
+        )
+        # The call should include the correct char count
+        delivery_call_str = info_calls[0]
+        assert str(len(response_text)) in delivery_call_str or \
+               f"chars={len(response_text)}" in delivery_call_str, (
+            f"Delivery log must include chars={len(response_text)}. Got: {delivery_call_str}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_delivery_log_emitted_for_empty_response(self):
+        """Empty premium response → delivery log still emitted (chars=0)."""
+        import sys
+
+        async def _returns_empty(
+            text, pool, user_id, anchors, current_anchor, *,
+            send_fn, status_fn=None, pool_client=None
+        ):
+            return ""
+
+        patches = self._make_paid_patches(_returns_empty)
+
+        with patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0), \
+             patch("db.postgres.get_conn", return_value=_make_conn_ctx()), \
+             patch("db.pg_queries.subscriptions.get_user_is_paid",
+                   new=AsyncMock(return_value=True)), \
+             patch("db.pg_queries.get_anchors", new=AsyncMock(return_value=[])), \
+             patch("bot.handler_utils.get_current_anchor", return_value={}), \
+             patch.dict(sys.modules, patches["sys_modules"]), \
+             patch("bot.agent_dispatch.logger") as mock_logger:
+
+            from bot.agent_dispatch import _dispatch_v25
+            await _dispatch_v25("hello", lambda m: None, None, TEST_USER_ID)
+
+        info_calls = [
+            str(call) for call in mock_logger.info.call_args_list
+            if "dispatch_v25" in str(call) and "delivered" in str(call)
+        ]
+        assert info_calls, (
+            "Delivery logger.info must fire even for empty response. "
+            f"info calls: {mock_logger.info.call_args_list}"
+        )

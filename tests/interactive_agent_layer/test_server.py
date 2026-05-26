@@ -201,3 +201,88 @@ async def test_permission_respond_resolves_future(layer_client, layer):
 async def test_permission_respond_not_found(layer_client):
     resp = await layer_client.post("/permission/no-such-id/respond", json={"approve": False})
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# turn_error emission — pool failure during run_turn
+# ---------------------------------------------------------------------------
+
+async def _collect_sse_events(layer_client, sid: str) -> list[dict]:
+    """Helper: POST /session/{sid}/turn and collect all SSE events."""
+    events = []
+    async with layer_client.stream(
+        "POST", f"/session/{sid}/turn", json={"prompt": "fail me"}
+    ) as resp:
+        assert resp.status_code == 200
+        buffer = ""
+        async for chunk in resp.aiter_text():
+            buffer += chunk
+        for block in buffer.split("\n\n"):
+            block = block.strip()
+            if not block:
+                continue
+            for line in block.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+    return events
+
+
+async def test_turn_error_emitted_when_pool_raises(layer):
+    """When pool.acquire() raises, event_generator must emit a turn_error SSE event."""
+    from agent_pool_manager.client import PoolClientError
+    from interactive_agent_layer.server import create_app
+    from httpx import AsyncClient, ASGITransport
+
+    class FailingPoolClient:
+        async def acquire(self, user_id, options_hash, options, timeout_seconds=None):
+            raise PoolClientError("pool_exhausted — retry after 5s")
+
+        async def query_stream(self, handle_id, prompt, session_id="default"):
+            return
+            yield  # make it a generator
+
+        async def release(self, handle_id, *, reusable=False):
+            pass
+
+        async def interrupt(self, handle_id):
+            pass
+
+    from interactive_agent_layer.ws_publisher import WSPublisher
+    from interactive_agent_layer.session import Layer
+    import pathlib
+
+    yaml_path = pathlib.Path(__file__).parent.parent.parent / "config" / "agent_translations.yaml"
+    from interactive_agent_layer.translation import TranslationTable
+    failing_layer = Layer(
+        pool_client=FailingPoolClient(),
+        ws_publisher=WSPublisher(),
+        translation_table=TranslationTable.from_yaml(yaml_path),
+    )
+    app = create_app(failing_layer)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        start = await client.post(
+            "/session/start",
+            json={"user_id": "u1", "user_ws_id": "ws1", "agent_version": "v1", "options": {}, "user_message": "x"},
+        )
+        sid = start.json()["session_id"]
+
+        events = []
+        async with client.stream("POST", f"/session/{sid}/turn", json={"prompt": "go"}) as resp:
+            assert resp.status_code == 200
+            buffer = ""
+            async for chunk in resp.aiter_text():
+                buffer += chunk
+        for block in buffer.split("\n\n"):
+            block = block.strip()
+            if not block:
+                continue
+            for line in block.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+
+    types = [e["type"] for e in events]
+    assert "turn_error" in types, f"turn_error event must be emitted on pool failure, got: {types}"
+    error_event = next(e for e in events if e["type"] == "turn_error")
+    assert "pool_exhausted" in error_event.get("message", ""), (
+        f"turn_error message must include pool error: {error_event}"
+    )

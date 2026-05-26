@@ -7,11 +7,13 @@ vi.mock('../../../lib/api', () => ({ api: vi.fn() }))
 vi.mock('../../../stores/conversations', () => ({
   useConversationsStore: vi.fn(),
 }))
+// Stable mock so component and test share the same fetchPreference spy.
+const mockPickerStore = {
+  selectedAgent: 'tether-agent-2.0',
+  fetchPreference: vi.fn(),
+}
 vi.mock('../../../stores/agentPicker', () => ({
-  useAgentPickerStore: vi.fn(() => ({
-    selectedAgent: 'tether-agent-2.0',
-    fetchPreference: vi.fn(),
-  })),
+  useAgentPickerStore: vi.fn(() => mockPickerStore),
 }))
 vi.mock('../../../composables/useConversationChat', () => ({
   useConversationChat: vi.fn(() => ({
@@ -172,6 +174,14 @@ describe('ConversationView', () => {
       await new Promise(r => setTimeout(r, 10))
       expect(store.patch).toHaveBeenCalledWith('conv-1', expect.objectContaining({ priority: 'high' }))
     }
+  })
+
+  it('calls fetchPreference on mount to load stored agent preference', async () => {
+    vi.mocked(useConversationsStore).mockReturnValue(makeStore() as unknown as ReturnType<typeof useConversationsStore>)
+    mockPickerStore.fetchPreference.mockClear()
+    mount(ConversationView, { global: { stubs: globalStubs } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(mockPickerStore.fetchPreference).toHaveBeenCalled()
   })
 
   it('state toggle triggers store.patch', async () => {

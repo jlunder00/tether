@@ -18,10 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import re
 import time
-import urllib.parse
 
 import asyncpg
 import httpx
@@ -64,36 +61,9 @@ _pending_setups: dict[str, dict] = {}
 _start_locks: dict[str, asyncio.Lock] = {}
 
 _SETUP_TTL = 600  # seconds
-_ANTHROPIC_URL_RE = re.compile(r"https://\S+")
-# Strip ANSI CSI escape sequences emitted by TUI programs on a PTY.
-# Note: does not strip OSC8 hyperlinks (\x1b]8;;URL\x07...\x1b]8;;\x07) — if
-# claude setup-token ever uses them, extend this regex or post-process the URL.
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# Pool manager base URL — pexpect subprocess work is delegated to this service.
+_POOL_MANAGER_BASE_URL = "http://127.0.0.1:5002"
 
-# `claude setup-token` prints a long-lived OAuth token to stdout (sk-ant-oat-…)
-# rather than writing a credentials file. The trailing run is URL-safe base64
-# plus dashes/underscores; we capture the longest such run after the prefix.
-_ANTHROPIC_URL_SCHEME = "https"
-# claude setup-token may emit URLs on either domain depending on version.
-_VALID_ANTHROPIC_NETLOCS = {"console.anthropic.com", "claude.com"}
-_OAUTH_TOKEN_RE = re.compile(r"sk-ant-[A-Za-z0-9_-]+")
-
-
-def _extract_anthropic_url(text: str) -> str | None:
-    """Extract and strictly validate the Anthropic auth URL from subprocess output.
-
-    Strips CR/LF before matching so PTY line-wrapping doesn't split the URL.
-    Uses urlparse to check scheme and netloc exactly — prevents substring-match
-    bypasses where a valid domain appears at an arbitrary position in a crafted URL.
-    """
-    # PTY output uses CRLF; strip both so the URL regex can match across wrap points.
-    joined = text.replace("\r", "").replace("\n", "")
-    for match in _ANTHROPIC_URL_RE.finditer(joined):
-        candidate = match.group(0).rstrip(".,;)")  # strip trailing punctuation
-        parsed = urllib.parse.urlparse(candidate)
-        if parsed.scheme == _ANTHROPIC_URL_SCHEME and parsed.netloc in _VALID_ANTHROPIC_NETLOCS:
-            return candidate
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -108,173 +78,14 @@ class AnthropicCompleteBody(BaseModel):
     code: str
 
 
-# ---------------------------------------------------------------------------
-# Anthropic OAuth helpers
-# ---------------------------------------------------------------------------
-
-def _close_child_sync(child) -> None:
-    """Kill a pexpect child and close its PTY file descriptor."""
-    try:
-        child.close(force=True)
-    except Exception:
-        pass
-
-
-async def _reap_child(child) -> None:
-    """Async wrapper: close pexpect child in an executor to avoid blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(None, _close_child_sync, child)
-    except Exception:
-        pass
-
-
-def _start_pexpect_sync(env: dict) -> tuple:
-    """Spawn ``claude setup-token`` in a PTY, wait for the auth URL, return ``(child, url)``.
-
-    The child process stays alive after this returns, waiting for the user to
-    paste the OAuth code via :func:`_complete_pexpect_sync`.
-
-    A wide PTY (220 cols) prevents the URL from line-wrapping, which would
-    break the URL regex. Returns ``(None, None)`` on any failure.
-    """
-    import pexpect  # lazy — keeps module importable when pexpect is not installed
-
-    logger.info("anthropic/start: spawning claude setup-token")
-    try:
-        child = pexpect.spawn(
-            "claude",
-            args=["setup-token"],
-            env=env,
-            dimensions=(24, 500),
-        )
-        logger.debug("anthropic/start: pexpect.spawn ok, pid=%s", child.pid)
-    except Exception:
-        logger.exception("pexpect.spawn failed for claude setup-token")
-        return None, None
-
-    buf = ""
-    deadline = time.time() + 30
-    while time.time() < deadline:
-        try:
-            chunk = child.read_nonblocking(4096, timeout=1)
-            # Accumulate raw bytes first, then strip ANSI from the full buffer
-            # so CSI sequences that straddle read boundaries are handled correctly.
-            buf += chunk.decode(errors="replace")
-            clean = _ANSI_ESCAPE_RE.sub("", buf)
-            logger.debug("anthropic/start: pexpect buffer so far (clean): %r", clean[-500:])
-            url = _extract_anthropic_url(clean)
-            if url:
-                logger.info("anthropic/start: auth URL extracted: %s", url)
-                return child, url
-        except pexpect.TIMEOUT:
-            continue
-        except pexpect.EOF:
-            logger.warning(
-                "anthropic/start: pexpect EOF before URL found; full output: %r",
-                _ANSI_ESCAPE_RE.sub("", buf),
-            )
-            break
-        except Exception:
-            logger.exception("Unexpected error reading pexpect child output")
-            break
-
-    logger.error(
-        "anthropic/start: gave up waiting for auth URL after 30s; "
-        "last buffer (clean, last 500 chars): %r",
-        _ANSI_ESCAPE_RE.sub("", buf)[-500:],
-    )
-    _close_child_sync(child)
-    return None, None
-
-
-def _complete_pexpect_sync(child, code: str) -> tuple[str, str]:
-    """Send the OAuth code to the waiting pexpect child and capture the OAuth token.
-
-    Streams child output live (one INFO log per chunk) so we can see exactly
-    what the CLI emits after the code is sent. Scans each chunk for the token
-    pattern so we catch it as soon as it appears rather than waiting for EOF.
-
-    Returns a (result, token) tuple where result is one of:
-      ``"ok"``      — token found; token string is non-empty
-      ``"failed"``  — child exited without printing a token
-      ``"timeout"`` — 120 seconds elapsed without token or EOF
-      ``"error"``   — unexpected error
-    """
-    import pexpect  # lazy — keeps module importable when pexpect is not installed
-
-    logger.info("anthropic/complete: sending code (length=%d) to pexpect child", len(code))
-    try:
-        child.send(code + '\r')  # \r alone = one Enter in PTY canonical mode
-    except Exception:
-        logger.exception("pexpect send failed — child likely already exited")
-        return "error", ""
-
-    buf = b""
-    token: str | None = None
-    sent_confirm = False
-    deadline = time.time() + 120
-
-    while time.time() < deadline:
-        try:
-            chunk = child.read_nonblocking(4096, timeout=1)
-            buf += chunk
-            clean = _ANSI_ESCAPE_RE.sub("", chunk.decode(errors="replace"))
-            safe = _OAUTH_TOKEN_RE.sub("sk-ant-***REDACTED***", clean)
-            logger.info("anthropic/complete: child output chunk: %r", safe)
-            match = _OAUTH_TOKEN_RE.search(clean)
-            if match:
-                token = match.group(0)
-                logger.info("anthropic/complete: token found in output stream")
-                break
-            # After the code echo the CLI may sit at a secondary "press Enter"
-            # prompt.  Detect the two-blank-line pattern that follows the
-            # asterisk echo and send a confirming \r once.
-            if not sent_confirm and b"\r\r\n\r\r\n" in buf:
-                logger.info("anthropic/complete: sending confirm \\r after code echo")
-                child.send('\r')
-                sent_confirm = True
-        except pexpect.TIMEOUT:
-            continue
-        except pexpect.EOF:
-            logger.info("anthropic/complete: child EOF")
-            # Token may have arrived in the same read as EOF — scan full buffer.
-            full_clean = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
-            match = _OAUTH_TOKEN_RE.search(full_clean)
-            if match:
-                token = match.group(0)
-                logger.info("anthropic/complete: token found at EOF")
-            break
-        except Exception:
-            logger.exception("pexpect read_nonblocking failed")
-            return "error", ""
-    else:
-        full_clean = _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))
-        logger.warning(
-            "anthropic/complete: timed out waiting for token; output so far: %r",
-            full_clean[-500:],
-        )
-        return "timeout", ""
-
-    try:
-        child.close()
-    except Exception:
-        pass
-
-    if token:
-        return "ok", token
-    logger.warning(
-        "anthropic/complete: child exited without printing token; full output: %r",
-        _ANSI_ESCAPE_RE.sub("", buf.decode(errors="replace"))[-500:],
-    )
-    return "failed", ""
 
 
 async def _sweep_expired_setups() -> None:
-    """Kill and remove any pending setups older than _SETUP_TTL seconds.
+    """Remove pending setup entries older than _SETUP_TTL seconds.
 
-    Each killed child is reaped via an asyncio task so PTY FDs are released
-    without blocking the current request.
+    Session cleanup on the pool manager side is handled by the pool manager
+    itself; this sweep only removes stale session_id references from our
+    local ``_pending_setups`` dict.
     """
     now = time.time()
     expired_users = [
@@ -282,10 +93,8 @@ async def _sweep_expired_setups() -> None:
         if now - entry["started_at"] > _SETUP_TTL
     ]
     for uid in expired_users:
-        entry = _pending_setups.pop(uid)
-        child = entry.get("child")
-        if child is not None:
-            asyncio.create_task(_reap_child(child))
+        _pending_setups.pop(uid, None)
+        logger.debug("anthropic/sweep: removed expired setup for user_id=%s", uid)
 
 
 # ---------------------------------------------------------------------------
@@ -673,37 +482,58 @@ async def anthropic_start(
 async def _anthropic_start_locked(request: Request, user_id: str) -> dict:
     """Inner /start logic — called while holding the per-user _start_locks entry.
 
-    Spawns ``claude setup-token`` in a PTY via :func:`_start_pexpect_sync` (run
-    in a thread-pool executor so the event loop is not blocked). The pexpect child
-    stays alive waiting for the user to paste their OAuth code.
+    Proxies to the agent pool manager's POST /setup-token endpoint, which
+    spawns ``claude setup-token`` in a PTY and returns the auth URL and a
+    session_id.  The session_id is stored in ``_pending_setups`` so the
+    /complete handler can forward the OAuth code to the correct subprocess.
     """
     logger.info("anthropic/start: request for user_id=%s", user_id)
 
     if user_id in _pending_setups:
-        logger.info("anthropic/start: killing existing pending setup for user_id=%s", user_id)
-        old = _pending_setups.pop(user_id)
-        asyncio.create_task(_reap_child(old["child"]))
-
-    env_override = dict(os.environ)
-
-    loop = asyncio.get_running_loop()
-    try:
-        child, url = await loop.run_in_executor(
-            None, _start_pexpect_sync, env_override
+        old_entry = _pending_setups.pop(user_id)
+        old_session_id = old_entry.get("session_id")
+        logger.info(
+            "anthropic/start: canceling stale pending setup for user_id=%s session_id=%s",
+            user_id, old_session_id,
         )
-    except Exception as exc:
-        logger.exception("Unexpected error from _start_pexpect_sync: %s", exc)
-        raise HTTPException(status_code=502, detail="Failed to spawn setup process")
+        if old_session_id:
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    await client.delete(f"{_POOL_MANAGER_BASE_URL}/setup-token/{old_session_id}")
+            except Exception:
+                logger.warning(
+                    "anthropic/start: failed to cancel stale session_id=%s (continuing)",
+                    old_session_id,
+                    exc_info=True,
+                )
 
-    if url is None:
-        logger.error("anthropic/start: failed to extract auth URL for user_id=%s", user_id)
+    try:
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(f"{_POOL_MANAGER_BASE_URL}/setup-token", json={})
+    except Exception as exc:
+        logger.exception("anthropic/start: pool manager request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach setup-token service")
+
+    if resp.status_code != 200:
+        logger.error(
+            "anthropic/start: pool manager returned %d for user_id=%s body=%r",
+            resp.status_code, user_id, resp.text,
+        )
         raise HTTPException(status_code=502, detail="Auth URL not found in claude output")
 
+    data = resp.json()
+    session_id = data.get("session_id")
+    url = data.get("url")
+
+    if not session_id or not url:
+        logger.error("anthropic/start: pool manager response missing fields: %r", data)
+        raise HTTPException(status_code=502, detail="Invalid response from setup-token service")
+
     _pending_setups[user_id] = {
-        "child": child,
+        "session_id": session_id,
         "started_at": time.time(),
     }
-    logger.info("anthropic/start: success, auth URL ready for user_id=%s", user_id)
+    logger.info("anthropic/start: success, auth URL ready for user_id=%s session_id=%s", user_id, session_id)
 
     return {"url": url, "expires_in": _SETUP_TTL}
 
@@ -718,40 +548,53 @@ async def anthropic_complete(
     body: AnthropicCompleteBody,
     _auth: dict = Depends(auth_dependency),
 ):
-    """Submit the OAuth code to the waiting pexpect child and persist credentials."""
+    """Forward the OAuth code to the pool manager and persist the returned token."""
     user_id = request.state.user_id
     logger.info("anthropic/complete: request for user_id=%s, code_length=%d", user_id, len(body.code))
 
-    # Pop atomically: prevents two concurrent /complete calls from racing on the
-    # same child process or temp dir.
     entry = _pending_setups.pop(user_id, None)
     if entry is None:
         logger.warning("anthropic/complete: no pending setup found for user_id=%s", user_id)
         raise HTTPException(status_code=404, detail="No pending Anthropic setup for this user")
 
-    child = entry["child"]
+    session_id = entry["session_id"]
     age = time.time() - entry["started_at"]
-    logger.debug("anthropic/complete: pending setup age=%.1fs", age)
+    logger.debug("anthropic/complete: pending setup age=%.1fs session_id=%s", age, session_id)
 
-    loop = asyncio.get_running_loop()
-    result, token = await loop.run_in_executor(None, _complete_pexpect_sync, child, body.code)
-    logger.info("anthropic/complete: pexpect result=%r for user_id=%s", result, user_id)
+    try:
+        async with httpx.AsyncClient(timeout=150.0) as client:
+            resp = await client.post(
+                f"{_POOL_MANAGER_BASE_URL}/setup-token/complete",
+                json={"session_id": session_id, "code": body.code},
+            )
+    except Exception as exc:
+        logger.exception("anthropic/complete: pool manager request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to reach setup-token service")
+
+    if resp.status_code != 200:
+        logger.error(
+            "anthropic/complete: pool manager returned %d for user_id=%s body=%r",
+            resp.status_code, user_id, resp.text,
+        )
+        raise HTTPException(status_code=502, detail="Setup token completion failed")
+
+    data = resp.json()
+    result = data.get("result")
+    token = data.get("token") or ""
+    logger.info("anthropic/complete: pool manager result=%r for user_id=%s", result, user_id)
 
     if result == "error":
-        asyncio.create_task(_reap_child(child))
         raise HTTPException(status_code=502, detail="Setup process closed unexpectedly")
 
     if result == "timeout":
-        asyncio.create_task(_reap_child(child))
         raise HTTPException(status_code=504, detail="Setup process timed out")
 
-    # child already reaped by _complete_pexpect_sync.
     if result == "failed":
         logger.warning("anthropic/complete: setup process reported failure for user_id=%s", user_id)
         return {"ok": False, "error": "setup failed"}
 
-    # result == "ok": token was extracted from the output stream by _complete_pexpect_sync.
-    logger.debug("anthropic/complete: OAuth token extracted (len=%d)", len(token))
+    # result == "ok": token extracted by the pool manager's pexpect handler.
+    logger.debug("anthropic/complete: OAuth token received (len=%d)", len(token))
 
     vault = request.app.state.vault
     if vault is None:

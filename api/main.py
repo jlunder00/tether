@@ -41,8 +41,10 @@ from api.routes import preferences as preferences_routes
 from api.routes import ical as ical_routes
 from api.routes import conversations as conversations_routes
 from api.routes import internal as internal_routes
+from api.routes import pool as pool_routes
 from api.ws import manager
 from api.auth import auth_dependency, decode_jwt
+from api.redis_pubsub import subscribe_and_forward, get_redis_url
 from api.limiter import limiter
 from db.pool_middleware import lifespan as _pool_lifespan
 from db.pg_queries.errors import StaleReadError
@@ -221,6 +223,11 @@ def create_app(lifespan_override=None) -> FastAPI:
         prefix="/api/internal",
         include_in_schema=False,
     )
+    app.include_router(
+        pool_routes.router,
+        prefix="/api/internal/pool",
+        include_in_schema=False,
+    )
 
     # --- Premium plugin hook ---
     try:
@@ -289,12 +296,16 @@ def create_app(lifespan_override=None) -> FastAPI:
             await manager.connect(websocket, user_id)
             if is_admin:
                 manager.register_only(websocket, "__bot__")
+            redis_task = asyncio.create_task(
+                subscribe_and_forward(websocket, user_id, redis_url=get_redis_url())
+            )
             try:
                 while True:
                     await websocket.receive_text()
             except (WebSocketDisconnect, RuntimeError):
                 pass
             finally:
+                redis_task.cancel()
                 manager.disconnect(websocket, user_id)
                 if is_admin:
                     manager.disconnect(websocket, "__bot__")
@@ -336,12 +347,16 @@ def create_app(lifespan_override=None) -> FastAPI:
             manager.register_only(websocket, user_id)
             if is_admin:
                 manager.register_only(websocket, "__bot__")
+            redis_task = asyncio.create_task(
+                subscribe_and_forward(websocket, user_id, redis_url=get_redis_url())
+            )
             try:
                 while True:
                     await websocket.receive_text()
             except (WebSocketDisconnect, RuntimeError):
                 pass
             finally:
+                redis_task.cancel()
                 manager.disconnect(websocket, user_id)
                 if is_admin:
                     manager.disconnect(websocket, "__bot__")

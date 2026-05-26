@@ -20,7 +20,7 @@ FROM python:3.11-slim
 # cron is needed for anchor trigger scheduling in the bot container.
 # curl is needed for the NodeSource setup script.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libffi-dev cron git gosu curl \
+    gcc libffi-dev cron git gosu curl redis-server \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js 20 via NodeSource so npm has a properly self-contained
@@ -34,6 +34,19 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 ARG CLAUDE_CODE_VERSION=2.1.116
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
+# Home directory template for the agent pool manager.
+# Running `claude --version` once causes the CLI to write its initial config
+# (~/.claude.json, ~/.claude/) into the temp home.  We snapshot that state so
+# each warm subprocess gets a pre-seeded home dir, eliminating first-run setup
+# time and ~/.claude.json lock contention on concurrent spawns.
+# If the CLI produces no files (e.g. newer version skips auto-init), the
+# template dir is left empty — the isolation benefit still applies.
+RUN HOME=/tmp/claude-template \
+      claude --version 2>/dev/null || true \
+    && mkdir -p /etc/claude-home-template \
+    && cp -r /tmp/claude-template/. /etc/claude-home-template/ 2>/dev/null || true \
+    && chmod -R a+rX /etc/claude-home-template
+
 # Non-root user for running services. UID 1000 matches the default Pi user
 # so bind-mounted /data files are accessible without permission issues.
 RUN useradd -m -u 1000 -s /bin/bash tether
@@ -44,6 +57,17 @@ RUN useradd -m -u 1000 -s /bin/bash tether
 RUN mkdir -p /run/tether/creds \
     && chown tether:tether /run/tether/creds \
     && chmod 0700 /run/tether/creds
+
+# Agent pool manager home directory base.
+# /var/lib/ is root-owned — the tether user cannot mkdir here at runtime,
+# so the pool base dir must be pre-created and handed off in the image.
+# Also hand ownership of the Claude home template to tether so that
+# initialize() can write .claude.json into it at first boot (auth seeding).
+RUN mkdir -p /var/lib/tether/claude-homes \
+    && chown tether:tether /var/lib/tether/claude-homes \
+    && chmod 755 /var/lib/tether/claude-homes \
+    && chown tether:tether /etc/claude-home-template \
+    && chmod 755 /etc/claude-home-template
 
 WORKDIR /app
 

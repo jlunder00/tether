@@ -3,7 +3,10 @@ export interface ConversationDetail {
   name: string
   type: 'interactive' | 'passive' | 'system'
   priority: 'low' | 'normal' | 'high' | 'urgent'
-  state: 'open' | 'closed'
+  // Beacon extends state with 'pending' and 'rejected' (beacon-notification-system §7).
+  // pending: Beacon-initiated, awaiting first user reply (shown in pending bin, not main list)
+  // rejected: user clicked Discard on a pending conv (hidden by default behind filter toggle)
+  state: 'open' | 'closed' | 'pending' | 'rejected'
   context_node_id: string | null
   thread_key: string | null
   is_system: boolean

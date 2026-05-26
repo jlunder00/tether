@@ -15,6 +15,13 @@ primary_region = "sjc"
   # dev machine can fully sleep — no persistent bot polling needed
   min_machines_running = 0
 
+# Redis provisioning (when ready for managed Redis):
+#   fly redis create --name tether-redis --org personal
+#   fly secrets set REDIS_URL="<upstash-url>" --app tether-dev
+#   fly secrets set REDIS_URL="<upstash-url>" --app tether-prod
+# Until then, supervisord runs a local redis-server (see supervisord.conf [program:redis])
+# and REDIS_URL is set to redis://localhost:6379 in the api and interactive-agent-layer programs.
+
 [env]
   PYTHON_ENV = "development"
 

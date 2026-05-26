@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useConversationsStore } from '../../stores/conversations'
 import type { ConversationDetail } from '../../types/conversations'
 
-defineProps<{
+const props = defineProps<{
   open: boolean
   contextNodes: { id: string; name: string }[]
+  defaultNodeId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -18,8 +19,16 @@ const conversationsStore = useConversationsStore()
 const name = ref('')
 const type = ref<'interactive' | 'passive'>('interactive')
 const priority = ref<'low' | 'normal' | 'high' | 'urgent'>('normal')
-const contextNodeId = ref<string>('')
+const contextNodeId = ref<string>(props.defaultNodeId ?? '')
 const submitting = ref(false)
+
+// Keep contextNodeId in sync when defaultNodeId changes
+watch(
+  () => props.defaultNodeId,
+  (val) => {
+    contextNodeId.value = val ?? ''
+  }
+)
 
 async function onSubmit() {
   if (!name.value.trim() || submitting.value) return

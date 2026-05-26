@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import os
+
+# Set required config values before any app imports so the config loader
+# singleton resolves successfully in test environments (jwt.secret is required).
+os.environ.setdefault("TETHER_JWT_SECRET", "test-secret-for-bot-tests")
+
 import pytest
 import asyncpg
 

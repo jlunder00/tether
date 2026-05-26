@@ -26,7 +26,7 @@ def make_pool(**overrides) -> Pool:
 
 
 HASH_A = "aaa111"
-OPTIONS_A = {"model": "claude-haiku-4-5"}
+OPTIONS_A = {"model": "claude-haiku-4-5-20251001", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
 
 
 @pytest.mark.asyncio
@@ -90,3 +90,36 @@ async def test_hint_triggers_aggressive_refill():
         await asyncio.sleep(0.1)
 
     assert pool.warm_count(HASH_A) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_once_skips_empty_string_user_id():
+    """run_once must not pass user_id="" to _try_inject_warm.
+
+    Regression test: if _user_ids registry contains "" for a hash (e.g. due
+    to a race or legacy write path bypassing the truthy guard in register()),
+    run_once must NOT forward it — doing so reaches create_key with an empty
+    UUID string and causes a PostgreSQL cast error.
+    """
+    pool = make_pool(target_depth_per_hash=1)
+    loop = RefillLoop(pool)
+
+    # Register hash normally, then inject "" directly to simulate the bug
+    loop._registry[HASH_A] = OPTIONS_A
+    loop._user_ids[HASH_A] = ""  # simulate stale/corrupt registry state
+
+    calls: list = []
+
+    async def _capture_inject(options_hash, options, *, user_id=None):
+        calls.append(user_id)
+        return False  # pretend capacity full so we don't actually spawn
+
+    pool._try_inject_warm = _capture_inject
+
+    await loop.run_once()
+
+    assert calls, "run_once should have attempted injection"
+    assert "" not in calls, f'user_id="" must not reach _try_inject_warm, got: {calls}'
+    # Should be normalized to None (or injection skipped)
+    for user_id in calls:
+        assert user_id != "", f'empty string user_id leaked to inject: {user_id!r}'
