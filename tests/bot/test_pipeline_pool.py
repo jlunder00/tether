@@ -397,7 +397,8 @@ class TestPipelineBackendPoolAcquire:
         """release() must be called in a finally block even if query_stream raises.
 
         When query_stream fails, _complete_via_pool's finally block must still call
-        release before the error propagates.  The pool path then falls back to inline.
+        release before the error propagates to the caller.  There is no inline fallback —
+        the error propagates as-is so callers can detect pool failures explicitly.
         """
         from bot.llm import PipelineBackend
 
@@ -413,15 +414,15 @@ class TestPipelineBackendPoolAcquire:
 
         backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
 
-        # Pool error now triggers inline fallback — mock inline so we don't need claude_agent_sdk
-        with patch.object(backend, "_complete_inline", AsyncMock(return_value="inline-fallback")):
+        # Error must propagate — no inline fallback
+        with pytest.raises(RuntimeError, match="pool query failed"):
             await backend.complete(
                 messages=[{"role": "user", "content": "test"}],
                 system="sys",
                 model="claude-haiku-4-5-20251001",
             )
 
-        # release must be called despite the stream error (via finally block in _complete_via_pool)
+        # release must still be called despite the stream error (via finally block in _complete_via_pool)
         pool_client.release.assert_awaited_once()
 
     def test_pipeline_backend_without_pool_client_is_pool_unaware(self):
@@ -459,9 +460,9 @@ class TestCodeReviewFindings:
         """release must be called with reusable=False when query_stream raises.
 
         Previously reusable=True was unconditional — poisoned handles were
-        returned to the pool and given to the next request.  After Fix 5 the pool
-        path falls back to inline on error, but the finally block in _complete_via_pool
-        still calls release before the error propagates up to the fallback logic.
+        returned to the pool and given to the next request.  The finally block in
+        _complete_via_pool calls release(reusable=False) before the error propagates
+        to the caller.  There is no inline fallback — the error surfaces as-is.
         """
         from bot.llm import PipelineBackend
 
@@ -477,8 +478,8 @@ class TestCodeReviewFindings:
 
         backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
 
-        # Pool path falls back to inline after stream error — mock inline
-        with patch.object(backend, "_complete_inline", AsyncMock(return_value="inline-fallback")):
+        # Error must propagate — no inline fallback
+        with pytest.raises(RuntimeError, match="stream error"):
             await backend.complete(
                 messages=[{"role": "user", "content": "test"}],
                 system="sys",
@@ -530,12 +531,14 @@ class TestCodeReviewFindings:
             f"Content: {result.content!r}"
         )
 
-    # Fix 5 — pool fallback to inline on acquire failure
+    # Fix 5 — pool acquire failure raises (no silent fallback)
     @pytest.mark.asyncio
-    async def test_pool_acquire_failure_falls_back_to_inline(self):
-        """When pool acquire() raises, PipelineBackend must fall back to _complete_inline.
+    async def test_pool_acquire_failure_raises(self):
+        """When pool acquire() raises, PipelineBackend must propagate the error.
 
-        Pool may be exhausted or unreachable; inline spawn must be the safety net.
+        Pool errors must be visible to the caller — silent fallback to inline spawn
+        would hide pool health issues and re-introduce unbounded subprocess growth.
+        Only when pool_client is None does PipelineBackend use inline.
         """
         from bot.llm import PipelineBackend
 
@@ -544,21 +547,17 @@ class TestCodeReviewFindings:
 
         backend = PipelineBackend(pool_client=pool_client, user_id=TEST_USER_ID)
 
-        inline_calls: list = []
+        # _complete_inline must NOT be called — verify by making it raise a distinct error
+        async def _must_not_be_called(*args, **kwargs):
+            raise AssertionError("_complete_inline must not be called when pool_client is set")
 
-        async def _fake_inline(prompt: str, model: str, env: dict) -> str:
-            inline_calls.append(prompt)
-            return "inline-response"
-
-        with patch.object(backend, "_complete_inline", side_effect=_fake_inline):
-            result = await backend.complete(
-                messages=[{"role": "user", "content": "test"}],
-                system="sys",
-                model="claude-haiku-4-5-20251001",
-            )
-
-        assert len(inline_calls) == 1, "_complete_inline must be called as fallback on pool error"
-        assert result.content == "inline-response"
+        with patch.object(backend, "_complete_inline", side_effect=_must_not_be_called):
+            with pytest.raises(RuntimeError, match="pool exhausted"):
+                await backend.complete(
+                    messages=[{"role": "user", "content": "test"}],
+                    system="sys",
+                    model="claude-haiku-4-5-20251001",
+                )
 
     # Fix 1 — _llm_user_id contextvar overrides frozen self._user_id
     @pytest.mark.asyncio
