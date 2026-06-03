@@ -80,6 +80,12 @@ export const useChatStore = defineStore('chat', () => {
             statusMessage.value = ''
             isSessionActive.value = false
             return
+          case 'interrupted':
+            // Pool cancelled the stream (e.g. HTTP client disconnect).
+            // Clear in-progress indicators; bot message content is preserved.
+            statusMessage.value = ''
+            isSessionActive.value = false
+            return
           case 'session_ended':
             statusMessage.value = ''
             isSessionActive.value = false
