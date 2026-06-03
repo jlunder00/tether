@@ -13,9 +13,7 @@ Read-before-write enforcement (v1 ADVISORY):
   v2 (post-Stream-C-stable): flip to hard block by returning
   {error: 'read_before_write_violated', ...} instead of warning.
 
-All writes set origin='conversation_agent' and visible_to_user=True by default
-(the section is visible to the user in the UI). Pass visible_to_user=False for
-internal bot notes that should be hidden from the user-facing context.
+All SQL lives in db/pg_queries/sections.py and db/pg_queries/node_memory.py.
 """
 from __future__ import annotations
 
@@ -43,8 +41,8 @@ async def execute_write_node_memory(
         conn:            asyncpg connection (user-scoped via RLS).
         node_id:         UUID of the context node to write to.
         title:           Section name (the 'name' column in node_sections).
-        data_type:       Hint for content type ('text' | 'list' | 'json' | 'file').
-                         Stored as the section_type; 'notes' if not provided.
+        data_type:       Content type hint ('text' | 'list' | 'json' | 'file').
+                         Used as the section_type; defaults to 'bot_notes'.
         value:           Content body to write.
         mode:            'additive' | 'edit' | 'delete'.
         conversation_id: Current conversation ID for read-before-write advisory.
@@ -52,16 +50,11 @@ async def execute_write_node_memory(
 
     Returns:
         On success: {status: 'ok', node_id, title, mode, warning?: str}
-        On delete (nothing to delete): {status: 'not_found', node_id, title}
-        On error: {error: str, ...}
+        On delete not found: {status: 'not_found', node_id, title}
+        On bad mode: {error: 'invalid_mode', valid_modes: [...]}
     """
     from db.pg_queries.node_memory import has_read_node_in_conversation, log_node_read
-    from db.pg_queries.sections import (
-        get_section,
-        upsert_section,
-        append_section,
-        delete_section,
-    )
+    from db.pg_queries.sections import get_section, upsert_section, append_section, delete_section
 
     if mode not in ("additive", "edit", "delete"):
         return {
@@ -83,7 +76,6 @@ async def execute_write_node_memory(
         warning = "read_before_write_advisory: conversation_id not provided — skipping read check"
         logger.warning(warning)
 
-    # Derive section_type from data_type or default to 'bot_notes'
     section_type = data_type if data_type else "bot_notes"
 
     if mode == "delete":
@@ -96,51 +88,18 @@ async def execute_write_node_memory(
             result["warning"] = warning
         return result
 
-    # Build the section body with origin marker.
-    # upsert_section / append_section don't yet accept origin/visible_to_user —
-    # we write directly so we can set the new columns properly.
-    import uuid as _uuid
-
-    node_uuid = _uuid.UUID(node_id)
-    user_uuid = await conn.fetchval(
-        "SELECT current_setting('app.current_user_id', true)::uuid"
-    )
-
     if mode == "additive":
-        existing = await get_section(conn, node_id, section_type, name=title)
-        if existing and existing["body"]:
-            new_body = existing["body"] + "\n\n" + value
-        else:
-            new_body = value
+        await append_section(
+            conn, node_id, section_type, value, name=title,
+            origin="conversation_agent", visible_to_user=visible_to_user,
+        )
     else:  # edit
-        new_body = value
+        await upsert_section(
+            conn, node_id, section_type, value, name=title,
+            origin="conversation_agent", visible_to_user=visible_to_user,
+        )
 
-    # Use INSERT ... ON CONFLICT so we can set origin + visible_to_user.
-    next_pos = await conn.fetchval(
-        "SELECT COALESCE(MAX(position), -1) + 1 FROM node_sections "
-        "WHERE node_id = $1 AND section_type = $2",
-        node_uuid, section_type,
-    )
-    await conn.execute(
-        """
-        INSERT INTO node_sections
-            (user_id, node_id, section_type, name, body, position,
-             origin, visible_to_user, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, 'conversation_agent', $7, now())
-        ON CONFLICT (node_id, section_type, name) DO UPDATE
-            SET body           = EXCLUDED.body,
-                origin         = 'conversation_agent',
-                visible_to_user = EXCLUDED.visible_to_user,
-                updated_at     = now(),
-                version        = node_sections.version + 1
-        """,
-        user_uuid, node_uuid, section_type, title, new_body, next_pos, visible_to_user,
-    )
-    await conn.execute(
-        "UPDATE context_nodes SET updated_at = now() WHERE id = $1", node_uuid
-    )
-
-    # Log the write read-credit (so future writes know this conversation touched the node)
+    # Log write as a read credit so future reads know this conversation touched the node
     if conversation_id is not None:
         try:
             await log_node_read(

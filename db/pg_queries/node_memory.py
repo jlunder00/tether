@@ -1,4 +1,4 @@
-"""Async Postgres queries — node_data_summary and node_read_log.
+"""Async Postgres queries — node_data_summary, node_read_log, and scope helpers.
 
 node_data_summary: M-level summarization cache per context_node.
   Populated by Beacon (Stream D summarization — NOT this module's concern).
@@ -151,6 +151,57 @@ async def has_read_node_in_conversation(
         _uuid.UUID(conversation_id), _uuid.UUID(node_id),
     )
     return (count or 0) > 0
+
+
+async def get_context_node_id_for_conversation(
+    conn: asyncpg.Connection,
+    conversation_id: str,
+) -> str | None:
+    """Return the context_node_id linked to a conversation, or None if unlinked."""
+    row = await conn.fetchrow(
+        "SELECT context_node_id::text FROM conversations WHERE id = $1::uuid",
+        _uuid.UUID(conversation_id),
+    )
+    if not row:
+        return None
+    return row["context_node_id"]
+
+
+async def get_node_tree_distance(
+    conn: asyncpg.Connection,
+    from_id: str,
+    to_id: str,
+    max_N: int,
+) -> int | None:
+    """Return the tree distance (edges) between two context nodes, or None if > max_N.
+
+    Uses a recursive CTE that walks both parent and child edges, bounded by max_N.
+    Returns 0 if from_id == to_id.
+    """
+    if from_id == to_id:
+        return 0
+
+    row = await conn.fetchrow(
+        """
+        WITH RECURSIVE reachable(node_id, dist) AS (
+            SELECT $1::uuid, 0
+          UNION ALL
+            SELECT
+              CASE WHEN cn.parent_id = r.node_id THEN cn.id
+                   ELSE cn.parent_id
+              END,
+              r.dist + 1
+            FROM reachable r
+            JOIN context_nodes cn
+              ON (cn.id = r.node_id AND cn.parent_id IS NOT NULL)
+              OR (cn.parent_id = r.node_id)
+            WHERE r.dist < $3
+        )
+        SELECT dist FROM reachable WHERE node_id = $2::uuid LIMIT 1
+        """,
+        _uuid.UUID(from_id), _uuid.UUID(to_id), max_N,
+    )
+    return row["dist"] if row else None
 
 
 async def get_conversation_reads(

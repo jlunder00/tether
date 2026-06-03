@@ -33,7 +33,7 @@ from db.pg_queries.nodes import (
 from db.pg_queries.sections import (
     get_sections, get_section, upsert_section, append_section, delete_section,
     list_section_files, create_section_file, rename_section_file,
-    reorder_section_files, search_sections,
+    reorder_section_files, search_sections, grep_sections,
 )
 from db.pg_queries.milestones import (
     create_milestone, get_milestones, patch_milestone, delete_milestone,
@@ -84,4 +84,5 @@ from db.pg_queries.memory import (
 from db.pg_queries.node_memory import (
     get_node_summary, list_node_summary_levels, upsert_node_summary,
     log_node_read, has_read_node_in_conversation, get_conversation_reads,
+    get_context_node_id_for_conversation, get_node_tree_distance,
 )

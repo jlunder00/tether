@@ -8,7 +8,8 @@ import asyncpg
 async def get_sections(conn: asyncpg.Connection, node_id: str) -> list[dict]:
     rows = await conn.fetch(
         """
-        SELECT section_type, name, body, position, version, updated_at
+        SELECT section_type, name, body, position, version, updated_at,
+               origin, visible_to_user
         FROM node_sections WHERE node_id = $1
         ORDER BY section_type, position
         """,
@@ -22,7 +23,8 @@ async def get_section(
 ) -> dict | None:
     row = await conn.fetchrow(
         """
-        SELECT section_type, name, body, position, version, updated_at
+        SELECT section_type, name, body, position, version, updated_at,
+               origin, visible_to_user
         FROM node_sections
         WHERE node_id = $1 AND section_type = $2 AND name = $3
         """,
@@ -37,7 +39,15 @@ async def upsert_section(
     section_type: str,
     body: str,
     name: str = "main",
+    *,
+    origin: str = "user",
+    visible_to_user: bool = True,
 ) -> dict:
+    """Insert or replace a node section.
+
+    origin: 'user' | 'conversation_agent' | 'system' — who authored this section.
+    visible_to_user: False hides the section from user-facing reads.
+    """
     nid = _uuid.UUID(node_id)
     user_uuid = await conn.fetchval(
         "SELECT current_setting('app.current_user_id', true)::uuid"
@@ -48,13 +58,19 @@ async def upsert_section(
     )
     row = await conn.fetchrow(
         """
-        INSERT INTO node_sections (user_id, node_id, section_type, name, body, position, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, now())
+        INSERT INTO node_sections
+            (user_id, node_id, section_type, name, body, position,
+             origin, visible_to_user, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
         ON CONFLICT (node_id, section_type, name) DO UPDATE
-            SET body = EXCLUDED.body, updated_at = now(), version = node_sections.version + 1
-        RETURNING section_type, name, body, version, updated_at
+            SET body           = EXCLUDED.body,
+                origin         = EXCLUDED.origin,
+                visible_to_user = EXCLUDED.visible_to_user,
+                updated_at     = now(),
+                version        = node_sections.version + 1
+        RETURNING section_type, name, body, version, updated_at, origin, visible_to_user
         """,
-        user_uuid, nid, section_type, name, body, next_pos,
+        user_uuid, nid, section_type, name, body, next_pos, origin, visible_to_user,
     )
     await conn.execute(
         "UPDATE context_nodes SET updated_at = now() WHERE id = $1", nid
@@ -68,13 +84,20 @@ async def append_section(
     section_type: str,
     content: str,
     name: str = "main",
+    *,
+    origin: str = "user",
+    visible_to_user: bool = True,
 ) -> dict:
+    """Append content to an existing section (or create it). Preserves existing body."""
     existing = await get_section(conn, node_id, section_type, name=name)
     if existing and existing["body"]:
         new_body = existing["body"] + "\n\n" + content
     else:
         new_body = content
-    return await upsert_section(conn, node_id, section_type, new_body, name=name)
+    return await upsert_section(
+        conn, node_id, section_type, new_body, name=name,
+        origin=origin, visible_to_user=visible_to_user,
+    )
 
 
 async def delete_section(
@@ -228,5 +251,73 @@ async def search_sections(
     return [
         {"node_id": str(r["node_id"]), "section_type": r["section_type"],
          "name": r["name"], "snippet": r["snippet"]}
+        for r in rows
+    ]
+
+
+async def grep_sections(
+    conn: asyncpg.Connection,
+    pattern: str,
+    node_ids: list[str] | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """ILIKE text search over node section bodies.
+
+    pattern: SQL ILIKE pattern (caller wraps in % if needed).
+    node_ids: Optional list of node UUID strings to restrict results.
+    limit:    Max rows returned (capped at 100 by callers).
+
+    Returns list of dicts: {node_id, node_name, section_type, section_name,
+                             snippet, origin, visible_to_user}.
+    """
+    if node_ids:
+        rows = await conn.fetch(
+            """
+            SELECT
+                ns.node_id::text,
+                cn.name AS node_name,
+                ns.section_type,
+                ns.name AS section_name,
+                left(ns.body, 300) AS snippet,
+                ns.origin,
+                ns.visible_to_user
+            FROM node_sections ns
+            JOIN context_nodes cn ON cn.id = ns.node_id
+            WHERE ns.node_id = ANY($1::uuid[])
+              AND ns.body ILIKE $2
+            ORDER BY cn.name, ns.section_type, ns.name
+            LIMIT $3
+            """,
+            node_ids, pattern, limit,
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT
+                ns.node_id::text,
+                cn.name AS node_name,
+                ns.section_type,
+                ns.name AS section_name,
+                left(ns.body, 300) AS snippet,
+                ns.origin,
+                ns.visible_to_user
+            FROM node_sections ns
+            JOIN context_nodes cn ON cn.id = ns.node_id
+            WHERE ns.body ILIKE $1
+            ORDER BY cn.name, ns.section_type, ns.name
+            LIMIT $2
+            """,
+            pattern, limit,
+        )
+    return [
+        {
+            "node_id": r["node_id"],
+            "node_name": r["node_name"],
+            "section_type": r["section_type"],
+            "section_name": r["section_name"],
+            "snippet": r["snippet"],
+            "origin": r["origin"],
+            "visible_to_user": r["visible_to_user"],
+        }
         for r in rows
     ]

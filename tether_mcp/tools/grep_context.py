@@ -1,17 +1,6 @@
-"""grep_context MCP tool — text search over node sections.
+"""grep_context MCP tool — text search (ILIKE) over node section bodies.
 
-Uses Postgres ILIKE for simple substring matches and tsvector GIN index for
-full-text queries. Results are returned with node context so the bot knows
-where each match lives in the tree.
-
-v1 scope:
-  ILIKE search over node_sections.body (simple, reliable, no stemming).
-  The existing tsvector GIN index on node_sections.search_vector is used
-  when ts_query mode is requested (mode='fts').
-
-Scope filtering:
-  paths — list of node paths (resolved to subtrees); if empty, searches all
-          nodes accessible to the current user via RLS.
+All SQL lives in db/pg_queries/sections.grep_sections().
 """
 from __future__ import annotations
 
@@ -29,89 +18,39 @@ async def execute_grep_context(
 
     Args:
         conn:    asyncpg connection (user-scoped via RLS).
-        pattern: Search string. Use % for ILIKE wildcards, or plain text
-                 for substring match (automatically wrapped in %).
+        pattern: Search string. Plain text is auto-wrapped in % (substring match).
+                 Use % explicitly for custom wildcard positioning.
         scope:   'user' (default) — search user's own nodes only (RLS enforced).
         paths:   Optional list of node paths to restrict search to their subtrees.
         limit:   Max results (default 20, max 100).
 
     Returns:
-        {matches: [{node_id, node_name, path, section_type, name, snippet}], total}
+        {matches: [{node_id, node_name, section_type, section_name, snippet,
+                    origin, visible_to_user}], total}
     """
-    from db.pg_queries.context import get_node_by_path
+    from db.pg_queries.sections import grep_sections
+    from db.pg_queries.nodes import get_node_by_path
 
     if not pattern or not pattern.strip():
         return {"error": "pattern_required"}
 
     limit = min(limit, 100)
 
-    # Normalize pattern: if no % wildcards, treat as substring
+    # Normalize: wrap plain text in % wildcards for substring match
     search_pattern = pattern.strip()
     if "%" not in search_pattern:
         search_pattern = f"%{search_pattern}%"
 
-    # Build node_id restriction if paths provided
-    node_uuids: list[str] | None = None
+    # Resolve path restrictions to node UUIDs
+    node_ids: list[str] | None = None
     if paths:
-        node_uuids = []
+        node_ids = []
         for p in paths:
             node = await get_node_by_path(conn, p)
             if node:
-                node_uuids.append(str(node["id"]))
-        if not node_uuids:
+                node_ids.append(str(node["id"]))
+        if not node_ids:
             return {"matches": [], "total": 0}
 
-    if node_uuids:
-        rows = await conn.fetch(
-            """
-            SELECT
-                ns.node_id::text,
-                cn.name AS node_name,
-                ns.section_type,
-                ns.name AS section_name,
-                left(ns.body, 300) AS snippet,
-                ns.origin,
-                ns.visible_to_user
-            FROM node_sections ns
-            JOIN context_nodes cn ON cn.id = ns.node_id
-            WHERE ns.node_id = ANY($1::uuid[])
-              AND ns.body ILIKE $2
-            ORDER BY cn.name, ns.section_type, ns.name
-            LIMIT $3
-            """,
-            node_uuids, search_pattern, limit,
-        )
-    else:
-        rows = await conn.fetch(
-            """
-            SELECT
-                ns.node_id::text,
-                cn.name AS node_name,
-                ns.section_type,
-                ns.name AS section_name,
-                left(ns.body, 300) AS snippet,
-                ns.origin,
-                ns.visible_to_user
-            FROM node_sections ns
-            JOIN context_nodes cn ON cn.id = ns.node_id
-            WHERE ns.body ILIKE $1
-            ORDER BY cn.name, ns.section_type, ns.name
-            LIMIT $2
-            """,
-            search_pattern, limit,
-        )
-
-    matches = [
-        {
-            "node_id": r["node_id"],
-            "node_name": r["node_name"],
-            "section_type": r["section_type"],
-            "section_name": r["section_name"],
-            "snippet": r["snippet"],
-            "origin": r["origin"],
-            "visible_to_user": r["visible_to_user"],
-        }
-        for r in rows
-    ]
-
+    matches = await grep_sections(conn, search_pattern, node_ids=node_ids, limit=limit)
     return {"matches": matches, "total": len(matches)}
