@@ -12,6 +12,7 @@ from db.pg_queries import (
     get_auto_archivable_nodes, archive_node,
     get_user_setting,
 )
+from db.pg_queries.nodes import list_nodes_index
 from db.pool_middleware import get_db_conn
 from api.ws import manager
 from api.auth import auth_dependency
@@ -140,6 +141,19 @@ async def search_sections_route(_auth=Depends(auth_dependency),
     if not q.strip():
         return []
     return await search_sections(conn, q.strip(), node_id=node_id)
+
+
+@router.get("/nodes/index")
+async def get_nodes_index(_auth=Depends(auth_dependency),
+                          conn: asyncpg.Connection = Depends(get_db_conn)):
+    """Lightweight index: id, title, parent_id, path, child_count.
+
+    No section data. One recursive-CTE DB query. Used by the frontend to
+    build the node tree without fetching full node detail for each item.
+
+    NOTE: registered before /{node_id} so "index" is not matched as a node id.
+    """
+    return await list_nodes_index(conn)
 
 
 @router.get("/nodes/{node_id}")

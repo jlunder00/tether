@@ -2,6 +2,7 @@
 
 Endpoints:
   GET    /conversations                   list conversations (RLS-scoped)
+  GET    /conversations/index             lightweight index (id, title, parent_context_node_id, updated_at, message_count)
   POST   /conversations                   create conversation
   GET    /conversations/{id}              get single conversation
   PATCH  /conversations/{id}              patch conversation
@@ -14,6 +15,10 @@ Note on before_id cursor pagination (messages endpoint): the cursor is the
 integer primary key of conversation_history. This gives stable pages under
 concurrent inserts, unlike offset-based pagination. The tradeoff is that
 clients must treat the cursor as an opaque integer string. See PR description.
+
+Note on route ordering: /conversations/index MUST be registered before
+/conversations/{conversation_id} so FastAPI does not match the literal
+string "index" as a conversation_id path parameter.
 """
 from __future__ import annotations
 
@@ -29,6 +34,7 @@ from db.pg_queries.conversations import (
     get_conversation,
     list_conversations,
     list_conversation_messages,
+    list_conversations_index,
     update_conversation,
 )
 from db.pg_queries.nodes import get_node
@@ -138,6 +144,26 @@ async def create_conv(
     )
     conv = await get_conversation(conn, cid)
     return await _attach_folder_name(conn, conv)
+
+
+# ---------------------------------------------------------------------------
+# GET /conversations/index
+# ---------------------------------------------------------------------------
+# NOTE: registered before /{conversation_id} so "index" is not matched as an id.
+
+
+@router.get("/conversations/index")
+async def get_conversations_index(
+    request: Request,
+    _auth=Depends(auth_dependency),
+    conn=Depends(get_db_conn),
+):
+    """Lightweight index: id, title, parent_context_node_id, updated_at, message_count.
+
+    No message bodies. One DB query. Used by the frontend to build tree views
+    without fetching full conversation detail for each item.
+    """
+    return await list_conversations_index(conn, user_id=request.state.user_id)
 
 
 # ---------------------------------------------------------------------------
