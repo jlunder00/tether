@@ -8,6 +8,8 @@ interface ConversationIndexItem {
   id: string
   title: string
   parent_context_node_id: string | null
+  state: ConversationDetail['state']
+  priority: ConversationDetail['priority']
   updated_at: string
   message_count: number
 }
@@ -31,9 +33,9 @@ export const useConversationsStore = defineStore('conversations', () => {
    * Load all conversations as lean index summaries for fast initial tree population.
    *
    * Upserts into `list` by id — preserves full ConversationDetail objects already
-   * cached (e.g. from fetchOne). New items use safe defaults for fields not included
-   * in the index (state: 'open', priority: 'normal'). FolderCenterPanel calls
-   * refreshForNode() in the background to upgrade these defaults with real state/priority.
+   * cached (e.g. from fetchOne). Index now includes state + priority, so new stubs
+   * are accurate from first paint. FolderCenterPanel calls refreshForNode() in the
+   * background to upgrade remaining fields (folder_name, thread_key, etc.).
    */
   async function refreshIndex(): Promise<void> {
     const res = await api('/api/conversations/index')
@@ -47,17 +49,19 @@ export const useConversationsStore = defineStore('conversations', () => {
     for (const item of items) {
       const existing = list.value.find(c => c.id === item.id)
       if (existing) {
-        // Preserve all fields not provided by the index (state, priority, is_system, etc.)
+        // Update all fields the index carries — state and priority are now accurate
         existing.name = item.title
         existing.context_node_id = item.parent_context_node_id
+        existing.state = item.state
+        existing.priority = item.priority
         existing.last_message_at = item.updated_at
       } else {
         list.value.push({
           id: item.id,
           name: item.title,
           type: 'interactive',
-          priority: 'normal',
-          state: 'open',
+          priority: item.priority,
+          state: item.state,
           context_node_id: item.parent_context_node_id,
           thread_key: null,
           is_system: false,

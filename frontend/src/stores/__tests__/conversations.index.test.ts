@@ -13,12 +13,14 @@ vi.mock('../../lib/api', () => ({ api: vi.fn() }))
 import { api } from '../../lib/api'
 const mockApi = vi.mocked(api)
 
-/** Shape returned by GET /api/conversations/index */
+/** Shape returned by GET /api/conversations/index (now includes state + priority) */
 function makeIndexItem(overrides = {}) {
   return {
     id: 'conv-1',
     title: 'Test Conversation',
     parent_context_node_id: null as string | null,
+    state: 'open' as const,
+    priority: 'normal' as const,
     updated_at: '2026-01-01T00:01:00Z',
     message_count: 3,
     ...overrides,
@@ -82,32 +84,37 @@ describe('useConversationsStore — index-based loading', () => {
       expect(store.list[0].last_message_at).toBe(ts)
     })
 
-    it('provides default state = open for index items', async () => {
-      mockApi.mockResolvedValue(mockResponse([makeIndexItem()]))
+    it('uses state from index response (not a hardcoded default)', async () => {
+      mockApi.mockResolvedValue(mockResponse([
+        makeIndexItem({ state: 'pending', priority: 'urgent' }),
+      ]))
       const store = useConversationsStore()
       await store.refreshIndex()
-      expect(store.list[0].state).toBe('open')
+      expect(store.list[0].state).toBe('pending')
+      expect(store.list[0].priority).toBe('urgent')
     })
 
-    it('does not overwrite full ConversationDetail already in list', async () => {
+    it('updates state and priority on existing items from index (index is accurate)', async () => {
       const store = useConversationsStore()
-      // Simulate a full detail already loaded (from fetchOne)
+      // Simulate an item already in list (e.g. from a prior refresh with stale data)
       store.list.push({
-        id: 'conv-1', name: 'Full Detail', type: 'interactive', priority: 'urgent',
-        state: 'open', context_node_id: 'node-a', thread_key: 'tk',
+        id: 'conv-1', name: 'Old Name', type: 'interactive', priority: 'normal',
+        state: 'open', context_node_id: null, thread_key: null,
         is_system: false, created_at: '2026-01-01T00:00:00Z',
-        last_message_at: '2026-01-01T00:01:00Z', folder_name: 'Folder',
+        last_message_at: '2026-01-01T00:00:00Z', folder_name: null,
       })
 
       mockApi.mockResolvedValue(mockResponse([
-        makeIndexItem({ id: 'conv-1', title: 'Stale Name From Index' }),
+        makeIndexItem({ id: 'conv-1', title: 'Updated Name', state: 'pending', priority: 'high' }),
       ]))
       await store.refreshIndex()
 
-      // Existing item should be untouched (priority: 'urgent' preserved)
       const item = store.list.find(c => c.id === 'conv-1')
-      expect(item?.priority).toBe('urgent')
-      // Name may be from whichever merge strategy; core: full details preserved
+      // Index is now the authoritative source for state + priority
+      expect(item?.state).toBe('pending')
+      expect(item?.priority).toBe('high')
+      // Fields not in the index (thread_key, is_system) are preserved
+      expect(item?.thread_key).toBeNull()
     })
 
     it('indexLoaded stays false on fetch error', async () => {
