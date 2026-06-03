@@ -38,15 +38,16 @@ All new tables have:
   - FORCE ROW LEVEL SECURITY
   - USING (user_id = current_setting('app.current_user_id', true)::uuid)
 
-Revision ID: k1l2m3n4o5p6
+Revision ID: l1m2n3o4p5q6
 Revises: j1k2l3m4n5o6
-Create Date: 2026-06-02
+Create Date: 2026-06-03
+Note: k1l2m3n4o5p6 is taken by Stream B (permission_grants); renamed to l1m2n3o4p5q6.
 """
 from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "k1l2m3n4o5p6"
+revision: str = "l1m2n3o4p5q6"
 down_revision: Union[str, Sequence[str], None] = "j1k2l3m4n5o6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
