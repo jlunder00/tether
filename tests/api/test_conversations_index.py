@@ -126,10 +126,15 @@ async def test_conversations_index_rls(api_client, api_client_b, conn):
 
 @pytest.mark.asyncio
 async def test_conversations_index_no_sql_conflict_with_conversation_id_route(api_client, conn):
-    """Route /conversations/index must not be shadowed by /conversations/{id}."""
+    """Route /conversations/index must not be shadowed by /conversations/{id}.
+
+    If FastAPI matched 'index' as a conversation_id path param it would 404
+    (no conversation has id='index'). Asserting a list response proves the
+    literal /index route was matched, not the /{id} handler.
+    """
     resp = await api_client.get("/api/conversations/index")
-    # Must not 404 (which would indicate FastAPI treated 'index' as an id)
     assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +228,22 @@ async def test_nodes_index_excludes_archived(api_client, conn):
 
 
 @pytest.mark.asyncio
+async def test_nodes_index_rls(api_client, api_client_b, conn):
+    """User B must not see user A's nodes in the index.
+
+    The nodes index relies solely on RLS (no explicit user_id filter in the
+    query) — this test is the primary guard against an RLS misconfiguration.
+    """
+    node = await create_node(conn, "PrivateNode")
+    resp_b = await api_client_b.get("/api/nodes/index")
+    assert resp_b.status_code == 200
+    ids = [i["id"] for i in resp_b.json()]
+    assert node["id"] not in ids
+
+
+@pytest.mark.asyncio
 async def test_nodes_index_no_sql_conflict_with_node_id_route(api_client, conn):
     """Route /nodes/index must not be shadowed by /nodes/{node_id}."""
     resp = await api_client.get("/api/nodes/index")
     assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
