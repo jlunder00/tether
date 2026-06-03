@@ -3,6 +3,26 @@ import { ref, computed } from 'vue'
 import { api } from '../lib/api'
 import type { ConversationDetail, ConversationMessage, MessagesPage } from '../types/conversations'
 
+/** Lean index item returned by GET /api/conversations/index */
+interface ConversationIndexItem {
+  id: string
+  title: string
+  parent_context_node_id: string | null
+  updated_at: string
+  message_count: number
+}
+
+/**
+ * Returns true if a ConversationDetail in the list already carries full data
+ * (i.e. it came from a full API response rather than an index mapping).
+ * We detect this by checking for fields that index items don't provide.
+ * Full items have explicit `type`, `priority` != 'normal' means user-set, etc.
+ * The simplest reliable heuristic: presence of `is_system` boolean.
+ */
+function isFullDetail(conv: ConversationDetail): boolean {
+  return typeof (conv as any).is_system === 'boolean'
+}
+
 export const useConversationsStore = defineStore('conversations', () => {
   const list = ref<ConversationDetail[]>([])
   const selectedId = ref<string | null>(null)
@@ -11,9 +31,59 @@ export const useConversationsStore = defineStore('conversations', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
+  /** True after a successful refreshIndex() — tree/sidebar can skip per-node refresh calls */
+  const indexLoaded = ref(false)
+
   const selected = computed(() =>
     selectedId.value ? list.value.find(c => c.id === selectedId.value) ?? null : null
   )
+
+  /**
+   * Load all conversations as lean index summaries.
+   * Populates `list` without overwriting full ConversationDetail objects already cached.
+   * After this, tree/sidebar navigation is instant (filter from cached list).
+   */
+  async function refreshIndex(): Promise<void> {
+    const res = await api('/api/conversations/index')
+    if (!res.ok) return
+    let items: ConversationIndexItem[]
+    try {
+      items = await res.json()
+    } catch {
+      return
+    }
+    // Upsert each index item — preserve full details where already loaded
+    for (const item of items) {
+      const existing = list.value.find(c => c.id === item.id)
+      if (existing && isFullDetail(existing)) {
+        // Full detail already cached — update mutable display fields only
+        existing.name = item.title
+        existing.context_node_id = item.parent_context_node_id
+        existing.last_message_at = item.updated_at
+      } else if (existing) {
+        // Index-level entry already there — refresh it
+        existing.name = item.title
+        existing.context_node_id = item.parent_context_node_id
+        existing.last_message_at = item.updated_at
+      } else {
+        // New entry — insert as a lean stub with safe defaults
+        list.value.push({
+          id: item.id,
+          name: item.title,
+          type: 'interactive',
+          priority: 'normal',
+          state: 'open',
+          context_node_id: item.parent_context_node_id,
+          thread_key: null,
+          is_system: false,
+          created_at: item.updated_at,
+          last_message_at: item.updated_at,
+          folder_name: null,
+        })
+      }
+    }
+    indexLoaded.value = true
+  }
 
   async function refresh(params?: { state?: string; context_node_id?: string }): Promise<void> {
     loading.value = true
@@ -33,11 +103,34 @@ export const useConversationsStore = defineStore('conversations', () => {
   }
 
   async function create(payload: { name: string; type?: string; priority?: string; context_node_id?: string }): Promise<ConversationDetail | null> {
+    // ── Optimistic insert: show immediately, reconcile with server response ──
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const now = new Date().toISOString()
+    const tempConv: ConversationDetail = {
+      id: tempId,
+      name: payload.name,
+      type: (payload.type as ConversationDetail['type']) ?? 'interactive',
+      priority: (payload.priority as ConversationDetail['priority']) ?? 'normal',
+      state: 'open',
+      context_node_id: payload.context_node_id ?? null,
+      thread_key: null,
+      is_system: false,
+      created_at: now,
+      last_message_at: now,
+      folder_name: null,
+    }
+    list.value.unshift(tempConv)
+
     const res = await api('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'interactive', priority: 'normal', ...payload }),
     })
+
+    // Remove temp entry (will be replaced by real or discarded)
+    const tempIdx = list.value.findIndex(c => c.id === tempId)
+    if (tempIdx !== -1) list.value.splice(tempIdx, 1)
+
     if (!res.ok) return null
     const conv: ConversationDetail = await res.json()
     list.value.unshift(conv)
@@ -162,5 +255,5 @@ export const useConversationsStore = defineStore('conversations', () => {
     return conv
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, refresh, create, patch, discard, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
+  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, indexLoaded, refreshIndex, refresh, create, patch, discard, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
 })

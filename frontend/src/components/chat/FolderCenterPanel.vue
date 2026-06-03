@@ -40,7 +40,12 @@ const activeNode = computed(() =>
 )
 
 watch(() => props.nodeId, (id) => {
-  convStore.refresh(id ? { context_node_id: id } : undefined)
+  // If the index is already loaded, conversations are already in convStore.list.
+  // Filter is reactive via the `conversations` computed above — no network call needed.
+  // Only refresh from the API when the index hasn't been loaded yet.
+  if (!convStore.indexLoaded) {
+    convStore.refresh(id ? { context_node_id: id } : undefined)
+  }
 }, { immediate: true })
 
 async function startChat() {

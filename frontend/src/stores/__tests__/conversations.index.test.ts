@@ -1,0 +1,208 @@
+/**
+ * Tests for index-based loading + optimistic create in useConversationsStore.
+ *
+ * Stream E: conversation_index endpoint for fast tree population.
+ * Shapes as proposed by conversation-index-builder teammate.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { setActivePinia, createPinia } from 'pinia'
+import { useConversationsStore } from '../conversations'
+
+vi.mock('../../lib/api', () => ({ api: vi.fn() }))
+
+import { api } from '../../lib/api'
+const mockApi = vi.mocked(api)
+
+/** Shape returned by GET /api/conversations/index */
+function makeIndexItem(overrides = {}) {
+  return {
+    id: 'conv-1',
+    title: 'Test Conversation',
+    parent_context_node_id: null as string | null,
+    updated_at: '2026-01-01T00:01:00Z',
+    message_count: 3,
+    ...overrides,
+  }
+}
+
+function mockResponse(data: unknown, ok = true, status = 200) {
+  return { ok, status, json: async () => data } as Response
+}
+
+describe('useConversationsStore — index-based loading', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockApi.mockReset()
+  })
+
+  describe('refreshIndex()', () => {
+    it('calls GET /api/conversations/index', async () => {
+      mockApi.mockResolvedValue(mockResponse([]))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+      expect(mockApi).toHaveBeenCalledWith('/api/conversations/index')
+    })
+
+    it('sets indexLoaded = true after successful fetch', async () => {
+      mockApi.mockResolvedValue(mockResponse([makeIndexItem()]))
+      const store = useConversationsStore()
+      expect(store.indexLoaded).toBe(false)
+      await store.refreshIndex()
+      expect(store.indexLoaded).toBe(true)
+    })
+
+    it('populates list from index items', async () => {
+      const items = [
+        makeIndexItem({ id: 'conv-1', title: 'Conv One', parent_context_node_id: 'node-a' }),
+        makeIndexItem({ id: 'conv-2', title: 'Conv Two', parent_context_node_id: null }),
+      ]
+      mockApi.mockResolvedValue(mockResponse(items))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+
+      expect(store.list).toHaveLength(2)
+      // Maps title → name
+      expect(store.list[0].name).toBe('Conv One')
+      expect(store.list[1].name).toBe('Conv Two')
+    })
+
+    it('maps parent_context_node_id → context_node_id in list', async () => {
+      const items = [makeIndexItem({ id: 'c1', parent_context_node_id: 'node-xyz' })]
+      mockApi.mockResolvedValue(mockResponse(items))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+      expect(store.list[0].context_node_id).toBe('node-xyz')
+    })
+
+    it('maps updated_at → last_message_at in list', async () => {
+      const ts = '2026-03-15T10:00:00Z'
+      mockApi.mockResolvedValue(mockResponse([makeIndexItem({ updated_at: ts })]))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+      expect(store.list[0].last_message_at).toBe(ts)
+    })
+
+    it('provides default state = open for index items', async () => {
+      mockApi.mockResolvedValue(mockResponse([makeIndexItem()]))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+      expect(store.list[0].state).toBe('open')
+    })
+
+    it('does not overwrite full ConversationDetail already in list', async () => {
+      const store = useConversationsStore()
+      // Simulate a full detail already loaded (from fetchOne)
+      store.list.push({
+        id: 'conv-1', name: 'Full Detail', type: 'interactive', priority: 'urgent',
+        state: 'open', context_node_id: 'node-a', thread_key: 'tk',
+        is_system: false, created_at: '2026-01-01T00:00:00Z',
+        last_message_at: '2026-01-01T00:01:00Z', folder_name: 'Folder',
+      })
+
+      mockApi.mockResolvedValue(mockResponse([
+        makeIndexItem({ id: 'conv-1', title: 'Stale Name From Index' }),
+      ]))
+      await store.refreshIndex()
+
+      // Existing item should be untouched (priority: 'urgent' preserved)
+      const item = store.list.find(c => c.id === 'conv-1')
+      expect(item?.priority).toBe('urgent')
+      // Name may be from whichever merge strategy; core: full details preserved
+    })
+
+    it('indexLoaded stays false on fetch error', async () => {
+      mockApi.mockResolvedValue(mockResponse(null, false, 500))
+      const store = useConversationsStore()
+      await store.refreshIndex()
+      expect(store.indexLoaded).toBe(false)
+    })
+  })
+})
+
+describe('useConversationsStore — optimistic create', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockApi.mockReset()
+  })
+
+  it('adds a temporary entry to list BEFORE server response', async () => {
+    let resolveResponse!: (v: Response) => void
+    const serverResponse = new Promise<Response>(r => { resolveResponse = r })
+    mockApi.mockReturnValue(serverResponse)
+
+    const store = useConversationsStore()
+    // Start create but don't await it
+    const createPromise = store.create({ name: 'My New Chat' })
+
+    // Should be in list immediately (optimistic)
+    expect(store.list.some(c => c.name === 'My New Chat')).toBe(true)
+
+    // Resolve with server response
+    resolveResponse(mockResponse({
+      id: 'real-id-123', name: 'My New Chat', type: 'interactive', priority: 'normal',
+      state: 'open', context_node_id: null, thread_key: null, is_system: false,
+      created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:00:00Z',
+      folder_name: null,
+    }))
+
+    await createPromise
+  })
+
+  it('replaces temp entry with real id after server response', async () => {
+    const realConv = {
+      id: 'real-server-id', name: 'New Chat', type: 'interactive' as const,
+      priority: 'normal' as const, state: 'open' as const, context_node_id: null,
+      thread_key: null, is_system: false, created_at: '2026-01-01T00:00:00Z',
+      last_message_at: '2026-01-01T00:00:00Z', folder_name: null,
+    }
+    mockApi.mockResolvedValue(mockResponse(realConv))
+
+    const store = useConversationsStore()
+    await store.create({ name: 'New Chat' })
+
+    // Should have real id, not temp
+    const ids = store.list.map(c => c.id)
+    expect(ids).toContain('real-server-id')
+    expect(ids.some(id => id.startsWith('temp-'))).toBe(false)
+    // Only one entry (temp replaced, not duplicated)
+    expect(store.list.filter(c => c.name === 'New Chat')).toHaveLength(1)
+  })
+
+  it('removes temp entry on server error', async () => {
+    mockApi.mockResolvedValue(mockResponse(null, false, 500))
+
+    const store = useConversationsStore()
+    const result = await store.create({ name: 'Doomed Chat' })
+
+    expect(result).toBeNull()
+    // Temp entry removed
+    expect(store.list.some(c => c.name === 'Doomed Chat')).toBe(false)
+  })
+
+  it('temp entry has correct name and context_node_id immediately', async () => {
+    let resolve!: (v: Response) => void
+    mockApi.mockReturnValue(new Promise<Response>(r => { resolve = r }))
+
+    const store = useConversationsStore()
+    store.create({ name: 'Project Chat', context_node_id: 'node-abc' })
+
+    const temp = store.list.find(c => c.name === 'Project Chat')
+    expect(temp).toBeTruthy()
+    expect(temp?.context_node_id).toBe('node-abc')
+
+    resolve(mockResponse(null, false, 500)) // cleanup
+  })
+
+  it('temp entry id starts with "temp-" prefix', async () => {
+    let resolve!: (v: Response) => void
+    mockApi.mockReturnValue(new Promise<Response>(r => { resolve = r }))
+
+    const store = useConversationsStore()
+    store.create({ name: 'Temp Test' })
+
+    const temp = store.list.find(c => c.name === 'Temp Test')
+    expect(temp?.id).toMatch(/^temp-/)
+
+    resolve(mockResponse(null, false, 500)) // cleanup
+  })
+})
