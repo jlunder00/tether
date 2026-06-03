@@ -318,9 +318,12 @@ async def list_conversations_index(
 ) -> list[dict]:
     """Return a lightweight index of all conversations for the given user.
 
-    Returns [{id, title, parent_context_node_id, updated_at, message_count}].
+    Returns [{id, title, parent_context_node_id, state, priority, updated_at, message_count}].
     One query — no per-row N+1. Message bodies and full detail are excluded.
     Used by the frontend to populate conversation trees quickly.
+
+    state and priority are included so the frontend can render pending badges
+    and priority dots on first paint without a follow-up upgrade call.
     """
     rows = await conn.fetch(
         """
@@ -328,12 +331,15 @@ async def list_conversations_index(
             c.id::text                       AS id,
             c.name                           AS title,
             c.context_node_id::text          AS parent_context_node_id,
+            c.state,
+            c.priority,
             COALESCE(c.last_message_at, c.created_at) AS updated_at,
             COUNT(ch.id)::int                AS message_count
         FROM conversations c
         LEFT JOIN conversation_history ch ON ch.conversation_id = c.id
         WHERE c.user_id = $1::uuid
-        GROUP BY c.id, c.name, c.context_node_id, c.last_message_at, c.created_at
+        GROUP BY c.id, c.name, c.context_node_id, c.state, c.priority,
+                 c.last_message_at, c.created_at
         ORDER BY COALESCE(c.last_message_at, c.created_at) DESC
         """,
         user_id,

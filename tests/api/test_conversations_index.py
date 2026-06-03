@@ -1,7 +1,7 @@
 """API tests — lightweight index endpoints.
 
 Endpoints under test:
-  GET /api/conversations/index   → [{id, title, parent_context_node_id, updated_at, message_count}]
+  GET /api/conversations/index   → [{id, title, parent_context_node_id, state, priority, updated_at, message_count}]
   GET /api/nodes/index           → [{id, title, parent_id, path, child_count}]
 
 These are intentionally minimal — no message bodies, no section data.
@@ -57,11 +57,30 @@ async def test_conversations_index_shape(api_client, conn):
     assert item["title"] == "My conv"
     assert "parent_context_node_id" in item
     assert "updated_at" in item
+    assert "state" in item          # needed for pending badges on first paint
+    assert "priority" in item       # needed for priority dots on first paint
+    assert "updated_at" in item
     assert "message_count" in item
     # Must NOT expose full conversation detail fields
     assert "body" not in item
-    assert "state" not in item
     assert "type" not in item
+
+
+@pytest.mark.asyncio
+async def test_conversations_index_state_and_priority(api_client, conn):
+    """state and priority are returned so frontend avoids a follow-up upgrade call."""
+    cid = await create_conversation(
+        conn, user_id=TEST_USER_ID, name="Prio test", notification_type="bot",
+        priority="high",
+    )
+    await conn.execute(
+        "UPDATE conversations SET state = 'pending' WHERE id = $1::uuid", cid
+    )
+    resp = await api_client.get("/api/conversations/index")
+    assert resp.status_code == 200
+    item = next(i for i in resp.json() if i["id"] == cid)
+    assert item["state"] == "pending"
+    assert item["priority"] == "high"
 
 
 @pytest.mark.asyncio
