@@ -43,6 +43,11 @@ class Session:
     created_at: float = dataclasses.field(default_factory=time.time)
     permission_pending: dict = dataclasses.field(default_factory=dict)
     coalescing_buffer: CoalescingBuffer = dataclasses.field(default_factory=CoalescingBuffer)
+    # Optional: linked conversation for per-conversation permission grants.
+    conversation_id: str | None = None
+    # Tracks the last emitted agent_action so we can synthesize a 'complete'
+    # status when the next distinct tool_use or turn_complete arrives.
+    last_emitted_action: dict | None = None
 
 
 def _stable_options_hash(options: dict) -> str:
@@ -84,6 +89,8 @@ class Layer:
         user_ws_id: str,
         agent_version: str,
         options: dict,
+        *,
+        conversation_id: str | None = None,
     ) -> Session:
         session_id = str(uuid.uuid4())
         session = Session(
@@ -92,6 +99,7 @@ class Layer:
             user_ws_id=user_ws_id,
             agent_version=agent_version,
             options=options,
+            conversation_id=conversation_id,
         )
         self.sessions[session_id] = session
         return session
@@ -246,10 +254,22 @@ async def _translate_event(
     table: TranslationTable,
     session: Session,
 ) -> AsyncIterator[dict]:
-    """Translate a raw SDK event to one or more layer events."""
+    """Translate a raw SDK event to one or more layer events.
+
+    agent_action lifecycle (heuristic — no tool_result in pool stream):
+      - First tool_use for a (tool_name, phrase) key  → status='starting'
+      - Repeat within coalescing window              → status='running', same id
+      - New tool_use with a different id arrives     → emit 'complete' for the
+                                                       previous, then 'starting'
+      - turn_complete (result event) arrives         → emit 'complete' for any
+                                                       in-flight action, then
+                                                       emit turn_complete
+    """
     # Pool uses {"event": "cancelled"} (SSE event-field convention) when the
     # subprocess is interrupted — check this key first before the type dispatch.
     if sdk_event.get("event") == "cancelled":
+        # Clear any in-flight action without emitting complete on interrupt.
+        session.last_emitted_action = None
         yield {"type": "interrupted", "session_id": session_id}
         return
 
@@ -264,6 +284,10 @@ async def _translate_event(
         return
 
     if event_type == "result":
+        # Synthesize 'complete' for any action still in flight.
+        if session.last_emitted_action:
+            yield {**session.last_emitted_action, "status": "complete"}
+            session.last_emitted_action = None
         yield {
             "type": "turn_complete",
             "session_id": session_id,
@@ -278,31 +302,52 @@ async def _translate_event(
         entry = table.lookup(tool_name)
 
         if isinstance(entry, PassthroughEntry):
+            # Passthrough tools (e.g. send_status_update) emit a status event
+            # with phase='tool_call' so the frontend can show inline progress.
             yield {
                 "type": "status",
                 "session_id": session_id,
-                "message": args.get("text", ""),
+                "phase": "tool_call",
+                "text": args.get("text", ""),
             }
             return
 
         phrase = table.interpolate_phrase(entry, args)
         action_id, coalesced = session.coalescing_buffer.record(tool_name, phrase)
-        yield {
+
+        # If a DIFFERENT action is in flight, mark it complete before this one starts.
+        if session.last_emitted_action and session.last_emitted_action["id"] != action_id:
+            yield {**session.last_emitted_action, "status": "complete"}
+
+        status = "running" if coalesced else "starting"
+        event: dict = {
             "type": "agent_action",
             "session_id": session_id,
-            "action_id": action_id,
-            "action": phrase,
-            "coalesced": coalesced,
+            "id": action_id,
+            "tool_name": tool_name,
+            "friendly_text": phrase,
+            "status": status,
         }
+        session.last_emitted_action = event
+        yield event
         return
 
     if event_type == "status":
+        # Forwarded from bot pipeline phase signals (bot.py / register.py calls
+        # status_fn at classifier, main_reasoning, summarization transitions).
+        # The caller is responsible for supplying 'phase'; default to 'main_reasoning'.
         yield {
             "type": "status",
             "session_id": session_id,
-            "message": sdk_event.get("message", ""),
+            "phase": sdk_event.get("phase", "main_reasoning"),
+            "text": sdk_event.get("text", sdk_event.get("message", "")),
         }
         return
 
-    # Unknown event — forward as status for visibility
-    yield {"type": "status", "session_id": session_id, "message": str(sdk_event)}
+    # Unknown event — forward as status for visibility (phase unknown → main_reasoning)
+    yield {
+        "type": "status",
+        "session_id": session_id,
+        "phase": "main_reasoning",
+        "text": str(sdk_event),
+    }

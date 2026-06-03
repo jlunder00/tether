@@ -215,7 +215,7 @@ async def test_control_request_user_action_user_approves():
 
     perm_events = [e for e in events if e.get("type") == "permission_request"]
     assert len(perm_events) == 1
-    assert perm_events[0]["summary"] == "Update 1 tasks"
+    assert perm_events[0]["target"] == "Update 1 tasks"
 
     assert len(pool._send_control_calls) == 1
     assert pool._send_control_calls[0]["decision"] == "allow"

@@ -13,6 +13,44 @@ search:
   type: background
   phrase: "Searching for '{query}'"
 
+# Memory-context tools (2.5 agent)
+read_context:
+  type: background
+  phrase: "Looking at {node_title}"
+
+read_memory:
+  type: background
+  phrase: "Checking memory"
+
+read_node_memory:
+  type: background
+  phrase: "Reading notes on {node_title}"
+
+search_context:
+  type: background
+  phrase: "Searching context"
+
+search_memory:
+  type: background
+  phrase: "Searching memory"
+
+grep_context:
+  type: background
+  phrase: "Scanning context"
+
+# MCP-namespaced aliases used by 2.0 agent via tether MCP server
+mcp__tether__upsert_tasks:
+  type: background
+  phrase: "Updating tasks"
+
+mcp__tether__get_anchors:
+  type: background
+  phrase: "Reading your schedule"
+
+mcp__tether__get_plan:
+  type: background
+  phrase: "Reading your plan"
+
 # Premium internal tools — kept opaque
 consult_advisor:
   type: background_hidden
@@ -34,29 +72,49 @@ send_status_update:
   type: passthrough
 
 # Channel 2 — user-action tools (permission-eligible)
+# kind: "user_section_edit" | "destructive" | "read_out_of_scope"
+
 upsert_tasks:
   type: user_action
   phrase_short: "Updating tasks"
   permission_summary: "Update {count} tasks"
   permission_detail_field: "tasks"
+  kind: "user_section_edit"
 
 delete_tasks:
   type: user_action
   phrase_short: "Removing tasks"
   permission_summary: "Delete {count} items"
   permission_detail_field: "operations"
+  kind: "destructive"
 
 upsert_context:
   type: user_action
   phrase_short: "Updating context"
   permission_summary: "Update context: {subject}"
   permission_detail_field: "nodes"
+  kind: "user_section_edit"
 
 delete_context:
   type: user_action
   phrase_short: "Removing context"
   permission_summary: "Delete context: {subject}"
   permission_detail_field: "operations"
+  kind: "destructive"
+
+write_node_memory:
+  type: user_action
+  phrase_short: "Noting: {title}"
+  permission_summary: "Save note: {title}"
+  permission_detail_field: "value"
+  kind: "user_section_edit"
+
+propose_user_memory_write:
+  type: user_action
+  phrase_short: "Proposing memory update"
+  permission_summary: "Propose memory: {key}"
+  permission_detail_field: "value"
+  kind: "user_section_edit"
 
 # Fallback
 _unknown:

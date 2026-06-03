@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import uuid
+from collections.abc import Callable, Awaitable
 from typing import Any
 
 from interactive_agent_layer.config import get_permission_timeout
@@ -18,7 +19,6 @@ from interactive_agent_layer.translation import (
 )
 
 
-
 @dataclasses.dataclass
 class PermissionResultAllow:
     pass
@@ -27,6 +27,11 @@ class PermissionResultAllow:
 @dataclasses.dataclass
 class PermissionResultDeny:
     reason: str = "denied"
+
+
+# Type aliases for injected grant functions
+CheckGrantFn = Callable[[str, str, str, str], Awaitable[bool]]
+InsertGrantFn = Callable[[str, str, str, str], Awaitable[None]]
 
 
 class PermissionGate:
@@ -39,6 +44,14 @@ class PermissionGate:
     ``outbound_events`` receives permission_request dicts when a user_action tool
     needs approval.  Callers (run_turn) drain this queue and yield the events on
     the SSE stream so they cross the process boundary to the API / dispatch layer.
+
+    Grant functions (optional, injected for testability and DB-decoupling):
+        check_grant_fn(user_id, conversation_id, target, kind) -> bool
+            Returns True if a stored grant already covers this request; the gate
+            auto-allows and skips the interactive permission_request flow.
+        insert_grant_fn(user_id, conversation_id, target, kind) -> None
+            Called after the user approves to persist the grant for the
+            remainder of the conversation.
     """
 
     def __init__(
@@ -47,11 +60,15 @@ class PermissionGate:
         session: Any,       # Session — avoid circular import
         outbound_events: asyncio.Queue,
         auto_approve_user_actions: bool = False,
+        check_grant_fn: CheckGrantFn | None = None,
+        insert_grant_fn: InsertGrantFn | None = None,
     ) -> None:
         self._table = translation_table
         self._session = session
         self._outbound_events = outbound_events
         self._auto_approve = auto_approve_user_actions
+        self._check_grant_fn = check_grant_fn
+        self._insert_grant_fn = insert_grant_fn
 
     async def can_use_tool(
         self,
@@ -75,26 +92,37 @@ class PermissionGate:
         if self._auto_approve:
             return PermissionResultAllow()
 
-        # Emit permission_request, await user response
+        # Human-readable target derived from the permission_summary template.
+        target = entry.permission_summary.format_map(ForgivingMap(args))
+        kind = entry.kind
+        conv_id: str = getattr(self._session, "conversation_id", None) or ""
+
+        # Check existing per-conversation grant — skip the interactive flow if found.
+        if self._check_grant_fn is not None:
+            granted = await self._check_grant_fn(
+                self._session.user_id, conv_id, target, kind
+            )
+            if granted:
+                return PermissionResultAllow()
+
+        # Emit permission_request on the outbound queue — run_turn drains this and
+        # yields the event on the SSE stream so it crosses the process boundary to
+        # dispatch / the API layer.  WSPublisher is intentionally not used here: it
+        # only works within the same OS process.
         request_id = str(uuid.uuid4())
-        detail = args.get(entry.permission_detail_field, [])
-        summary = entry.permission_summary.format_map(ForgivingMap(args))
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[bool] = loop.create_future()
         self._session.permission_pending[request_id] = future
 
-        # Emit on the outbound queue — run_turn drains this and yields the
-        # event on the SSE stream so it crosses the process boundary to
-        # dispatch / the API layer.  WSPublisher is intentionally not used
-        # here: it only works within the same OS process.
         await self._outbound_events.put(
             {
                 "type": "permission_request",
                 "session_id": self._session.session_id,
                 "request_id": request_id,
-                "summary": summary,
-                "details": detail,
+                "kind": kind,
+                "target": target,
+                "reason_from_bot": None,
             }
         )
 
@@ -107,5 +135,10 @@ class PermissionGate:
             approved = False
         finally:
             self._session.permission_pending.pop(request_id, None)
+
+        if approved and self._insert_grant_fn is not None:
+            await self._insert_grant_fn(
+                self._session.user_id, conv_id, target, kind
+            )
 
         return PermissionResultAllow() if approved else PermissionResultDeny()

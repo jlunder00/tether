@@ -45,15 +45,23 @@ export const useChatStore = defineStore('chat', () => {
           case 'agent_action': {
             activeSessionId.value = event.session_id
             const bot = messages.value[botMsgIndex]
-            ;(bot.actions ??= []).push({ action: event.action, tool: event.tool })
+            // Only track starting/running pills; complete just clears in-progress.
+            // Wave 2 (frontend-events-renderer) will render rich pill UI.
+            if (event.status !== 'complete') {
+              const existing = (bot.actions ??= []).find(a => a.friendly_text === event.friendly_text)
+              if (!existing) {
+                bot.actions!.push({ friendly_text: event.friendly_text, tool_name: event.tool_name })
+              }
+            }
             break
           }
           case 'permission_request': {
             activeSessionId.value = event.session_id
             const req: PermissionRequest = {
               request_id: event.request_id,
-              summary: event.summary,
-              details: event.details,
+              kind: event.kind,
+              target: event.target,
+              reason_from_bot: event.reason_from_bot,
             }
             if (!pendingPermissionRequest.value) {
               pendingPermissionRequest.value = req
@@ -64,7 +72,7 @@ export const useChatStore = defineStore('chat', () => {
           }
           case 'status':
             activeSessionId.value = event.session_id
-            statusMessage.value = event.message
+            statusMessage.value = event.text
             break
           case 'turn_complete':
             // final_text is canonical — overwrite accumulated deltas

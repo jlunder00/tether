@@ -97,8 +97,8 @@ describe('useChatStore', () => {
 
   it('send accumulates agent_action pills on bot message', async () => {
     setBotTransport(makeTransport([
-      { type: 'agent_action', session_id: 'test', action: 'Thinking', tool: 'reason' },
-      { type: 'agent_action', session_id: 'test', action: 'Running', tool: 'bash' },
+      { type: 'agent_action', session_id: 'test', id: 'id1', tool_name: 'reason', friendly_text: 'Thinking', status: 'starting' },
+      { type: 'agent_action', session_id: 'test', id: 'id2', tool_name: 'bash', friendly_text: 'Running', status: 'starting' },
       { type: 'turn_complete', session_id: 'test', final_text: 'done' },
     ]))
     setActivePinia(createPinia())
@@ -106,13 +106,13 @@ describe('useChatStore', () => {
     await store.send('hi')
     const bot = store.messages[1]
     expect(bot.actions).toHaveLength(2)
-    expect(bot.actions![0]).toMatchObject({ action: 'Thinking', tool: 'reason' })
-    expect(bot.actions![1]).toMatchObject({ action: 'Running', tool: 'bash' })
+    expect(bot.actions![0]).toMatchObject({ friendly_text: 'Thinking', tool_name: 'reason' })
+    expect(bot.actions![1]).toMatchObject({ friendly_text: 'Running', tool_name: 'bash' })
   })
 
   it('send sets statusMessage from status event, clears on turn_complete', async () => {
     setBotTransport(makeTransport([
-      { type: 'status', session_id: 'test', message: 'Thinking...' },
+      { type: 'status', session_id: 'test', phase: 'main_reasoning', text: 'Thinking...' },
       { type: 'turn_complete', session_id: 'test', final_text: 'done' },
     ]))
     setActivePinia(createPinia())
@@ -151,8 +151,9 @@ describe('useChatStore', () => {
         type: 'permission_request',
         session_id: 'sess1',
         request_id: 'req1',
-        summary: 'Allow file read',
-        details: [{ label: 'path', value: '/etc/passwd' }],
+        kind: 'user_section_edit',
+        target: 'Allow file read',
+        reason_from_bot: null,
       },
       { type: 'turn_complete', session_id: 'sess1', final_text: '' },
     ], { sendRaw }))
@@ -161,7 +162,8 @@ describe('useChatStore', () => {
     await store.send('hi')
     expect(store.pendingPermissionRequest).toMatchObject({
       request_id: 'req1',
-      summary: 'Allow file read',
+      kind: 'user_section_edit',
+      target: 'Allow file read',
     })
   })
 
@@ -171,15 +173,17 @@ describe('useChatStore', () => {
         type: 'permission_request',
         session_id: 'sess1',
         request_id: 'req1',
-        summary: 'First request',
-        details: [],
+        kind: 'user_section_edit',
+        target: 'First request',
+        reason_from_bot: null,
       },
       {
         type: 'permission_request',
         session_id: 'sess1',
         request_id: 'req2',
-        summary: 'Second request',
-        details: [],
+        kind: 'destructive',
+        target: 'Second request',
+        reason_from_bot: null,
       },
       { type: 'turn_complete', session_id: 'sess1', final_text: '' },
     ]))
@@ -199,8 +203,9 @@ describe('useChatStore', () => {
     // Manually set up a pending permission request
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Test',
-      details: [],
+      kind: 'user_section_edit',
+      target: 'Test',
+      reason_from_bot: null,
     }
     store.respondToPermission('req1', true)
     expect(sendRaw).toHaveBeenCalledWith({
@@ -215,8 +220,8 @@ describe('useChatStore', () => {
     setBotTransport(makeTransport([], { sendRaw }))
     setActivePinia(createPinia())
     const store = useChatStore()
-    store.pendingPermissionRequest = { request_id: 'req1', summary: 'First', details: [] }
-    store.permissionQueue = [{ request_id: 'req2', summary: 'Second', details: [] }]
+    store.pendingPermissionRequest = { request_id: 'req1', kind: 'user_section_edit', target: 'First', reason_from_bot: null }
+    store.permissionQueue = [{ request_id: 'req2', kind: 'destructive', target: 'Second', reason_from_bot: null }]
     store.respondToPermission('req1', false)
     expect(store.pendingPermissionRequest?.request_id).toBe('req2')
     expect(store.permissionQueue).toHaveLength(0)
