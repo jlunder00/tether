@@ -119,6 +119,92 @@ describe('useConversationsStore — index-based loading', () => {
   })
 })
 
+describe('useConversationsStore — refreshForNode (silent background upsert)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    mockApi.mockReset()
+  })
+
+  function makeFullConv(id: string, nodeId: string | null = null) {
+    return {
+      id, name: `Conv ${id}`, type: 'interactive' as const,
+      priority: 'urgent' as const, state: 'pending' as const,
+      context_node_id: nodeId, thread_key: null, is_system: false,
+      created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:01:00Z',
+      folder_name: null,
+    }
+  }
+
+  it('calls GET /api/conversations with context_node_id param when nodeId given', async () => {
+    mockApi.mockResolvedValue(mockResponse([]))
+    const store = useConversationsStore()
+    await store.refreshForNode('node-abc')
+    const url = mockApi.mock.calls[0][0] as string
+    expect(url).toContain('context_node_id=node-abc')
+  })
+
+  it('calls GET /api/conversations without scope param when nodeId is null', async () => {
+    mockApi.mockResolvedValue(mockResponse([]))
+    const store = useConversationsStore()
+    await store.refreshForNode(null)
+    const url = mockApi.mock.calls[0][0] as string
+    expect(url).not.toContain('context_node_id')
+  })
+
+  it('upserts full ConversationDetail into existing list (upgrades index stubs)', async () => {
+    const store = useConversationsStore()
+    // Simulate index-loaded stub with wrong state/priority
+    store.list.push({ id: 'c1', name: 'Conv 1', type: 'interactive', priority: 'normal', state: 'open',
+      context_node_id: 'node-x', thread_key: null, is_system: false,
+      created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:00:00Z', folder_name: null })
+
+    const fullConv = makeFullConv('c1', 'node-x')
+    mockApi.mockResolvedValue(mockResponse([fullConv]))
+    await store.refreshForNode('node-x')
+
+    // State and priority should be upgraded from index defaults
+    expect(store.list.find(c => c.id === 'c1')?.state).toBe('pending')
+    expect(store.list.find(c => c.id === 'c1')?.priority).toBe('urgent')
+  })
+
+  it('appends new conversations not previously in list', async () => {
+    const store = useConversationsStore()
+    const freshConv = makeFullConv('c-new', 'node-x')
+    mockApi.mockResolvedValue(mockResponse([freshConv]))
+    await store.refreshForNode('node-x')
+    expect(store.list.some(c => c.id === 'c-new')).toBe(true)
+  })
+
+  it('does not replace conversations belonging to other nodes', async () => {
+    const store = useConversationsStore()
+    // Two conversations in different nodes
+    store.list.push(
+      { id: 'c1', name: 'In Node X', type: 'interactive', priority: 'normal', state: 'open',
+        context_node_id: 'node-x', thread_key: null, is_system: false,
+        created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:00:00Z', folder_name: null },
+      { id: 'c2', name: 'In Node Y', type: 'interactive', priority: 'urgent', state: 'open',
+        context_node_id: 'node-y', thread_key: null, is_system: false,
+        created_at: '2026-01-01T00:00:00Z', last_message_at: '2026-01-01T00:00:00Z', folder_name: null },
+    )
+    mockApi.mockResolvedValue(mockResponse([makeFullConv('c1', 'node-x')]))
+    await store.refreshForNode('node-x')
+
+    // c2 should be untouched
+    expect(store.list.find(c => c.id === 'c2')?.priority).toBe('urgent')
+    expect(store.list).toHaveLength(2)
+  })
+
+  it('does not set loading flag (silent — no spinner shown)', async () => {
+    mockApi.mockResolvedValue(mockResponse([]))
+    const store = useConversationsStore()
+    const refreshPromise = store.refreshForNode('node-x')
+    // loading should not be set (would show spinner if true)
+    expect(store.loading).toBe(false)
+    await refreshPromise
+    expect(store.loading).toBe(false)
+  })
+})
+
 describe('useConversationsStore — optimistic create', () => {
   beforeEach(() => {
     setActivePinia(createPinia())

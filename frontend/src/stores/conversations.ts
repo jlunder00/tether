@@ -12,17 +12,6 @@ interface ConversationIndexItem {
   message_count: number
 }
 
-/**
- * Returns true if a ConversationDetail in the list already carries full data
- * (i.e. it came from a full API response rather than an index mapping).
- * We detect this by checking for fields that index items don't provide.
- * Full items have explicit `type`, `priority` != 'normal' means user-set, etc.
- * The simplest reliable heuristic: presence of `is_system` boolean.
- */
-function isFullDetail(conv: ConversationDetail): boolean {
-  return typeof (conv as any).is_system === 'boolean'
-}
-
 export const useConversationsStore = defineStore('conversations', () => {
   const list = ref<ConversationDetail[]>([])
   const selectedId = ref<string | null>(null)
@@ -31,7 +20,7 @@ export const useConversationsStore = defineStore('conversations', () => {
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  /** True after a successful refreshIndex() — tree/sidebar can skip per-node refresh calls */
+  /** True after a successful refreshIndex() — sidebar tree can skip per-node expand fetches */
   const indexLoaded = ref(false)
 
   const selected = computed(() =>
@@ -39,9 +28,12 @@ export const useConversationsStore = defineStore('conversations', () => {
   )
 
   /**
-   * Load all conversations as lean index summaries.
-   * Populates `list` without overwriting full ConversationDetail objects already cached.
-   * After this, tree/sidebar navigation is instant (filter from cached list).
+   * Load all conversations as lean index summaries for fast initial tree population.
+   *
+   * Upserts into `list` by id — preserves full ConversationDetail objects already
+   * cached (e.g. from fetchOne). New items use safe defaults for fields not included
+   * in the index (state: 'open', priority: 'normal'). FolderCenterPanel calls
+   * refreshForNode() in the background to upgrade these defaults with real state/priority.
    */
   async function refreshIndex(): Promise<void> {
     const res = await api('/api/conversations/index')
@@ -52,21 +44,14 @@ export const useConversationsStore = defineStore('conversations', () => {
     } catch {
       return
     }
-    // Upsert each index item — preserve full details where already loaded
     for (const item of items) {
       const existing = list.value.find(c => c.id === item.id)
-      if (existing && isFullDetail(existing)) {
-        // Full detail already cached — update mutable display fields only
-        existing.name = item.title
-        existing.context_node_id = item.parent_context_node_id
-        existing.last_message_at = item.updated_at
-      } else if (existing) {
-        // Index-level entry already there — refresh it
+      if (existing) {
+        // Preserve all fields not provided by the index (state, priority, is_system, etc.)
         existing.name = item.title
         existing.context_node_id = item.parent_context_node_id
         existing.last_message_at = item.updated_at
       } else {
-        // New entry — insert as a lean stub with safe defaults
         list.value.push({
           id: item.id,
           name: item.title,
@@ -83,6 +68,34 @@ export const useConversationsStore = defineStore('conversations', () => {
       }
     }
     indexLoaded.value = true
+  }
+
+  /**
+   * Silently upsert full ConversationDetail objects for a specific node into list.
+   *
+   * Used by FolderCenterPanel when index is already loaded: shows cached data
+   * immediately (no spinner), then this call upgrades stubs with accurate
+   * state/priority/folder_name without replacing the rest of the list.
+   */
+  async function refreshForNode(nodeId: string | null): Promise<void> {
+    const qs = new URLSearchParams({ limit: '50', offset: '0' })
+    if (nodeId) qs.set('context_node_id', nodeId)
+    const res = await api(`/api/conversations?${qs}`)
+    if (!res.ok) return
+    let fresh: ConversationDetail[]
+    try {
+      fresh = await res.json()
+    } catch {
+      return
+    }
+    for (const conv of fresh) {
+      const idx = list.value.findIndex(c => c.id === conv.id)
+      if (idx !== -1) {
+        list.value[idx] = conv
+      } else {
+        list.value.push(conv)
+      }
+    }
   }
 
   async function refresh(params?: { state?: string; context_node_id?: string }): Promise<void> {
@@ -127,7 +140,7 @@ export const useConversationsStore = defineStore('conversations', () => {
       body: JSON.stringify({ type: 'interactive', priority: 'normal', ...payload }),
     })
 
-    // Remove temp entry (will be replaced by real or discarded)
+    // Remove temp entry regardless of outcome (will be replaced by real or discarded)
     const tempIdx = list.value.findIndex(c => c.id === tempId)
     if (tempIdx !== -1) list.value.splice(tempIdx, 1)
 
@@ -255,5 +268,11 @@ export const useConversationsStore = defineStore('conversations', () => {
     return conv
   }
 
-  return { list, selectedId, selected, messagesById, hasMoreById, loading, error, indexLoaded, refreshIndex, refresh, create, patch, discard, select, loadMessages, loadMessagesOlder, appendMessage, assignNode, fetchOne }
+  return {
+    list, selectedId, selected, messagesById, hasMoreById, loading, error,
+    indexLoaded, refreshIndex, refreshForNode, refresh,
+    create, patch, discard, select,
+    loadMessages, loadMessagesOlder, appendMessage,
+    assignNode, fetchOne,
+  }
 })

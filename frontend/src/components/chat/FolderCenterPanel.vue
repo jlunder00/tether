@@ -40,10 +40,13 @@ const activeNode = computed(() =>
 )
 
 watch(() => props.nodeId, (id) => {
-  // If the index is already loaded, conversations are already in convStore.list.
-  // Filter is reactive via the `conversations` computed above — no network call needed.
-  // Only refresh from the API when the index hasn't been loaded yet.
-  if (!convStore.indexLoaded) {
+  if (convStore.indexLoaded) {
+    // Index loaded: cached conversations render immediately via the `conversations`
+    // computed. Fire a silent background upsert to upgrade state/priority/folder_name
+    // (index stubs use defaults for those fields).
+    convStore.refreshForNode(id ?? null)
+  } else {
+    // No index yet: blocking refresh (shows loading state until data arrives).
     convStore.refresh(id ? { context_node_id: id } : undefined)
   }
 }, { immediate: true })
