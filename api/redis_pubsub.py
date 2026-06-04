@@ -106,8 +106,24 @@ async def subscribe_and_forward(
     logger.debug(
         "subscribe_and_forward: subscribed to %s for user_id=%s", channel, user_id
     )
+    # Pump pubsub.listen() in a separate task so that cancellation of the
+    # outer task hits a plain asyncio.Queue.get() (which propagates
+    # CancelledError cleanly in all Python versions) rather than the
+    # pubsub.listen() async generator (which can absorb CancelledError
+    # internally in Python 3.11).
+    msg_queue: asyncio.Queue = asyncio.Queue()
+
+    async def _pump() -> None:
+        try:
+            async for message in pubsub.listen():
+                await msg_queue.put(message)
+        except asyncio.CancelledError:
+            pass
+
+    pump_task = asyncio.create_task(_pump())
     try:
-        async for message in pubsub.listen():
+        while True:
+            message = await msg_queue.get()
             if message["type"] != "message":
                 continue
             try:
@@ -118,9 +134,10 @@ async def subscribe_and_forward(
                     "subscribe_and_forward: WS send failed user_id=%s: %s",
                     user_id, exc,
                 )
-    except asyncio.CancelledError:
-        raise
     finally:
+        pump_task.cancel()
+        with contextlib.suppress(Exception):
+            await pump_task
         with contextlib.suppress(Exception):
             await pubsub.unsubscribe(channel)
         with contextlib.suppress(Exception):
