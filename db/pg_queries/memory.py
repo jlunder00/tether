@@ -308,7 +308,10 @@ async def search_user_memory(
 
     Each entry: {key, value, score}.
     """
-    table = "user_memory" if scope == "user" else "user_durable_memory"
+    _VALID_SCOPES = {"user": "user_memory", "user_durable": "user_durable_memory"}
+    if scope not in _VALID_SCOPES:
+        raise ValueError(f"invalid scope: {scope!r}; must be 'user' or 'user_durable'")
+    table = _VALID_SCOPES[scope]
     pattern = f"%{query}%"
 
     rows = await conn.fetch(
