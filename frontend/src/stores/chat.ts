@@ -1,8 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { ChatMessage, PermissionRequest } from '../types/chat'
+import type { ChatMessage, PermissionRequest, AgentActionStatus, StatusPhase } from '../types/chat'
 import { getBotTransport } from '../composables/useBotTransport'
 import { useAgentPickerStore } from './agentPicker'
+
+interface LiveAgentAction {
+  id: string
+  tool_name: string
+  friendly_text: string
+  status: AgentActionStatus
+}
 
 function makeId(): string {
   if (location.protocol === 'https:') return crypto.randomUUID()
@@ -18,6 +25,8 @@ export const useChatStore = defineStore('chat', () => {
   const statusMessage = ref('')
   const pendingPermissionRequest = ref<PermissionRequest | null>(null)
   const permissionQueue = ref<PermissionRequest[]>([])
+  const activeActions = ref<Map<string, LiveAgentAction>>(new Map())
+  const currentPhase = ref<StatusPhase | null>(null)
 
   // Register heartbeat via a stable wrapper so it always reflects the current
   // transport, even after setBotTransport() replaces it post-auth.
@@ -45,14 +54,21 @@ export const useChatStore = defineStore('chat', () => {
           case 'agent_action': {
             activeSessionId.value = event.session_id
             const bot = messages.value[botMsgIndex]
-            // Only track starting/running pills; complete just clears in-progress.
-            // Wave 2 (frontend-events-renderer) will render rich pill UI.
+            // Only track starting/running pills on bot.actions for legacy display;
+            // complete just clears in-progress for that path.
             if (event.status !== 'complete') {
               const existing = (bot.actions ??= []).find(a => a.friendly_text === event.friendly_text)
               if (!existing) {
                 bot.actions!.push({ friendly_text: event.friendly_text, tool_name: event.tool_name })
               }
             }
+            // Upsert into activeActions for rich pill UI (all statuses)
+            activeActions.value.set(event.id, {
+              id: event.id,
+              tool_name: event.tool_name,
+              friendly_text: event.friendly_text,
+              status: event.status,
+            })
             break
           }
           case 'permission_request': {
@@ -73,21 +89,28 @@ export const useChatStore = defineStore('chat', () => {
           case 'status':
             activeSessionId.value = event.session_id
             statusMessage.value = event.text
+            currentPhase.value = event.phase
             break
           case 'turn_complete':
             // final_text is canonical — overwrite accumulated deltas
             messages.value[botMsgIndex].content = event.final_text
             statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
             isSessionActive.value = false
             return
           case 'interrupted':
             // Pool cancelled the stream (e.g. HTTP client disconnect).
             // Clear in-progress indicators; bot message content is preserved.
             statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
             isSessionActive.value = false
             return
           case 'session_ended':
             statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
             isSessionActive.value = false
             return
           case 'trial_usage_update':
@@ -102,7 +125,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function respondToPermission(requestId: string, approve: boolean): void {
-    getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, approve })
+    getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, decision: approve ? 'approve' : 'deny' })
     pendingPermissionRequest.value = permissionQueue.value.shift() ?? null
   }
 
@@ -120,6 +143,8 @@ export const useChatStore = defineStore('chat', () => {
     statusMessage,
     pendingPermissionRequest,
     permissionQueue,
+    activeActions,
+    currentPhase,
     send,
     respondToPermission,
     sendInterrupt,

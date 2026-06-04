@@ -211,7 +211,7 @@ describe('useChatStore', () => {
     expect(sendRaw).toHaveBeenCalledWith({
       type: 'permission_response',
       request_id: 'req1',
-      approve: true,
+      decision: 'approve',
     })
   })
 
