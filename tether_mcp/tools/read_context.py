@@ -1,17 +1,15 @@
 """read_context tool — batched reads with depth traversal, sections (cat -n), tasks,
 M-level summary, scope envelope enforcement, and source filtering.
 
-New params added in memory-context v2:
-  conversation_id — when provided, enables N scope envelope enforcement.
-                    Optional (legacy callers without it get unscoped reads with a warning).
-                    Required for scope-envelope; v2 will make this mandatory.
+Params added/hardened in memory-context v2:
+  conversation_id — REQUIRED (v2). Returns {error: 'conversation_id_required'} if absent.
+                    Enables N scope envelope enforcement.
   M               — M-level detail for node data summary.
                     1=title only, 2=one-liner, 3=themes+abstract, 4=full (default: 4).
                     When M < last, returns from node_data_summary if cached;
-                    falls back to node_sections at M=4 (no descent gating in v1).
+                    falls back to node_sections at M=4.
   N               — Scope envelope in tree-edges from current_node.
-                    Requests outside N edges are rejected with {error: 'out_of_scope'}.
-                    Only enforced when conversation_id is provided.
+                    Requests outside N edges return {error: 'out_of_scope'}.
                     Note: children returned during depth traversal are also scope-checked;
                     out-of-scope children are replaced with {error: 'out_of_scope', ...}.
   source          — 'sections' | 'memory' | 'both' (default: 'sections').
@@ -190,7 +188,7 @@ async def execute_read_context(
     M: int = 4,
     N: int = 3,
     source: str = "sections",
-) -> list:
+) -> list | dict:
     """Fetch context nodes with optional depth traversal, section content, and linked tasks.
 
     Args:
@@ -204,22 +202,20 @@ async def execute_read_context(
         include_sections: If True, add "sections" dict grouped by section_type.
             Each section entry has {name, body (cat-n format), line_count, origin}.
         include_tasks: If True, add "tasks" list from get_node_tasks.
-        conversation_id: Current conversation UUID.
-            Required for scope-envelope enforcement (N param). When absent,
-            scope is not enforced and a warning is logged (legacy/debug use only).
-            v2 will make this mandatory once Stream C callers always provide it.
+        conversation_id: Current conversation UUID. Required (v2) — returns
+            {error: 'conversation_id_required'} if absent.
         M: M-level detail for node data (1=title, 2=one-liner, 3=themes, 4=full).
             When M < 4, returns from node_data_summary cache if available;
-            falls back to node_sections at M=4. No descent gating in v1.
+            falls back to node_sections at M=4.
         N: Scope envelope — max tree-edges from conversation's current_node.
             Requests outside N edges return {error: 'out_of_scope', ...}.
-            Only enforced when conversation_id is provided.
             Children during depth traversal are also scope-checked.
         source: 'sections' (default, user-authored) | 'memory' (bot-authored) | 'both'.
 
     Returns:
         List of node dicts (or error dicts for out-of-scope entries).
         If no paths and no node_ids, returns root nodes.
+        {error: 'conversation_id_required', message: str} if conversation_id is absent.
     """
     from db.pg_queries import get_node, get_node_by_path, get_children
     from db.pg_queries.node_memory import (
@@ -228,16 +224,15 @@ async def execute_read_context(
         get_node_tree_distance,
     )
 
-    # Resolve conversation scope
-    current_node_id: str | None = None
-    if conversation_id:
-        current_node_id = await get_context_node_id_for_conversation(conn, conversation_id)
-        # current_node_id may be None for conversations not linked to a context node
-    else:
-        logger.warning(
-            "read_context called without conversation_id (legacy/unscoped path) "
-            "— scope envelope not enforced"
-        )
+    # v2: conversation_id is required
+    if not conversation_id:
+        return {
+            "error": "conversation_id_required",
+            "message": "conversation_id is required for read_context in v2.",
+        }
+
+    # Resolve conversation scope (current_node_id may be None if conversation is unlinked)
+    current_node_id = await get_context_node_id_for_conversation(conn, conversation_id)
 
     async def _fetch_and_check(node: dict) -> dict:
         """Apply scope check, log read, build response."""
