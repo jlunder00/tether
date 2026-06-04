@@ -1,12 +1,24 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chat'
+import type { PermissionKind } from '../types/chat'
 
 const TIMEOUT_MS = 60_000
 
+const KIND_LABELS: Record<PermissionKind, string> = {
+  read_out_of_scope: 'Read out-of-scope content',
+  user_section_edit: 'Edit your section',
+  destructive: 'Destructive action',
+}
+
 const chatStore = useChatStore()
-const showDetails = ref(false)
+const showReason = ref(false)
 let timer: ReturnType<typeof setTimeout> | null = null
+
+const kindLabel = computed(() => {
+  const req = chatStore.pendingPermissionRequest
+  return req ? KIND_LABELS[req.kind] : ''
+})
 
 function clearTimer() {
   if (timer !== null) {
@@ -27,7 +39,7 @@ function startTimer() {
 watch(
   () => chatStore.pendingPermissionRequest,
   (req) => {
-    showDetails.value = false
+    showReason.value = false
     if (req) startTimer()
     else clearTimer()
   },
@@ -51,25 +63,22 @@ function respond(approve: boolean) {
     >
       <div class="bg-[--bg-elev-1] border border-[--border-1] rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
         <h2 class="text-sm font-semibold text-[--fg-1] mb-2">Permission Request</h2>
-        <p class="text-sm text-[--fg-2] mb-4">{{ chatStore.pendingPermissionRequest.summary }}</p>
+        <p class="text-sm text-[--fg-2] mb-1">
+          <span class="font-medium">{{ kindLabel }}</span>
+        </p>
+        <p class="text-xs text-[--fg-3] font-mono mb-4 break-all">{{ chatStore.pendingPermissionRequest.target }}</p>
 
         <button
-          v-if="chatStore.pendingPermissionRequest.details.length"
+          v-if="chatStore.pendingPermissionRequest.reason_from_bot"
           type="button"
           class="text-xs text-[--fg-4] hover:text-[--fg-2] mb-3 transition-colors block"
-          @click="showDetails = !showDetails"
+          @click="showReason = !showReason"
         >
-          {{ showDetails ? 'Hide details' : 'Show more details' }}
+          {{ showReason ? 'Hide reason' : 'Show reason' }}
         </button>
 
-        <div v-if="showDetails" class="mb-4 space-y-1">
-          <div
-            v-for="d in chatStore.pendingPermissionRequest.details"
-            :key="d.label"
-            class="text-xs text-[--fg-3]"
-          >
-            <span class="font-medium text-[--fg-2]">{{ d.label }}:</span> {{ d.value }}
-          </div>
+        <div v-if="showReason && chatStore.pendingPermissionRequest.reason_from_bot" class="mb-4">
+          <p class="text-xs text-[--fg-3]">{{ chatStore.pendingPermissionRequest.reason_from_bot }}</p>
         </div>
 
         <div class="flex gap-2 justify-end">
