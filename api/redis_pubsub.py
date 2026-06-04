@@ -106,22 +106,41 @@ async def subscribe_and_forward(
     logger.debug(
         "subscribe_and_forward: subscribed to %s for user_id=%s", channel, user_id
     )
+    # Use get_message(timeout=0) + asyncio.sleep rather than pubsub.listen().
+    # pubsub.listen() blocks on an internal queue.get() that does not cleanly
+    # propagate CancelledError in Python 3.11, causing the task to hang on
+    # cancellation. asyncio.sleep() is the sole cancellation point here and
+    # always propagates CancelledError regardless of redis-py internals.
+    #
+    # Python 3.11 edge case: subscribe() can absorb the initial CancelledError
+    # from task.cancel() (it catches it internally for cleanup but still
+    # completes the subscription). When this happens _must_cancel is not set,
+    # so CancelledError is not automatically re-thrown at future await points.
+    # We detect this via task.cancelling() (added in 3.11) and raise manually.
+    _task = asyncio.current_task()
     try:
-        async for message in pubsub.listen():
-            if message["type"] != "message":
-                continue
-            try:
-                event = json.loads(message["data"])
-                await websocket.send_json(event)
-            except Exception as exc:
-                logger.debug(
-                    "subscribe_and_forward: WS send failed user_id=%s: %s",
-                    user_id, exc,
-                )
+        while True:
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=False, timeout=0
+            )
+            if message is not None and message["type"] == "message":
+                try:
+                    event = json.loads(message["data"])
+                    await websocket.send_json(event)
+                except Exception as exc:
+                    logger.debug(
+                        "subscribe_and_forward: WS send failed user_id=%s: %s",
+                        user_id, exc,
+                    )
+            else:
+                await asyncio.sleep(0.01)
+                # If subscribe() absorbed our cancellation signal, honour it now.
+                if _task is not None and getattr(_task, "cancelling", lambda: 0)():
+                    raise asyncio.CancelledError()
     finally:
         with contextlib.suppress(Exception):
-            await pubsub.unsubscribe(channel)
+            await asyncio.wait_for(pubsub.unsubscribe(channel), timeout=2.0)
         with contextlib.suppress(Exception):
-            await pubsub.aclose()
+            await asyncio.wait_for(pubsub.aclose(), timeout=2.0)
         with contextlib.suppress(Exception):
-            await client.aclose()
+            await asyncio.wait_for(client.aclose(), timeout=2.0)
