@@ -128,9 +128,9 @@ async def subscribe_and_forward(
             else:
                 await asyncio.sleep(0.01)
     finally:
-        with contextlib.suppress(Exception):
-            await pubsub.unsubscribe(channel)
-        with contextlib.suppress(Exception):
-            await pubsub.aclose()
-        with contextlib.suppress(Exception):
-            await client.aclose()
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(pubsub.unsubscribe(channel), timeout=2.0)
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(pubsub.aclose(), timeout=2.0)
+        with contextlib.suppress(BaseException):
+            await asyncio.wait_for(client.aclose(), timeout=2.0)
