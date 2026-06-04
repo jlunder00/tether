@@ -51,6 +51,35 @@ async def _seed_users(url: str) -> None:
         await c.close()
 
 
+async def _cleanup_seed_users(url: str) -> None:
+    """Delete the seeded schema-test users so they don't pollute auth tests."""
+    c = await asyncpg.connect(dsn=url)
+    try:
+        await c.execute(
+            "DELETE FROM users WHERE id = ANY($1::uuid[])",
+            [USER_A, USER_B],
+        )
+    finally:
+        await c.close()
+
+
+@pytest.fixture(scope="module", autouse=True)
+async def cleanup_schema_test_users():
+    """Module-scoped teardown: remove seeded users after all schema tests finish.
+
+    These users are inserted with _seed_users() outside any rolled-back
+    transaction, so they persist in the DB.  Without this cleanup they cause
+    test_auth_routes.py (which runs next) to see get_user_count() > 0 and
+    reject first-user registration with 400 instead of 200.
+    """
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        yield
+        return
+    yield
+    await _cleanup_seed_users(url)
+
+
 @pytest.fixture
 async def conn_a():
     """Connection scoped to USER_A, wrapped in a rolled-back transaction."""
