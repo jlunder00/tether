@@ -16,6 +16,8 @@ import fakeredis
 import fakeredis.aioredis as faioredis
 import pytest
 
+pytestmark = pytest.mark.timeout(60)
+
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -118,6 +118,8 @@ async def subscribe_and_forward(
                     "subscribe_and_forward: WS send failed user_id=%s: %s",
                     user_id, exc,
                 )
+    except asyncio.CancelledError:
+        raise
     finally:
         with contextlib.suppress(Exception):
             await pubsub.unsubscribe(channel)
