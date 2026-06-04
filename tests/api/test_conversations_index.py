@@ -250,8 +250,8 @@ async def test_nodes_index_excludes_archived(api_client, conn):
 async def test_nodes_index_rls(api_client, api_client_b, conn):
     """User B must not see user A's nodes in the index.
 
-    The nodes index relies solely on RLS (no explicit user_id filter in the
-    query) — this test is the primary guard against an RLS misconfiguration.
+    The nodes index filters explicitly by user_id (matching list_conversations_index)
+    in addition to the connection-level RLS policy.
     """
     node = await create_node(conn, "PrivateNode")
     resp_b = await api_client_b.get("/api/nodes/index")

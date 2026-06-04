@@ -144,7 +144,7 @@ async def search_sections_route(_auth=Depends(auth_dependency),
 
 
 @router.get("/nodes/index")
-async def get_nodes_index(_auth=Depends(auth_dependency),
+async def get_nodes_index(request: Request, _auth=Depends(auth_dependency),
                           conn: asyncpg.Connection = Depends(get_db_conn)):
     """Lightweight index: id, title, parent_id, path, child_count.
 
@@ -153,7 +153,7 @@ async def get_nodes_index(_auth=Depends(auth_dependency),
 
     NOTE: registered before /{node_id} so "index" is not matched as a node id.
     """
-    return await list_nodes_index(conn)
+    return await list_nodes_index(conn, user_id=request.state.user_id)
 
 
 @router.get("/nodes/{node_id}")
