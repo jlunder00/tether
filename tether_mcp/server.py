@@ -267,18 +267,22 @@ async def propose_user_memory_write(
 async def search_context(
     query: str,
     scope: str = "user",
+    paths: list[str] = [],
     limit: int = 5,
 ) -> dict:
-    """Semantic search over context nodes (v1 stub — returns empty, API is final).
+    """Full-text search over context node section bodies (tsvector, ranked).
 
-    query: Natural language search query.
-    scope: 'user' (all user nodes) or a node path prefix.
+    query: Natural language search query (plainto_tsquery).
+    scope: 'user' — RLS-enforced, searches user's own nodes only.
+    paths: Optional node paths to restrict search to their subtrees.
     limit: Max results (1-20).
     """
     from tether_mcp.tools.search_context import execute_search_context
     pool = await _get_pool()
     async with pg.get_conn(pool, get_user_id()) as conn:
-        return await execute_search_context(conn, query=query, scope=scope, limit=limit)
+        return await execute_search_context(
+            conn, query=query, scope=scope, paths=paths or None, limit=limit
+        )
 
 
 @mcp.tool()
@@ -288,11 +292,11 @@ async def search_memory(
     tier: str = "both",
     limit: int = 5,
 ) -> dict:
-    """Semantic search over user memory (v1 stub — returns empty, API is final).
+    """Search user memory entries by key or value (ILIKE, relevance-ranked).
 
-    query: Natural language search query.
-    scope: 'user' (default).
-    tier:  'l2' | 'l3' | 'both'.
+    query: Search string matched against key (ILIKE) and value (ILIKE).
+    scope: 'user' (default, kept for API compatibility).
+    tier:  'l2' → user_memory; 'l3' → user_durable_memory; 'both' → merged.
     limit: Max results (1-20).
     """
     from tether_mcp.tools.search_memory import execute_search_memory

@@ -1,9 +1,7 @@
-"""search_memory MCP tool — semantic search over user memory (v1 stub).
+"""search_memory MCP tool — ILIKE search over user memory tables.
 
-v1: Returns empty results. Full implementation deferred to v2 (pgvector or
-external embedding service).
-
-The tool signature is final — v2 fills in the implementation without API change.
+Searches user_memory (L2) and/or user_durable_memory (L3) by key and value.
+Results are ranked by relevance: exact key match > key substring > value match.
 """
 from __future__ import annotations
 
@@ -17,20 +15,45 @@ async def execute_search_memory(
     tier: str = "both",
     limit: int = 5,
 ) -> dict:
-    """Semantic search over user memory (v1 stub — always returns empty).
+    """Search user memory entries by key or value.
 
     Args:
         conn:  asyncpg connection (user-scoped via RLS).
-        query: Natural language search query.
-        scope: 'user' (default).
-        tier:  'l2' | 'l3' | 'both' — which memory tier to search.
-        limit: Max results (1-20).
+        query: Search string — matched against key (ILIKE) and value (ILIKE).
+        scope: 'user' (default, kept for API compatibility).
+        tier:  'l2' | 'both' → user_memory; 'l3' → user_durable_memory;
+               'both' → searches both tables and merges.
+        limit: Max results per tier (1-20).
 
     Returns:
-        {results: [], total: 0, note: 'stub'}
+        {results: [{key, value, score, tier}], total}
     """
-    return {
-        "results": [],
-        "total": 0,
-        "note": "search_memory is a v1 stub — semantic search not yet implemented",
-    }
+    from db.pg_queries.memory import search_user_memory
+
+    if not query or not query.strip():
+        return {"error": "query_required"}
+
+    if tier not in ("l2", "l3", "both"):
+        return {"error": "invalid_tier", "valid_tiers": ["l2", "l3", "both"]}
+
+    limit = min(max(1, limit), 20)
+    q = query.strip()
+
+    results: list[dict] = []
+
+    if tier in ("l2", "both"):
+        rows = await search_user_memory(conn, q, scope="user", limit=limit)
+        for r in rows:
+            results.append({**r, "tier": "l2"})
+
+    if tier in ("l3", "both"):
+        rows = await search_user_memory(conn, q, scope="user_durable", limit=limit)
+        for r in rows:
+            results.append({**r, "tier": "l3"})
+
+    # When tier='both', re-sort merged results by score descending then key
+    if tier == "both":
+        results.sort(key=lambda x: (-x["score"], x["key"]))
+        results = results[:limit]
+
+    return {"results": results, "total": len(results)}

@@ -321,3 +321,79 @@ async def grep_sections(
         }
         for r in rows
     ]
+
+
+async def search_sections_fts(
+    conn: asyncpg.Connection,
+    query: str,
+    node_ids: list[str] | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """Full-text search over node section bodies using Postgres tsvector.
+
+    Uses the trigger-maintained search_vector column (GIN-indexed).
+    Returns results ordered by ts_rank descending (most relevant first).
+
+    query:    Natural language search terms (passed to plainto_tsquery).
+    node_ids: Optional list of node UUID strings to restrict search.
+    limit:    Max rows returned (capped at caller's discretion).
+
+    Returns list of dicts: {node_id, node_name, section_type, section_name,
+                             snippet, score}.
+    """
+    if node_ids:
+        rows = await conn.fetch(
+            """
+            SELECT
+                ns.node_id,
+                cn.name AS node_name,
+                ns.section_type,
+                ns.name AS section_name,
+                ts_headline(
+                    'english', ns.body,
+                    plainto_tsquery('english', $1),
+                    'StartSel=<b>, StopSel=</b>, MaxWords=30, MinWords=10'
+                ) AS snippet,
+                ts_rank(ns.search_vector, plainto_tsquery('english', $1)) AS score
+            FROM node_sections ns
+            JOIN context_nodes cn ON cn.id = ns.node_id
+            WHERE ns.search_vector @@ plainto_tsquery('english', $1)
+              AND ns.node_id = ANY($2::uuid[])
+            ORDER BY score DESC
+            LIMIT $3
+            """,
+            query, node_ids, limit,
+        )
+    else:
+        rows = await conn.fetch(
+            """
+            SELECT
+                ns.node_id,
+                cn.name AS node_name,
+                ns.section_type,
+                ns.name AS section_name,
+                ts_headline(
+                    'english', ns.body,
+                    plainto_tsquery('english', $1),
+                    'StartSel=<b>, StopSel=</b>, MaxWords=30, MinWords=10'
+                ) AS snippet,
+                ts_rank(ns.search_vector, plainto_tsquery('english', $1)) AS score
+            FROM node_sections ns
+            JOIN context_nodes cn ON cn.id = ns.node_id
+            WHERE ns.search_vector @@ plainto_tsquery('english', $1)
+            ORDER BY score DESC
+            LIMIT $2
+            """,
+            query, limit,
+        )
+    return [
+        {
+            "node_id": str(r["node_id"]),
+            "node_name": r["node_name"],
+            "section_type": r["section_type"],
+            "section_name": r["section_name"],
+            "snippet": r["snippet"],
+            "score": float(r["score"]),
+        }
+        for r in rows
+    ]
