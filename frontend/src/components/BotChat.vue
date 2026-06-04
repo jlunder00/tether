@@ -5,6 +5,8 @@ import { useAgentPickerStore } from '../stores/agentPicker'
 import MessageBubble from './MessageBubble.vue'
 import AgentPicker from './AgentPicker.vue'
 import PermissionModal from './PermissionModal.vue'
+import AgentActionPill from './AgentActionPill.vue'
+import StatusIndicator from './StatusIndicator.vue'
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -78,6 +80,7 @@ function onKeydown(e: KeyboardEvent) {
       <p v-if="chatStore.messages.length === 0" class="text-xs text-[--fg-5] text-center pt-8">
         Send a message to start chatting.
       </p>
+      <AgentActionPill />
       <p v-if="chatStore.statusMessage" class="text-xs text-[--fg-4] text-center animate-pulse">
         {{ chatStore.statusMessage }}
       </p>
@@ -88,11 +91,13 @@ function onKeydown(e: KeyboardEvent) {
       class="border-t border-[--border-1] p-3 flex gap-2 flex-shrink-0"
       @submit.prevent="onSubmit"
     >
+      <StatusIndicator />
       <textarea
         v-model="draft"
         rows="1"
         placeholder="Message Tether…"
         class="flex-1 bg-[--bg-input] text-[--fg-1] border border-[--border-input] rounded-lg px-3 py-2 text-sm outline-none resize-none focus:ring-1 focus:ring-[--accent]"
+        :disabled="chatStore.isStreaming || !!chatStore.pendingPermissionRequest"
         @keydown.enter.exact.prevent="onSubmit"
       />
       <button
@@ -106,7 +111,7 @@ function onKeydown(e: KeyboardEvent) {
       </button>
       <button
         type="submit"
-        :disabled="chatStore.isStreaming || !draft.trim()"
+        :disabled="chatStore.isStreaming || !draft.trim() || !!chatStore.pendingPermissionRequest"
         class="text-xs px-3 rounded-lg bg-[--bg-elev-2] text-[--fg-2] hover:bg-[--bg-elev-3] disabled:opacity-30 transition-colors self-end py-2"
       >
         Send
