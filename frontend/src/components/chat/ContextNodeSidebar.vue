@@ -63,8 +63,17 @@ async function toggleExpand(node: ContextNode, evt: Event) {
     expandedNodes.value = new Set([...expandedNodes.value].filter(x => x !== id))
   } else {
     expandedNodes.value = new Set([...expandedNodes.value, id])
-    await contextStore.fetchChildren(id)
-    await conversationsStore.refresh({ context_node_id: id })
+
+    // If the full index is already loaded, children + conversations are already in cache.
+    // (childrenOf() filters from nodes cache; convsByNode filters from list — no network call.)
+    // Only hit the API when we don't yet have index data for that surface.
+    if (!contextStore.nodesIndexLoaded) {
+      await contextStore.fetchChildren(id)
+    }
+    if (!conversationsStore.indexLoaded) {
+      await conversationsStore.refresh({ context_node_id: id })
+    }
+
     convsByNode.value = new Map(convsByNode.value).set(
       id,
       conversationsStore.list.filter(c => c.context_node_id === id),

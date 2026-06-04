@@ -32,7 +32,20 @@ const route  = useRoute()
 const router = useRouter()
 
 onMounted(async () => {
-  await ctxStore.fetchRootNodes()
+  // ── Index-based fast initial load (Stream E) ──────────────────────────────
+  // Fire both index fetches in parallel for fastest tree population.
+  // Index endpoints return lean summaries (no message bodies, no section data)
+  // so the sidebar/tree renders immediately without waiting for full details.
+  // If either fails (indexLoaded stays false), components fall back to per-node calls.
+  await Promise.all([
+    ctxStore.fetchNodesIndex(),
+    convStore.refreshIndex(),
+  ])
+
+  // If node index failed (nodesIndexLoaded still false), fall back to root nodes only
+  if (!ctxStore.nodesIndexLoaded) {
+    await ctxStore.fetchRootNodes()
+  }
 
   if (route.name === 'chat-node' && route.params.nodeId) {
     activeNodeId.value = route.params.nodeId as string
