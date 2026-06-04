@@ -106,38 +106,28 @@ async def subscribe_and_forward(
     logger.debug(
         "subscribe_and_forward: subscribed to %s for user_id=%s", channel, user_id
     )
-    # Pump pubsub.listen() in a separate task so that cancellation of the
-    # outer task hits a plain asyncio.Queue.get() (which propagates
-    # CancelledError cleanly in all Python versions) rather than the
-    # pubsub.listen() async generator (which can absorb CancelledError
-    # internally in Python 3.11).
-    msg_queue: asyncio.Queue = asyncio.Queue()
-
-    async def _pump() -> None:
-        try:
-            async for message in pubsub.listen():
-                await msg_queue.put(message)
-        except asyncio.CancelledError:
-            pass
-
-    pump_task = asyncio.create_task(_pump())
+    # Use get_message(timeout=0) + asyncio.sleep rather than pubsub.listen().
+    # pubsub.listen() blocks on an internal queue.get() that does not cleanly
+    # propagate CancelledError in Python 3.11, causing the task to hang on
+    # cancellation. asyncio.sleep() is the sole cancellation point here and
+    # always propagates CancelledError regardless of redis-py internals.
     try:
         while True:
-            message = await msg_queue.get()
-            if message["type"] != "message":
-                continue
-            try:
-                event = json.loads(message["data"])
-                await websocket.send_json(event)
-            except Exception as exc:
-                logger.debug(
-                    "subscribe_and_forward: WS send failed user_id=%s: %s",
-                    user_id, exc,
-                )
+            message = await pubsub.get_message(
+                ignore_subscribe_messages=False, timeout=0
+            )
+            if message is not None and message["type"] == "message":
+                try:
+                    event = json.loads(message["data"])
+                    await websocket.send_json(event)
+                except Exception as exc:
+                    logger.debug(
+                        "subscribe_and_forward: WS send failed user_id=%s: %s",
+                        user_id, exc,
+                    )
+            else:
+                await asyncio.sleep(0.01)
     finally:
-        pump_task.cancel()
-        with contextlib.suppress(Exception):
-            await pump_task
         with contextlib.suppress(Exception):
             await pubsub.unsubscribe(channel)
         with contextlib.suppress(Exception):
