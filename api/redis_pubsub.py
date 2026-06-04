@@ -111,6 +111,13 @@ async def subscribe_and_forward(
     # propagate CancelledError in Python 3.11, causing the task to hang on
     # cancellation. asyncio.sleep() is the sole cancellation point here and
     # always propagates CancelledError regardless of redis-py internals.
+    #
+    # Python 3.11 edge case: subscribe() can absorb the initial CancelledError
+    # from task.cancel() (it catches it internally for cleanup but still
+    # completes the subscription). When this happens _must_cancel is not set,
+    # so CancelledError is not automatically re-thrown at future await points.
+    # We detect this via task.cancelling() (added in 3.11) and raise manually.
+    _task = asyncio.current_task()
     try:
         while True:
             message = await pubsub.get_message(
@@ -127,10 +134,13 @@ async def subscribe_and_forward(
                     )
             else:
                 await asyncio.sleep(0.01)
+                # If subscribe() absorbed our cancellation signal, honour it now.
+                if _task is not None and getattr(_task, "cancelling", lambda: 0)():
+                    raise asyncio.CancelledError()
     finally:
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(Exception):
             await asyncio.wait_for(pubsub.unsubscribe(channel), timeout=2.0)
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(Exception):
             await asyncio.wait_for(pubsub.aclose(), timeout=2.0)
-        with contextlib.suppress(BaseException):
+        with contextlib.suppress(Exception):
             await asyncio.wait_for(client.aclose(), timeout=2.0)
