@@ -154,6 +154,45 @@ async def get_all_node_paths(conn: asyncpg.Connection) -> list[str]:
     return [r["path"] for r in rows]
 
 
+async def list_nodes_index(conn: asyncpg.Connection, *, user_id: str) -> list[dict]:
+    """Return a lightweight index of all non-archived context nodes for a user.
+
+    Returns [{id, title, parent_id, path, child_count}].
+    One recursive CTE query — no per-row N+1. Section data is excluded.
+    Used by the frontend to populate the node tree quickly.
+
+    Filters explicitly by user_id in addition to the RLS policy on the
+    connection, matching the pattern used by list_conversations_index.
+    """
+    rows = await conn.fetch(
+        """
+        WITH RECURSIVE tree(id, parent_id, name, path) AS (
+            SELECT id, parent_id, name, name::text AS path
+            FROM context_nodes
+            WHERE parent_id IS NULL AND archived = FALSE AND user_id = $1::uuid
+            UNION ALL
+            SELECT cn.id, cn.parent_id, cn.name, tree.path || '/' || cn.name
+            FROM context_nodes cn
+            JOIN tree ON cn.parent_id = tree.id
+            WHERE cn.archived = FALSE AND cn.user_id = $1::uuid
+        )
+        SELECT
+            t.id::text         AS id,
+            t.name             AS title,
+            t.parent_id::text  AS parent_id,
+            t.path,
+            COUNT(c.id)::int   AS child_count
+        FROM tree t
+        LEFT JOIN context_nodes c ON c.parent_id = t.id AND c.archived = FALSE
+            AND c.user_id = $1::uuid
+        GROUP BY t.id, t.name, t.parent_id, t.path
+        ORDER BY t.path
+        """,
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_children(
     conn: asyncpg.Connection,
     parent_id: str | None = None,
