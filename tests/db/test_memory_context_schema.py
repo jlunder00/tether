@@ -64,20 +64,27 @@ async def _cleanup_seed_users(url: str) -> None:
 
 
 @pytest.fixture(scope="module", autouse=True)
-async def cleanup_schema_test_users():
+def cleanup_schema_test_users():
     """Module-scoped teardown: remove seeded users after all schema tests finish.
 
     These users are inserted with _seed_users() outside any rolled-back
     transaction, so they persist in the DB.  Without this cleanup they cause
     test_auth_routes.py (which runs next) to see get_user_count() > 0 and
     reject first-user registration with 400 instead of 200.
+
+    Sync fixture (not async) so it works with asyncio_default_fixture_loop_scope=function.
     """
+    import asyncio
+
     url = os.environ.get("DATABASE_URL")
-    if not url:
-        yield
-        return
     yield
-    await _cleanup_seed_users(url)
+    if not url:
+        return
+    loop = asyncio.new_event_loop()
+    try:
+        loop.run_until_complete(_cleanup_seed_users(url))
+    finally:
+        loop.close()
 
 
 @pytest.fixture
