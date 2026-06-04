@@ -14,6 +14,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.timeout(60)
+
 from interactive_agent_layer.permissions import (
     PermissionGate,
     PermissionResultAllow,
