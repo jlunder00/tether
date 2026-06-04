@@ -36,6 +36,7 @@ class UserActionEntry:
     phrase_short: str
     permission_summary: str
     permission_detail_field: str
+    kind: str  # "user_section_edit" | "destructive" | "read_out_of_scope"
 
 
 TranslationEntry = Union[BackgroundEntry, BackgroundHiddenEntry, PassthroughEntry, UserActionEntry]
@@ -99,5 +100,6 @@ def _parse_entry(data: dict) -> TranslationEntry:
             phrase_short=data["phrase_short"],
             permission_summary=data["permission_summary"],
             permission_detail_field=data["permission_detail_field"],
+            kind=data["kind"],
         )
     raise ValueError(f"Unknown translation entry type: {t!r}")

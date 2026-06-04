@@ -187,7 +187,7 @@ async def test_tool_use_emits_agent_action(layer):
     agent_actions = [e for e in events if e["type"] == "agent_action"]
     assert len(agent_actions) >= 1
     # get_anchors maps to "Reading your schedule"
-    actions_text = [e["action"] for e in agent_actions]
+    actions_text = [e["friendly_text"] for e in agent_actions]
     assert "Reading your schedule" in actions_text
 
 
@@ -199,12 +199,12 @@ async def test_passthrough_emits_status(layer):
         events.append(event)
 
     status_events = [e for e in events if e["type"] == "status"]
-    messages = [e["message"] for e in status_events]
-    assert "Still working" in messages
+    texts = [e["text"] for e in status_events]
+    assert "Still working" in texts
 
 
 async def test_coalescing_same_tool_deduplicates(layer):
-    """Two calls to same background tool within window → same action_id, second coalesced."""
+    """Two calls to same background tool within window → same id, second status='running'."""
     s = layer.create_session("user1", "wsid1", "v1", {})
     events = []
     async for event in layer.run_turn(s.session_id, "first turn"):
@@ -212,14 +212,23 @@ async def test_coalescing_same_tool_deduplicates(layer):
     async for event in layer.run_turn(s.session_id, "second turn"):
         events.append(event)
 
-    # get_anchors appears in both turns — second should be coalesced
-    get_anchors_events = [
+    # get_anchors appears in both turns — the starting events share the same id
+    # within the coalescing window; the second call emits status='running'.
+    get_anchors_starting = [
         e for e in events
-        if e["type"] == "agent_action" and e.get("action") == "Reading your schedule"
+        if e["type"] == "agent_action"
+        and e.get("friendly_text") == "Reading your schedule"
+        and e.get("status") == "starting"
     ]
-    assert len(get_anchors_events) == 2
-    assert get_anchors_events[0]["action_id"] == get_anchors_events[1]["action_id"]
-    assert get_anchors_events[1]["coalesced"] is True
+    get_anchors_running = [
+        e for e in events
+        if e["type"] == "agent_action"
+        and e.get("friendly_text") == "Reading your schedule"
+        and e.get("status") == "running"
+    ]
+    assert len(get_anchors_starting) >= 1
+    assert len(get_anchors_running) >= 1
+    assert get_anchors_starting[0]["id"] == get_anchors_running[0]["id"]
 
 
 # ---------------------------------------------------------------------------

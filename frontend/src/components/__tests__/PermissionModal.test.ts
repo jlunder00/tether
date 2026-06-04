@@ -36,50 +36,72 @@ describe('PermissionModal', () => {
     const store = useChatStore()
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Tether wants to delete tasks',
-      details: [],
+      kind: 'destructive',
+      target: 'tasks/2024-01-15',
+      reason_from_bot: null,
     }
     await wrapper.vm.$nextTick()
     expect(document.body.textContent).toContain('Permission Request')
-    expect(document.body.textContent).toContain('Tether wants to delete tasks')
+    expect(document.body.textContent).toContain('tasks/2024-01-15')
     wrapper.unmount()
   })
 
-  it('shows summary text', async () => {
+  it('shows kind label and target', async () => {
     const wrapper = mountModal()
     const store = useChatStore()
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Allow reading calendar',
-      details: [],
+      kind: 'read_out_of_scope',
+      target: '/calendar/events',
+      reason_from_bot: null,
     }
     await wrapper.vm.$nextTick()
-    expect(document.body.textContent).toContain('Allow reading calendar')
+    expect(document.body.textContent).toContain('Read out-of-scope content')
+    expect(document.body.textContent).toContain('/calendar/events')
     wrapper.unmount()
   })
 
-  it('Show more details button toggles detail rows', async () => {
+  it('Show reason button toggles reason text', async () => {
     const wrapper = mountModal()
     const store = useChatStore()
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Summary',
-      details: [{ label: 'File', value: '/etc/passwd' }],
+      kind: 'user_section_edit',
+      target: 'section/work',
+      reason_from_bot: 'Need to update your work section with new tasks.',
     }
     await wrapper.vm.$nextTick()
 
-    // Details hidden by default
-    expect(document.body.textContent).not.toContain('/etc/passwd')
+    // Reason hidden by default
+    expect(document.body.textContent).not.toContain('Need to update your work section')
 
-    // Click "Show more details"
+    // Click "Show reason"
     const showBtn = Array.from(document.querySelectorAll('button')).find(
-      b => b.textContent?.includes('Show more details')
+      b => b.textContent?.includes('Show reason')
     )
     expect(showBtn).toBeDefined()
     showBtn!.click()
     await wrapper.vm.$nextTick()
 
-    expect(document.body.textContent).toContain('/etc/passwd')
+    expect(document.body.textContent).toContain('Need to update your work section')
+    wrapper.unmount()
+  })
+
+  it('does not show reason button when reason_from_bot is null', async () => {
+    const wrapper = mountModal()
+    const store = useChatStore()
+    store.pendingPermissionRequest = {
+      request_id: 'req1',
+      kind: 'destructive',
+      target: 'tasks/old',
+      reason_from_bot: null,
+    }
+    await wrapper.vm.$nextTick()
+
+    const showBtn = Array.from(document.querySelectorAll('button')).find(
+      b => b.textContent?.includes('Show reason')
+    )
+    expect(showBtn).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -89,8 +111,9 @@ describe('PermissionModal', () => {
     const spy = vi.spyOn(store, 'respondToPermission')
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Ok?',
-      details: [],
+      kind: 'destructive',
+      target: 'tasks/old',
+      reason_from_bot: null,
     }
     await wrapper.vm.$nextTick()
 
@@ -109,8 +132,9 @@ describe('PermissionModal', () => {
     const spy = vi.spyOn(store, 'respondToPermission')
     store.pendingPermissionRequest = {
       request_id: 'req1',
-      summary: 'Ok?',
-      details: [],
+      kind: 'destructive',
+      target: 'tasks/old',
+      reason_from_bot: null,
     }
     await wrapper.vm.$nextTick()
 
@@ -131,8 +155,9 @@ describe('PermissionModal', () => {
       const spy = vi.spyOn(store, 'respondToPermission')
       store.pendingPermissionRequest = {
         request_id: 'req-timeout',
-        summary: 'Will you approve?',
-        details: [],
+        kind: 'destructive',
+        target: 'tasks/all',
+        reason_from_bot: null,
       }
       await wrapper.vm.$nextTick()
 
@@ -152,8 +177,9 @@ describe('PermissionModal', () => {
       const spy = vi.spyOn(store, 'respondToPermission')
       store.pendingPermissionRequest = {
         request_id: 'req1',
-        summary: 'Ok?',
-        details: [],
+        kind: 'destructive',
+        target: 'tasks/old',
+        reason_from_bot: null,
       }
       await wrapper.vm.$nextTick()
 
@@ -178,8 +204,9 @@ describe('PermissionModal', () => {
       const spy = vi.spyOn(store, 'respondToPermission')
       store.pendingPermissionRequest = {
         request_id: 'req1',
-        summary: 'Ok?',
-        details: [],
+        kind: 'destructive',
+        target: 'tasks/old',
+        reason_from_bot: null,
       }
       await wrapper.vm.$nextTick()
 
@@ -203,8 +230,9 @@ describe('PermissionModal', () => {
       const spy = vi.spyOn(store, 'respondToPermission')
       store.pendingPermissionRequest = {
         request_id: 'req1',
-        summary: 'Ok?',
-        details: [],
+        kind: 'destructive',
+        target: 'tasks/old',
+        reason_from_bot: null,
       }
       await wrapper.vm.$nextTick()
 

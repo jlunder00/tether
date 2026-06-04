@@ -6,6 +6,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.timeout(60)
+
 from interactive_agent_layer.permissions import (
     PermissionGate,
     PermissionResultAllow,
@@ -163,8 +165,9 @@ async def test_user_action_no_auto_approve_and_user_approves(table, session):
     assert event["type"] == "permission_request"
     assert event["session_id"] == "sess-1"
     assert "request_id" in event
-    assert "summary" in event
-    assert "details" in event
+    assert "kind" in event
+    assert "target" in event
+    assert "reason_from_bot" in event
 
 
 # ---------------------------------------------------------------------------
@@ -202,15 +205,15 @@ async def test_user_action_denied_by_user(table, session):
 
 
 # ---------------------------------------------------------------------------
-# 8. permission_summary interpolation
+# 8. target interpolation (was: permission_summary interpolation)
 # ---------------------------------------------------------------------------
 
-async def test_permission_summary_interpolation(table, session):
+async def test_permission_target_interpolation(table, session):
     _, event = await _run_with_queue(
         table, session, "upsert_tasks", {"count": 3, "tasks": []},
         resolve_value=True,
     )
-    assert event["summary"] == "Update 3 tasks"
+    assert event["target"] == "Update 3 tasks"
 
 
 # ---------------------------------------------------------------------------
