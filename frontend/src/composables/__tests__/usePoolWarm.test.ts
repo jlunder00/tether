@@ -9,6 +9,24 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { createApp, defineComponent } from 'vue'
+
+// withSetup: runs a composable inside a minimal Vue component so that
+// onMounted/onUnmounted lifecycle hooks fire correctly.
+function withSetup<T>(composable: () => T): [T, ReturnType<typeof createApp>] {
+  let result!: T
+  const app = createApp(
+    defineComponent({
+      setup() {
+        result = composable()
+        return {}
+      },
+      template: '<div/>',
+    }),
+  )
+  app.mount(document.createElement('div'))
+  return [result, app]
+}
 
 // Mock the api module
 vi.mock('../../lib/api', () => ({
@@ -19,10 +37,12 @@ describe('usePoolWarm', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    vi.useFakeTimers()
+    // Only fake setTimeout/clearTimeout — leave Vitest's own scheduling intact
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
   })
 
   afterEach(() => {
+    vi.runOnlyPendingTimers()
     vi.useRealTimers()
   })
 
@@ -30,7 +50,7 @@ describe('usePoolWarm', () => {
     const { api } = await import('../../lib/api')
     const { usePoolWarm } = await import('../usePoolWarm')
 
-    usePoolWarm()
+    const [, app] = withSetup(() => usePoolWarm())
 
     // Advance debounce timer
     await vi.runAllTimersAsync()
@@ -39,6 +59,7 @@ describe('usePoolWarm', () => {
       '/api/internal/pool/warm',
       expect.objectContaining({ method: 'POST' }),
     )
+    app.unmount()
   })
 
   it('debounces rapid calls — only fires once for rapid agent changes', async () => {
@@ -47,7 +68,7 @@ describe('usePoolWarm', () => {
     const store = useAgentPickerStore()
     const { usePoolWarm } = await import('../usePoolWarm')
 
-    usePoolWarm()
+    const [, app] = withSetup(() => usePoolWarm())
 
     // Simulate rapid agent version changes before debounce fires
     store.selectedAgent = 'tether-agent-1.0'
@@ -59,6 +80,7 @@ describe('usePoolWarm', () => {
 
     // Only 1 call total (initial mount hint, debounced)
     expect(vi.mocked(api)).toHaveBeenCalledTimes(1)
+    app.unmount()
   })
 
   it('fires a new hint after debounce when agent version changes', async () => {
@@ -67,7 +89,7 @@ describe('usePoolWarm', () => {
     const store = useAgentPickerStore()
     const { usePoolWarm } = await import('../usePoolWarm')
 
-    usePoolWarm()
+    const [, app] = withSetup(() => usePoolWarm())
 
     // First fire (mount)
     await vi.runAllTimersAsync()
@@ -78,6 +100,7 @@ describe('usePoolWarm', () => {
     await vi.runAllTimersAsync()
 
     expect(vi.mocked(api)).toHaveBeenCalledTimes(2)
+    app.unmount()
   })
 
   it('swallows API errors silently', async () => {
@@ -86,10 +109,14 @@ describe('usePoolWarm', () => {
 
     const { usePoolWarm } = await import('../usePoolWarm')
 
-    // Should not throw
-    expect(() => usePoolWarm()).not.toThrow()
+    let app!: ReturnType<typeof createApp>
+    // Should not throw on setup or mount
+    expect(() => {
+      ;([, app] = withSetup(() => usePoolWarm()))
+    }).not.toThrow()
     await vi.runAllTimersAsync()
-    // No unhandled rejection
+    // No unhandled rejection — _fireHint swallows the error
+    app.unmount()
   })
 
   it('includes agent_version in POST body', async () => {
@@ -99,12 +126,13 @@ describe('usePoolWarm', () => {
     store.selectedAgent = 'tether-agent-1.0'
 
     const { usePoolWarm } = await import('../usePoolWarm')
-    usePoolWarm()
+    const [, app] = withSetup(() => usePoolWarm())
 
     await vi.runAllTimersAsync()
 
     const [, init] = vi.mocked(api).mock.calls[0]
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body.agent_version).toBe('tether-agent-1.0')
+    app.unmount()
   })
 })
