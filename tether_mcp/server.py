@@ -127,8 +127,8 @@ async def read_context(
     """Read context nodes. No params=roots. depth: 0=node only, 1=children, -1=full subtree.
     Section bodies in cat-n format (1-indexed line numbers with tabs).
 
-    conversation_id: Current conversation UUID. Required for scope-envelope enforcement.
-        When absent, scope is not enforced (legacy/debug use — logs a warning).
+    conversation_id: Current conversation UUID. REQUIRED (v2) — returns
+        {error: 'conversation_id_required'} if absent.
     M: Detail level for node data summary (1=title, 2=one-liner, 3=themes, 4=full sections).
     N: Scope envelope — max tree-edges from conversation's context node. Nodes outside
         N edges return {error: 'out_of_scope', target: ...} instead of data.
@@ -213,11 +213,13 @@ async def write_node_memory(
     data_type:       Content type hint: 'text' | 'list' | 'json' | 'file'.
     value:           Content to write.
     mode:            'additive' (append) | 'edit' (replace) | 'delete'.
-    conversation_id: Current conversation UUID (for read-before-write advisory).
+    conversation_id: Current conversation UUID. REQUIRED (v2) — returns
+                     {error: 'conversation_id_required'} if absent.
     visible_to_user: False hides this section from user-facing reads.
 
-    Advisory: edit/delete without a prior read in this conversation logs a warning
-    but still allows the write (v1). v2 will hard-block on violation.
+    Enforcement (v2): conversation_id is required and a prior read_node_memory
+    call for this node in the same conversation must exist in node_read_log.
+    Returns {error: 'read_before_write_required'} if the read has not occurred.
     """
     from tether_mcp.tools.write_node_memory import execute_write_node_memory
     pool = await _get_pool()

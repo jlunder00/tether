@@ -58,11 +58,12 @@ async def test_read_tasks_all(seeded):
 
 
 @pytest.mark.asyncio
-async def test_read_context_roots(seeded):
+async def test_read_context_requires_conversation_id(seeded):
+    """v2: read_context without conversation_id returns a structured error, not a list."""
     from tether_mcp.server import read_context
     result = await read_context()
-    assert isinstance(result, list)
-    assert any("Work" in (r.get("path") or r.get("name", "")) for r in result)
+    assert isinstance(result, dict), "Expected error dict when conversation_id is absent"
+    assert result.get("error") == "conversation_id_required"
 
 
 @pytest.mark.asyncio
