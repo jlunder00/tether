@@ -40,3 +40,4 @@ export type WsIncomingEvent =
   | { type: 'interrupted'; session_id: string }
   | { type: 'session_ended'; session_id: string }
   | { type: 'trial_usage_update'; session_id: string; remaining: number }
+  | { type: 'session_timeout'; session_id: string; reason: 'permission_timeout'; request_id: string }

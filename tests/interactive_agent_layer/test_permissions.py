@@ -12,6 +12,7 @@ from interactive_agent_layer.permissions import (
     PermissionGate,
     PermissionResultAllow,
     PermissionResultDeny,
+    PermissionTimeoutError,
 )
 from interactive_agent_layer.session import Session
 from interactive_agent_layer.translation import TranslationTable
@@ -174,7 +175,7 @@ async def test_user_action_no_auto_approve_and_user_approves(table, session):
 # 6. UserAction + auto_approve=False → timeout → deny
 # ---------------------------------------------------------------------------
 
-async def test_user_action_timeout_denies(table, session, monkeypatch):
+async def test_user_action_timeout_raises_permission_timeout_error(table, session, monkeypatch):
     monkeypatch.setattr(
         "interactive_agent_layer.permissions.get_permission_timeout",
         lambda: 0.01,
@@ -188,8 +189,11 @@ async def test_user_action_timeout_denies(table, session, monkeypatch):
         auto_approve_user_actions=False,
     )
     # Don't resolve the future — let it time out naturally.
-    result = await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
-    assert isinstance(result, PermissionResultDeny)
+    with pytest.raises(PermissionTimeoutError) as exc_info:
+        await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    # The exception carries the request_id so session.py can include it in the
+    # session_timeout event.
+    assert exc_info.value.request_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -249,5 +253,45 @@ async def test_permission_pending_cleaned_up_after_timeout(table, session, monke
         outbound_events=queue,
         auto_approve_user_actions=False,
     )
-    await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    with pytest.raises(PermissionTimeoutError):
+        await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    # pending must be cleaned up even when PermissionTimeoutError is raised
     assert session.permission_pending == {}
+
+
+# ---------------------------------------------------------------------------
+# 10. PermissionTimeoutError carries correct request_id
+# ---------------------------------------------------------------------------
+
+async def test_permission_timeout_error_request_id_matches_event(table, session, monkeypatch):
+    """PermissionTimeoutError.request_id matches the request_id emitted in the event."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table,
+        session=session,
+        outbound_events=queue,
+        auto_approve_user_actions=False,
+    )
+
+    raised_request_id: str | None = None
+
+    async def _run():
+        nonlocal raised_request_id
+        try:
+            await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+        except PermissionTimeoutError as exc:
+            raised_request_id = exc.request_id
+            raise
+
+    # Capture the emitted event and let the timeout fire
+    event_task = asyncio.create_task(queue.get())
+    with pytest.raises(PermissionTimeoutError):
+        await _run()
+
+    emitted_event = await asyncio.wait_for(event_task, timeout=1.0)
+    assert raised_request_id == emitted_event["request_id"]
