@@ -283,3 +283,59 @@ async def review_pending_memory_write(
         new_status, _uuid.UUID(proposal_id),
     )
     return result.split()[-1] != "0"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Search
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def search_user_memory(
+    conn: asyncpg.Connection,
+    query: str,
+    scope: str = "user",
+    limit: int = 20,
+) -> list[dict]:
+    """Search user memory entries by key or value using ILIKE.
+
+    scope: 'user' → user_memory (L2), 'user_durable' → user_durable_memory (L3).
+    query: Search string — matched against key (exact, prefix, substring) and value.
+
+    Returns entries ordered by relevance:
+      score 2 — exact key match
+      score 1 — key prefix or key substring match
+      score 0 — value-only match
+
+    Each entry: {key, value, score}.
+    """
+    _VALID_SCOPES = {"user": "user_memory", "user_durable": "user_durable_memory"}
+    if scope not in _VALID_SCOPES:
+        raise ValueError(f"invalid scope: {scope!r}; must be 'user' or 'user_durable'")
+    table = _VALID_SCOPES[scope]
+    pattern = f"%{query}%"
+
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            key,
+            value,
+            CASE
+                WHEN key = $1 THEN 2
+                WHEN key ILIKE $2 THEN 1
+                ELSE 0
+            END AS score
+        FROM {table}
+        WHERE key ILIKE $2 OR value ILIKE $2
+        ORDER BY score DESC, key
+        LIMIT $3
+        """,
+        query, pattern, limit,
+    )
+    return [
+        {
+            "key": r["key"],
+            "value": r["value"],
+            "score": r["score"],
+        }
+        for r in rows
+    ]
