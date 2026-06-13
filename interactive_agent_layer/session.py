@@ -15,6 +15,8 @@ from typing import AsyncIterator, Any
 from interactive_agent_layer.coalescing import CoalescingBuffer
 from interactive_agent_layer.config import get_auto_approve_user_actions
 from interactive_agent_layer.permissions import (
+    CheckGrantFn,
+    InsertGrantFn,
     PermissionGate,
     PermissionResultAllow,
 )
@@ -72,6 +74,8 @@ class Layer:
         is_paid_fn: Callable[..., Any] | None = None,
         provider_fn: Callable[[str], str] | None = None,
         leaky_providers: list[str] | None = None,
+        check_grant_fn: CheckGrantFn | None = None,
+        insert_grant_fn: InsertGrantFn | None = None,
     ) -> None:
         self.sessions: dict[str, Session] = {}
         self.pool_client = pool_client
@@ -82,6 +86,11 @@ class Layer:
         self.is_paid_fn = is_paid_fn
         self.provider_fn = provider_fn
         self.leaky_providers = leaky_providers
+        # Per-conversation permission grant functions — injected by premium at
+        # startup. When present, PermissionGate checks existing grants before
+        # prompting the user and persists new grants after approval.
+        self.check_grant_fn = check_grant_fn
+        self.insert_grant_fn = insert_grant_fn
 
     def create_session(
         self,
@@ -129,6 +138,8 @@ class Layer:
             session=session,
             outbound_events=gate_events,
             auto_approve_user_actions=get_auto_approve_user_actions(),
+            check_grant_fn=self.check_grant_fn,
+            insert_grant_fn=self.insert_grant_fn,
         )
 
         handle = await self.pool_client.acquire(
