@@ -33,6 +33,7 @@ class CoalescingBuffer:
         coalesced=True means this is a repeat within the window.
         The timestamp is updated on each hit to extend the window.
         """
+        self.evict_expired()
         key = (tool_name, phrase)
         now = self._time_fn()
         entry = self._cache.get(key)

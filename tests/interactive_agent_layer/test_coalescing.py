@@ -129,6 +129,23 @@ def test_window_extension_third_call_still_coalesced():
     assert id3 == id1
 
 
+def test_evict_expired_called_on_record():
+    """Expired entries are purged automatically when record() is called."""
+    clock = make_clock()
+    buf = CoalescingBuffer(window_seconds=5.0, time_fn=lambda: clock[0])
+
+    buf.record("old_tool", "old phrase")   # t=0, adds entry
+    clock[0] = 5.0  # old_tool is now expired (5 - 0 >= 5)
+
+    # Trigger eviction via record() on a DIFFERENT key
+    buf.record("new_tool", "new phrase")
+
+    # old_tool must have been evicted during the record() call above
+    assert ("old_tool", "old phrase") not in buf._cache, (
+        "record() should call evict_expired(), removing stale entries"
+    )
+
+
 def test_injectable_clock_fully_deterministic():
     """Verify no real time.monotonic is used when time_fn is provided."""
     calls = []
