@@ -153,7 +153,7 @@ describe('createWebSocketTransport — conversation_id in the WS payload', () =>
     installMockWebSocket()
     const transport = createWebSocketTransport()
 
-    const iter = transport.send('hello', 'tether-agent-2.0', 'conv-123')
+    const iter = transport.send('hello', 'tether-agent-2.0', 'conv-123')[Symbol.asyncIterator]()
     // Kick off iteration so send() runs past the openPromise await and calls ws.send.
     const first = iter.next()
 
@@ -176,7 +176,7 @@ describe('createWebSocketTransport — conversation_id in the WS payload', () =>
     installMockWebSocket()
     const transport = createWebSocketTransport()
 
-    const iter = transport.send('hello', 'tether-agent-2.0')
+    const iter = transport.send('hello', 'tether-agent-2.0')[Symbol.asyncIterator]()
     const first = iter.next()
 
     await Promise.resolve()
