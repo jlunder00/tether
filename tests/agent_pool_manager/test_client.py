@@ -14,7 +14,7 @@ from agent_pool_manager.client import PoolClient, PoolClientError
 
 
 HASH_A = "abc123"
-OPTIONS_A = {"model": "claude-haiku-4-5"}
+OPTIONS_A = {"model": "claude-haiku-4-5-20251001", "env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-test-token"}}
 USER_ID = "user-test-1"
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
+import fakeredis
 import pytest
 from interactive_agent_layer.ws_publisher import WSPublisher
 
@@ -71,3 +72,63 @@ async def test_two_sessions_same_user_share_channel(publisher):
     e2 = q.get_nowait()
     assert e1["session_id"] == "s1"
     assert e2["session_id"] == "s2"
+
+
+# ---------------------------------------------------------------------------
+# Redis dual-write
+# ---------------------------------------------------------------------------
+
+async def test_push_also_publishes_to_redis_when_client_set():
+    """When a Redis client is provided, push() must publish to user:{id}:events channel."""
+    import json
+    import fakeredis.aioredis as faioredis
+
+    server = fakeredis.FakeServer()
+    fake_client = faioredis.FakeRedis(server=server)
+    subscriber = faioredis.FakeRedis(server=server)
+
+    pub = WSPublisher(redis_client=fake_client)
+    ps = subscriber.pubsub()
+    await ps.subscribe("user:user99:events")
+    # Drain the subscribe-confirmation message
+    async for msg in ps.listen():
+        if msg["type"] == "subscribe":
+            break
+
+    event = {"type": "trial_usage_update", "remaining": 7}
+    await pub.push("user99", event)
+
+    # Give the message a moment to arrive
+    received = None
+    async for msg in ps.listen():
+        if msg["type"] == "message":
+            received = json.loads(msg["data"])
+            break
+
+    assert received == event, f"Redis must receive the published event, got: {received}"
+
+    await ps.aclose()
+    await subscriber.aclose()
+    await fake_client.aclose()
+
+
+async def test_push_in_process_still_works_without_redis():
+    """Without a Redis client, push() delivers only to in-process queues (unchanged)."""
+    pub = WSPublisher()  # no redis_client
+    q = pub.subscribe("userA")
+    await pub.push("userA", {"type": "ping"})
+    assert q.get_nowait() == {"type": "ping"}
+
+
+async def test_push_suppresses_redis_errors():
+    """Redis publish failures must not prevent in-process delivery."""
+    import fakeredis.aioredis as faioredis
+
+    bad_client = faioredis.FakeRedis()
+    await bad_client.aclose()  # close it so any publish raises
+
+    pub = WSPublisher(redis_client=bad_client)
+    q = pub.subscribe("userB")
+    # Should not raise despite broken Redis client
+    await pub.push("userB", {"type": "test"})
+    assert q.get_nowait() == {"type": "test"}

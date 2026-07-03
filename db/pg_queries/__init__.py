@@ -33,7 +33,7 @@ from db.pg_queries.nodes import (
 from db.pg_queries.sections import (
     get_sections, get_section, upsert_section, append_section, delete_section,
     list_section_files, create_section_file, rename_section_file,
-    reorder_section_files, search_sections,
+    reorder_section_files, search_sections, grep_sections,
 )
 from db.pg_queries.milestones import (
     create_milestone, get_milestones, patch_milestone, delete_milestone,
@@ -74,4 +74,15 @@ from db.pg_queries.beacon import (
 from db.pg_queries.subscriptions import (
     get_user_is_paid,
     get_user_is_paid_by_id,
+)
+from db.pg_queries.memory import (
+    list_user_memory, get_user_memory_entry, upsert_user_memory, delete_user_memory,
+    list_user_durable_memory, get_user_durable_memory_entry, upsert_user_durable_memory,
+    insert_pending_memory_write, get_pending_memory_write,
+    list_pending_memory_writes, review_pending_memory_write,
+)
+from db.pg_queries.node_memory import (
+    get_node_summary, list_node_summary_levels, upsert_node_summary,
+    log_node_read, has_read_node_in_conversation, get_conversation_reads,
+    get_context_node_id_for_conversation, get_node_tree_distance,
 )

@@ -1,8 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { ChatMessage, PermissionRequest } from '../types/chat'
+import type { ChatMessage, PermissionRequest, AgentActionStatus, StatusPhase } from '../types/chat'
 import { getBotTransport } from '../composables/useBotTransport'
 import { useAgentPickerStore } from './agentPicker'
+
+interface LiveAgentAction {
+  id: string
+  tool_name: string
+  friendly_text: string
+  status: AgentActionStatus
+}
 
 function makeId(): string {
   if (location.protocol === 'https:') return crypto.randomUUID()
@@ -18,6 +25,9 @@ export const useChatStore = defineStore('chat', () => {
   const statusMessage = ref('')
   const pendingPermissionRequest = ref<PermissionRequest | null>(null)
   const permissionQueue = ref<PermissionRequest[]>([])
+  const activeActions = ref<Map<string, LiveAgentAction>>(new Map())
+  const currentPhase = ref<StatusPhase | null>(null)
+  const sessionTimedOut = ref(false)
 
   // Register heartbeat via a stable wrapper so it always reflects the current
   // transport, even after setBotTransport() replaces it post-auth.
@@ -34,6 +44,7 @@ export const useChatStore = defineStore('chat', () => {
 
     isStreaming.value = true
     isSessionActive.value = true
+    sessionTimedOut.value = false
     try {
       const agentVersion = useAgentPickerStore().selectedAgent
       for await (const event of getBotTransport().send(text, agentVersion)) {
@@ -45,15 +56,30 @@ export const useChatStore = defineStore('chat', () => {
           case 'agent_action': {
             activeSessionId.value = event.session_id
             const bot = messages.value[botMsgIndex]
-            ;(bot.actions ??= []).push({ action: event.action, tool: event.tool })
+            // Only track starting/running pills on bot.actions for legacy display;
+            // complete just clears in-progress for that path.
+            if (event.status !== 'complete') {
+              const existing = (bot.actions ??= []).find(a => a.friendly_text === event.friendly_text)
+              if (!existing) {
+                bot.actions!.push({ friendly_text: event.friendly_text, tool_name: event.tool_name })
+              }
+            }
+            // Upsert into activeActions for rich pill UI (all statuses)
+            activeActions.value.set(event.id, {
+              id: event.id,
+              tool_name: event.tool_name,
+              friendly_text: event.friendly_text,
+              status: event.status,
+            })
             break
           }
           case 'permission_request': {
             activeSessionId.value = event.session_id
             const req: PermissionRequest = {
               request_id: event.request_id,
-              summary: event.summary,
-              details: event.details,
+              kind: event.kind,
+              target: event.target,
+              reason_from_bot: event.reason_from_bot,
             }
             if (!pendingPermissionRequest.value) {
               pendingPermissionRequest.value = req
@@ -64,20 +90,45 @@ export const useChatStore = defineStore('chat', () => {
           }
           case 'status':
             activeSessionId.value = event.session_id
-            statusMessage.value = event.message
+            statusMessage.value = event.text
+            currentPhase.value = event.phase
             break
           case 'turn_complete':
             // final_text is canonical — overwrite accumulated deltas
             messages.value[botMsgIndex].content = event.final_text
             statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
+            isSessionActive.value = false
+            return
+          case 'interrupted':
+            // Pool cancelled the stream (e.g. HTTP client disconnect).
+            // Clear in-progress indicators; bot message content is preserved.
+            statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
             isSessionActive.value = false
             return
           case 'session_ended':
             statusMessage.value = ''
+            currentPhase.value = null
+            activeActions.value.clear()
+            isSessionActive.value = false
+            return
+          case 'session_timeout':
+            // Backend timed out waiting for permission — clear pending modal,
+            // mark session as timed out so UI can show a resume message.
+            // Do NOT send a permission_response — the backend already denied.
+            pendingPermissionRequest.value = null
+            permissionQueue.value = []
+            sessionTimedOut.value = true
+            activeActions.value.clear()
+            statusMessage.value = ''
+            currentPhase.value = null
             isSessionActive.value = false
             return
           case 'trial_usage_update':
-            // handled elsewhere (trial counter UI)
+            useAgentPickerStore().setTrialRemaining(event.remaining)
             break
         }
       }
@@ -88,7 +139,7 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   function respondToPermission(requestId: string, approve: boolean): void {
-    getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, approve })
+    getBotTransport().sendRaw({ type: 'permission_response', request_id: requestId, decision: approve ? 'approve' : 'deny' })
     pendingPermissionRequest.value = permissionQueue.value.shift() ?? null
   }
 
@@ -106,8 +157,11 @@ export const useChatStore = defineStore('chat', () => {
     statusMessage,
     pendingPermissionRequest,
     permissionQueue,
+    activeActions,
+    currentPhase,
     send,
     respondToPermission,
     sendInterrupt,
+    sessionTimedOut,
   }
 })

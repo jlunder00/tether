@@ -154,6 +154,45 @@ async def get_all_node_paths(conn: asyncpg.Connection) -> list[str]:
     return [r["path"] for r in rows]
 
 
+async def list_nodes_index(conn: asyncpg.Connection, *, user_id: str) -> list[dict]:
+    """Return a lightweight index of all non-archived context nodes for a user.
+
+    Returns [{id, title, parent_id, path, child_count}].
+    One recursive CTE query — no per-row N+1. Section data is excluded.
+    Used by the frontend to populate the node tree quickly.
+
+    Filters explicitly by user_id in addition to the RLS policy on the
+    connection, matching the pattern used by list_conversations_index.
+    """
+    rows = await conn.fetch(
+        """
+        WITH RECURSIVE tree(id, parent_id, name, path) AS (
+            SELECT id, parent_id, name, name::text AS path
+            FROM context_nodes
+            WHERE parent_id IS NULL AND archived = FALSE AND user_id = $1::uuid
+            UNION ALL
+            SELECT cn.id, cn.parent_id, cn.name, tree.path || '/' || cn.name
+            FROM context_nodes cn
+            JOIN tree ON cn.parent_id = tree.id
+            WHERE cn.archived = FALSE AND cn.user_id = $1::uuid
+        )
+        SELECT
+            t.id::text         AS id,
+            t.name             AS title,
+            t.parent_id::text  AS parent_id,
+            t.path,
+            COUNT(c.id)::int   AS child_count
+        FROM tree t
+        LEFT JOIN context_nodes c ON c.parent_id = t.id AND c.archived = FALSE
+            AND c.user_id = $1::uuid
+        GROUP BY t.id, t.name, t.parent_id, t.path
+        ORDER BY t.path
+        """,
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_children(
     conn: asyncpg.Connection,
     parent_id: str | None = None,
@@ -326,6 +365,61 @@ async def get_milestone_nodes(
         *params,
     )
     return [_node(r) for r in rows]
+
+
+# ── Hop distance ─────────────────────────────────────────────────────────────
+
+
+async def get_node_hop_distance(
+    conn: asyncpg.Connection,
+    from_node_id: str,
+    to_node_id: str,
+) -> int | None:
+    """Return the undirected tree distance (hop count) between two context nodes.
+
+    Uses an LCA (lowest common ancestor) approach: walk ancestor chains from
+    both nodes and find the shortest combined path via their common ancestor.
+
+    Returns:
+        int  — number of hops on the shortest tree path.
+        None — nodes are in separate trees (no common ancestor).
+
+    Performance note: for large trees this CTE scans O(depth) rows per node.
+    A materialized path column or a dedicated ancestor table would reduce this
+    to O(1) lookups at the cost of write overhead. Consider adding
+    ``ltree`` indexing or a closure table if this becomes a hot path.
+    """
+    result = await conn.fetchval(
+        """
+        WITH RECURSIVE
+          from_ancestors(id, depth) AS (
+            SELECT id, 0 AS depth
+            FROM context_nodes
+            WHERE id = $1
+            UNION ALL
+            SELECT cn.parent_id, fa.depth + 1
+            FROM context_nodes cn
+            JOIN from_ancestors fa ON cn.id = fa.id
+            WHERE cn.parent_id IS NOT NULL
+          ),
+          to_ancestors(id, depth) AS (
+            SELECT id, 0 AS depth
+            FROM context_nodes
+            WHERE id = $2
+            UNION ALL
+            SELECT cn.parent_id, ta.depth + 1
+            FROM context_nodes cn
+            JOIN to_ancestors ta ON cn.id = ta.id
+            WHERE cn.parent_id IS NOT NULL
+          )
+        SELECT MIN(fa.depth + ta.depth)
+        FROM from_ancestors fa
+        JOIN to_ancestors ta ON fa.id = ta.id
+        """,
+        _uuid.UUID(from_node_id),
+        _uuid.UUID(to_node_id),
+    )
+    return int(result) if result is not None else None
 
 
 # ── Node-task linking ─────────────────────────────────────────────────────────

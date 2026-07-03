@@ -45,6 +45,28 @@ export interface SectionTypeSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Internal index types (not exported — internal to store)
+// ---------------------------------------------------------------------------
+
+/** Lean item returned by GET /api/nodes/index */
+interface NodeIndexItem {
+  id: string
+  title: string
+  parent_id: string | null
+  path: string
+  child_count: number
+}
+
+/**
+ * Returns true if a cached node has full data (from fetchNode/fetchRootNodes).
+ * We detect "full" by the presence of `status_override` (boolean) which the
+ * index stub intentionally omits.
+ */
+function isFullNode(node: ContextNode): boolean {
+  return typeof (node as any).status_override === 'boolean'
+}
+
+// ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
@@ -57,6 +79,9 @@ export const useContextStore = defineStore('context', () => {
 
   /** Whether to include archived nodes in tree views */
   const showArchived = ref(false)
+
+  /** True after a successful fetchNodesIndex() — tree expand doesn't need to re-fetch children */
+  const nodesIndexLoaded = ref(false)
 
   // -- Computed helpers ------------------------------------------------------
 
@@ -265,11 +290,58 @@ export const useContextStore = defineStore('context', () => {
     delete sectionCache.value[`${nodeId}::${sectionType}::${name}`]
   }
 
+  /**
+   * Load all nodes as lean index summaries.
+   * Populates `nodes` cache without overwriting full ContextNode objects already cached.
+   * After this, tree expand/collapse is instant (childrenOf() works from cache).
+   */
+  async function fetchNodesIndex(): Promise<void> {
+    const resp = await api('/api/nodes/index')
+    if (!resp.ok) return
+    let items: NodeIndexItem[]
+    try {
+      items = await resp.json()
+    } catch {
+      return
+    }
+    for (const item of items) {
+      const existing = nodes.value[item.id]
+      if (existing && isFullNode(existing)) {
+        // Full node already cached — update mutable display fields only
+        existing.name = item.title
+        existing.children_count = item.child_count
+      } else if (existing) {
+        // Index stub already there — refresh it
+        existing.name = item.title
+        existing.children_count = item.child_count
+      } else {
+        // New entry — insert as a lean stub with safe defaults
+        nodes.value[item.id] = {
+          id: item.id,
+          parent_id: item.parent_id,
+          name: item.title,
+          description: null,
+          node_type: 'context',
+          archived: false,
+          target_date: null,
+          status: null,
+          status_override: false,
+          color: null,
+          created_at: '',
+          updated_at: '',
+          children_count: item.child_count,
+        }
+      }
+    }
+    nodesIndexLoaded.value = true
+  }
+
   return {
     // State
     nodes,
     sectionCache,
     showArchived,
+    nodesIndexLoaded,
 
     // Computed
     rootNodes,
@@ -280,6 +352,7 @@ export const useContextStore = defineStore('context', () => {
     nodeByName,
 
     // Node CRUD
+    fetchNodesIndex,
     fetchRootNodes,
     fetchChildren,
     fetchNode,

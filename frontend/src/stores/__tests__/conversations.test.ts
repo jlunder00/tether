@@ -255,6 +255,37 @@ describe('useConversationsStore', () => {
     })
   })
 
+  describe('discard()', () => {
+    it('PATCHes state=rejected and updates list in place', async () => {
+      mockApi.mockResolvedValue({ ok: true } as Response)
+      const store = useConversationsStore()
+      store.list = [makeConv({ id: 'conv-9', state: 'pending' })]
+
+      const ok = await store.discard('conv-9')
+
+      expect(ok).toBe(true)
+      expect(mockApi).toHaveBeenCalledWith(
+        '/api/conversations/conv-9',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ state: 'rejected' }),
+        }),
+      )
+      expect(store.list[0].state).toBe('rejected')
+    })
+
+    it('returns false on API failure', async () => {
+      mockApi.mockResolvedValue({ ok: false } as Response)
+      const store = useConversationsStore()
+      store.list = [makeConv({ id: 'conv-9', state: 'pending' })]
+
+      const ok = await store.discard('conv-9')
+      expect(ok).toBe(false)
+      // List should not be mutated on failure
+      expect(store.list[0].state).toBe('pending')
+    })
+  })
+
   describe('appendMessage()', () => {
     it('appends to existing messages', () => {
       const store = useConversationsStore()
@@ -273,6 +304,75 @@ describe('useConversationsStore', () => {
 
       const msgs = store.messagesById.get('new-conv')!
       expect(msgs).toHaveLength(1)
+    })
+  })
+
+  // ---------------------------------------------------------------------------
+  // Fix C: resilience against malformed / non-JSON API responses
+  // ---------------------------------------------------------------------------
+
+  describe('loadMessages() — error resilience (Fix C)', () => {
+    it('does not throw when API returns HTML (res.json() throws SyntaxError)', async () => {
+      // Simulates Fly.io returning an HTML error page with 200 status
+      // (e.g. SPA fallback serving index.html for an unmatched route).
+      // Before Fix C: SyntaxError propagates as unhandled rejection.
+      // After Fix C: caught internally; messagesById entry remains unset.
+      mockApi.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => { throw new SyntaxError('Unexpected token \'<\'') },
+      } as unknown as Response)
+
+      const store = useConversationsStore()
+      // Must not throw — this is the key assertion
+      await expect(store.loadMessages('conv-html')).resolves.toBeUndefined()
+      // No messages stored on failure
+      expect(store.messagesById.has('conv-html')).toBe(false)
+    })
+
+    it('does not throw when API returns wrong shape (items key instead of messages)', async () => {
+      // Simulates schema drift: backend returning {"items":[...]} instead of {"messages":[...]}.
+      // Before Fix C: [...undefined].reverse() throws TypeError: b.messages is not iterable.
+      // After Fix C: caught internally; messages default to [].
+      mockApi.mockResolvedValue(mockResponse({ items: [makeMsg()], has_more: false }))
+
+      const store = useConversationsStore()
+      // Must not throw
+      await expect(store.loadMessages('conv-items')).resolves.toBeUndefined()
+      // Graceful degradation: empty array stored (not undefined or a junk array)
+      expect(store.messagesById.get('conv-items')).toEqual([])
+    })
+
+    it('does not throw in loadMessagesOlder when API returns HTML', async () => {
+      mockApi.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => { throw new SyntaxError('Unexpected token \'<\'') },
+      } as unknown as Response)
+
+      const store = useConversationsStore()
+      const existing = [makeMsg({ id: 'msg-existing' })]
+      store.messagesById.set('conv-older', existing)
+      store.hasMoreById.set('conv-older', true)
+
+      // Must not throw; existing messages must be preserved
+      await expect(store.loadMessagesOlder('conv-older')).resolves.toBeUndefined()
+      expect(store.messagesById.get('conv-older')).toEqual(existing)
+    })
+
+    it('does not throw in loadMessagesOlder when API returns wrong shape (items key)', async () => {
+      // Symmetric coverage: same schema-drift scenario for the pagination path.
+      mockApi.mockResolvedValue(mockResponse({ items: [makeMsg({ id: 'msg-old' })], has_more: false }))
+
+      const store = useConversationsStore()
+      const existing = [makeMsg({ id: 'msg-existing' })]
+      store.messagesById.set('conv-older-shape', existing)
+      store.hasMoreById.set('conv-older-shape', true)
+
+      await expect(store.loadMessagesOlder('conv-older-shape')).resolves.toBeUndefined()
+      // Existing messages preserved; empty older set prepended without crash
+      const stored = store.messagesById.get('conv-older-shape')!
+      expect(stored).toContainEqual(expect.objectContaining({ id: 'msg-existing' }))
     })
   })
 })

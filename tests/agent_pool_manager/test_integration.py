@@ -29,7 +29,7 @@ async def test_real_subprocess_acquire_query_release():
     )
     pool = Pool(cfg)
     options_hash = "integration-test-hash"
-    options = {}
+    options = {"env": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-integration-test-token"}}
 
     await pool._inject_warm(options_hash, options)
     handle_id, meta = await pool.acquire(options_hash, options, timeout=30.0)

@@ -7,6 +7,70 @@ function msg(overrides: Partial<ChatMessage> & Pick<ChatMessage, 'role' | 'conte
   return { id: 'test-id', ts: Date.now(), ...overrides }
 }
 
+// ── Priority styling for system messages (Beacon D1) ─────────────────────────
+describe('MessageBubble — system message priority', () => {
+  it('normal priority (absent): renders as plain centered italic with no priority tint', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Session started' }) },
+    })
+    // No priority tint classes
+    expect(wrapper.html()).not.toContain('data-priority')
+    // Still renders centered
+    expect(wrapper.html()).toContain('text-center')
+  })
+
+  it('normal priority (explicit): same as absent — no tint', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Info', priority: 'normal' }) },
+    })
+    expect(wrapper.html()).not.toContain('data-priority="important"')
+    expect(wrapper.html()).not.toContain('data-priority="urgent"')
+    expect(wrapper.html()).toContain('text-center')
+  })
+
+  it('important priority: renders tinted box with data-priority="important"', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Anchor ping', priority: 'important' }) },
+    })
+    expect(wrapper.html()).toContain('data-priority="important"')
+    expect(wrapper.text()).toContain('Anchor ping')
+  })
+
+  it('urgent priority: renders tinted box with data-priority="urgent"', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Critical alert', priority: 'urgent' }) },
+    })
+    expect(wrapper.html()).toContain('data-priority="urgent"')
+    expect(wrapper.text()).toContain('Critical alert')
+  })
+
+  it('important priority: renders ⏰ icon prefix (a11y: differentiable without color)', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Time sensitive', priority: 'important' }) },
+    })
+    expect(wrapper.text()).toContain('⏰')
+  })
+
+  it('urgent priority: renders 🚨 icon prefix (a11y: differentiable without color)', () => {
+    const wrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'system', content: 'Stop and look', priority: 'urgent' }) },
+    })
+    expect(wrapper.text()).toContain('🚨')
+  })
+
+  it('priority field on non-system message is ignored (no tint on user/bot)', () => {
+    const userWrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'user', content: 'hello', priority: 'urgent' }) },
+    })
+    expect(userWrapper.html()).not.toContain('data-priority')
+
+    const botWrapper = mount(MessageBubble, {
+      props: { msg: msg({ role: 'bot', content: 'hi', priority: 'urgent' }) },
+    })
+    expect(botWrapper.html()).not.toContain('data-priority')
+  })
+})
+
 describe('MessageBubble', () => {
   it('renders user message with right-align class', () => {
     const wrapper = mount(MessageBubble, { props: { msg: msg({ role: 'user', content: 'hello' }) } })

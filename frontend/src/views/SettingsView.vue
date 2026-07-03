@@ -8,6 +8,8 @@ import AnthropicAccountSection from '../components/AnthropicAccountSection.vue'
 import ConnectionsSection from '../components/ConnectionsSection.vue'
 import ApiKeysSection from '../components/ApiKeysSection.vue'
 import ICalSection from '../components/ICalSection.vue'
+import AgentBehaviorSection from '../components/AgentBehaviorSection.vue'
+import NotificationRoutingSection from '../components/NotificationRoutingSection.vue'
 
 const auth = useAuthStore()
 
@@ -387,6 +389,9 @@ async function linkTelegram() {
         </div>
       </section>
 
+      <!-- Agent Behaviour -->
+      <AgentBehaviorSection />
+
       <!-- LLM Configuration -->
       <section v-if="llmConfig" class="mb-8">
         <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">LLM Configuration</h2>
@@ -506,6 +511,27 @@ async function linkTelegram() {
           </p>
         </div>
       </section>
+
+      <!-- Beacon (premium) -->
+      <section class="mb-8" data-section="beacon">
+        <h2 class="text-sm font-semibold text-[--fg-3] uppercase tracking-wider mb-3">Beacon</h2>
+        <div class="bg-[--bg-elev-1] rounded-xl p-4 space-y-3">
+          <p class="text-sm text-[--fg-3]">
+            Beacon is Tether's intelligent notification system. It decides when to ping you —
+            and when to stay quiet.
+          </p>
+          <router-link
+            to="/beacon/suppressions"
+            class="flex items-center justify-between text-sm text-[--fg-2] hover:text-[--fg-1] transition-colors py-1"
+          >
+            <span>Suppression history</span>
+            <span class="text-[--fg-5]">→</span>
+          </router-link>
+        </div>
+      </section>
+
+      <!-- Notification Routing -->
+      <NotificationRoutingSection />
     </div>
   </div>
 </template>

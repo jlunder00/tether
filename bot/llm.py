@@ -24,6 +24,16 @@ _llm_env_extras: contextvars.ContextVar[dict[str, str] | None] = contextvars.Con
     "_llm_env_extras", default=None
 )
 
+# Per-request user ID — set by _dispatch_v25 before invoking the premium handler so
+# that PipelineBackend.complete() uses the *current* user_id at call time instead of
+# the frozen one baked into the singleton LLMRouter/PipelineBackend instance.
+# This is the fix for the singleton user_id capture bug: without this contextvar,
+# all requests after the first would use the first caller's user_id when acquiring
+# pool handles. Never set at module level; always use .set()/.reset().
+_llm_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_llm_user_id", default=None
+)
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -64,10 +74,121 @@ class LLMBackend(ABC):
 # ---------------------------------------------------------------------------
 
 class PipelineBackend(LLMBackend):
-    """Invokes the Claude agent SDK. Always available as fallback."""
+    """Invokes the Claude agent SDK.
+
+    When constructed with pool_client + user_id, routes through the agent-pool-manager
+    (acquire → query_stream → release) instead of spawning a subprocess inline.  This
+    is the preferred path for the 2.5 premium pipeline where subprocesses are kept warm
+    and reused across requests.
+
+    Without pool_client (default), falls back to the original inline SDK spawn.  This
+    preserves backward compatibility for the 1.0 pipeline and any caller that constructs
+    PipelineBackend directly without pool wiring.
+    """
+
+    def __init__(
+        self,
+        pool_client: object | None = None,
+        user_id: str | None = None,
+    ) -> None:
+        self._pool_client = pool_client
+        self._user_id = user_id
 
     def is_available(self) -> bool:
         return True
+
+    def _build_prompt(
+        self,
+        messages: list[dict],
+        system: str | list[str],
+    ) -> str:
+        """Flatten system + messages into a single text prompt."""
+        parts = []
+        if isinstance(system, list):
+            parts.append("\n".join(system))
+        else:
+            parts.append(system)
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            parts.append(f"\n[{role}]\n{content}")
+        return "\n".join(parts)
+
+    async def _complete_via_pool(
+        self,
+        prompt: str,
+        model: str,
+        env: dict[str, str],
+    ) -> str:
+        """Acquire a warm handle from the pool, stream result, release.
+
+        Uses _llm_user_id contextvar at call time (not self._user_id) so that the
+        singleton PipelineBackend correctly routes each request to its own user's pool
+        handle rather than the first caller's user_id that was baked in at construction.
+
+        Only accumulates text from the final result event (subtype=success).  The pool
+        also emits intermediate assistant events with the same text — using both sources
+        would double-count the output.
+
+        reusable is set to True only on clean completion; on any error the handle is
+        released with reusable=False so the pool knows not to reuse a potentially
+        corrupted subprocess.
+        """
+        from interactive_agent_layer.session import _stable_options_hash
+
+        # Prefer contextvar user_id (set by _dispatch_v25 per-request) over the
+        # instance attribute (frozen at singleton construction time).
+        effective_user_id = _llm_user_id.get() or self._user_id
+
+        options: dict = {
+            "model": model,
+            "permission_mode": "bypassPermissions",
+            "env": env,
+        }
+        options_hash = _stable_options_hash(options)
+
+        handle_id = await self._pool_client.acquire(  # type: ignore[union-attr]
+            effective_user_id, options_hash, options
+        )
+        ok = False
+        try:
+            output: str = ""
+            async for event in self._pool_client.query_stream(handle_id, prompt):  # type: ignore[union-attr]
+                etype = event.get("type")
+                # Use only the final result event — it is the authoritative complete
+                # response from the pool subprocess.  Intermediate assistant events
+                # carry the same text; accumulating both would double the output.
+                if etype == "result" and event.get("subtype") == "success":
+                    output = event.get("result", "")
+                    break
+            ok = True
+            return output.strip()
+        finally:
+            # reusable=True only on clean completion; poisoned handles must not re-enter pool
+            await self._pool_client.release(handle_id, reusable=ok)  # type: ignore[union-attr]
+
+    async def _complete_inline(
+        self,
+        prompt: str,
+        model: str,
+        env: dict[str, str],
+    ) -> str:
+        """Original inline SDK spawn path (fallback when no pool_client)."""
+        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
+
+        opts = ClaudeAgentOptions(
+            model=model,
+            permission_mode="bypassPermissions",
+            env=env,
+        )
+
+        parts: list[str] = []
+        async for msg in query(prompt=prompt, options=opts):
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        parts.append(block.text)
+        return "".join(parts).strip()
 
     async def complete(
         self,
@@ -79,40 +200,28 @@ class PipelineBackend(LLMBackend):
         thinking_budget: int = 8000,
         max_tokens: int = 8096,
     ) -> LLMResponse:
-        from claude_agent_sdk import query, ClaudeAgentOptions, AssistantMessage, TextBlock
-
-        prompt_parts = []
-        if isinstance(system, list):
-            prompt_parts.append("\n".join(system))
-        else:
-            prompt_parts.append(system)
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            prompt_parts.append(f"\n[{role}]\n{content}")
-        prompt = "\n".join(prompt_parts)
+        prompt = self._build_prompt(messages, system)
 
         env: dict[str, str] = {}
         extras = _llm_env_extras.get()
         if extras:
             env.update(extras)
 
-        opts = ClaudeAgentOptions(
-            model=model,
-            permission_mode="bypassPermissions",
-            env=env,
-        )
+        # Determine effective user_id — prefer the per-request contextvar (set by
+        # _dispatch_v25) over the instance attribute (frozen at construction for singletons).
+        effective_user_id = _llm_user_id.get() or self._user_id
 
-        async def _collect() -> str:
-            parts: list[str] = []
-            async for msg in query(prompt=prompt, options=opts):
-                if isinstance(msg, AssistantMessage):
-                    for block in msg.content:
-                        if isinstance(block, TextBlock):
-                            parts.append(block.text)
-            return "".join(parts).strip()
+        if self._pool_client is not None and effective_user_id is not None:
+            output = await asyncio.wait_for(
+                self._complete_via_pool(prompt, model, env),
+                timeout=180,
+            )
+        else:
+            output = await asyncio.wait_for(
+                self._complete_inline(prompt, model, env),
+                timeout=180,
+            )
 
-        output = await asyncio.wait_for(_collect(), timeout=180)
         return LLMResponse(
             content=output,
             tool_calls=[],

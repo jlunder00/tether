@@ -806,7 +806,8 @@ onMounted(async () => {
             <span v-if="!contexts.length" style="font-size:12px;color:var(--fg-5);">None</span>
             <div v-for="subject in contexts" :key="subject"
                  style="display:flex;align-items:center;justify-content:space-between;font-size:12.5px;">
-              <router-link :to="'/context'" class="dp-link" style="font-size:inherit;">{{ subject }}</router-link>
+              <!-- K2 will migrate this to a context_node_id deep link (/chat/node/:id) -->
+              <span class="dp-link" style="font-size:inherit;" title="Context editing has moved — open /chat to find folders by name">{{ subject }}</span>
               <button @click="unlinkContext(subject)" style="color:var(--fg-6);background:none;border:none;cursor:pointer;font-size:11px;">✕</button>
             </div>
             <SearchAutocomplete :search-fn="searchForContext" placeholder="Link context entry…" @select="linkContextFromSearch" />

@@ -269,7 +269,10 @@ async def test_get_messages_empty(api_client, conn):
     resp = await api_client.get(f"/api/conversations/{cid}/messages")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["items"] == []
+    # Must use "messages" key (not "items") to match frontend MessagesPage type
+    assert "messages" in data, f"expected 'messages' key in response, got keys: {list(data.keys())}"
+    assert "items" not in data, "must not expose 'items' key — frontend expects 'messages'"
+    assert data["messages"] == []
     assert data["has_more"] is False
 
 
@@ -283,9 +286,14 @@ async def test_get_messages_returns_messages(api_client, conn):
     resp = await api_client.get(f"/api/conversations/{cid}/messages")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["items"]) == 2
-    roles = {m["role"] for m in data["items"]}
+    assert "messages" in data, f"expected 'messages' key, got: {list(data.keys())}"
+    assert len(data["messages"]) == 2
+    roles = {m["role"] for m in data["messages"]}
     assert roles == {"user", "assistant"}
+    # Must expose "body" field (not "content") to match frontend ConversationMessage type
+    for msg in data["messages"]:
+        assert "body" in msg, f"expected 'body' field in message, got: {list(msg.keys())}"
+        assert "content" not in msg, "must not expose 'content' — frontend expects 'body'"
 
 
 @pytest.mark.asyncio
@@ -302,7 +310,8 @@ async def test_get_messages_before_id_cursor(api_client, conn):
     resp = await api_client.get(f"/api/conversations/{cid}/messages?before_id={cursor_id}&limit=10")
     assert resp.status_code == 200
     data = resp.json()
-    returned_ids = [m["id"] for m in data["items"]]
+    assert "messages" in data, f"expected 'messages' key, got: {list(data.keys())}"
+    returned_ids = [m["id"] for m in data["messages"]]
     assert ids[0] in returned_ids
     assert ids[1] in returned_ids
     assert cursor_id not in returned_ids
@@ -319,7 +328,8 @@ async def test_get_messages_has_more_true(api_client, conn):
     resp = await api_client.get(f"/api/conversations/{cid}/messages?limit=3")
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["items"]) == 3
+    assert "messages" in data, f"expected 'messages' key, got: {list(data.keys())}"
+    assert len(data["messages"]) == 3
     assert data["has_more"] is True
 
 
@@ -333,6 +343,7 @@ async def test_get_messages_has_more_false(api_client, conn):
     resp = await api_client.get(f"/api/conversations/{cid}/messages?limit=10")
     assert resp.status_code == 200
     data = resp.json()
+    assert "messages" in data, f"expected 'messages' key, got: {list(data.keys())}"
     assert data["has_more"] is False
 
 

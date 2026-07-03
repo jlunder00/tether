@@ -1,13 +1,11 @@
 """API tests for Anthropic OAuth vault endpoints.
 
-TDD: written before handlers existed and confirmed to fail for the right reason.
-All tests mock subprocess; no live claude binary required.
-These tests do NOT require DATABASE_URL -- they mock the vault and skip DB.
+All tests mock the pool manager HTTP call; no live claude binary or pool
+manager service required.  Pending setup entries now contain session_id
+(not child) since pexpect was moved to the pool manager service.
 """
 from __future__ import annotations
 
-import asyncio
-import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,6 +13,26 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 from tests.api.conftest import TEST_USER_ID, TEST_USERNAME
+
+
+# ---------------------------------------------------------------------------
+# Helpers — build fake httpx responses
+# ---------------------------------------------------------------------------
+
+def _mock_httpx_post(status_code: int, body: dict):
+    """Return a patched httpx.AsyncClient that yields one canned POST response."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = status_code
+    mock_resp.json.return_value = body
+    mock_resp.text = str(body)
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=mock_client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -64,23 +82,18 @@ def clear_pending_setups():
 
 @pytest.mark.asyncio
 async def test_start_returns_url(auth_app_client):
-    """Mock _start_pexpect_sync returning a URL; response contains url + expires_in."""
+    """Pool manager returns session_id + url; response contains url + expires_in."""
     client, mock_vault, app = auth_app_client
 
-    mock_child = MagicMock()
     expected_url = "https://console.anthropic.com/oauth/authorize?code=abc123"
+    mock_ctx = _mock_httpx_post(200, {"session_id": "sess-abc", "url": expected_url})
 
-    with patch(
-        "api.routes.integrations._start_pexpect_sync",
-        return_value=(mock_child, expected_url),
-    ):
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post("/api/integrations/anthropic/start")
 
     assert resp.status_code == 200
     data = resp.json()
     assert "url" in data
-    # Use startswith to validate exact scheme + netloc — substring 'in' check is
-    # insufficient (CodeQL: incomplete URL substring sanitization)
     assert data["url"].startswith("https://console.anthropic.com/"), (
         f"URL must start with exact scheme+netloc, got: {data['url']}"
     )
@@ -88,18 +101,17 @@ async def test_start_returns_url(auth_app_client):
 
 
 # ---------------------------------------------------------------------------
-# 2. POST /api/integrations/anthropic/start -- 502 when no URL found
+# 2. POST /api/integrations/anthropic/start -- 502 when pool manager fails
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_start_no_url_returns_502(auth_app_client):
-    """When _start_pexpect_sync finds no URL, endpoint returns 502."""
+    """When pool manager returns 503, endpoint returns 502."""
     client, mock_vault, app = auth_app_client
 
-    with patch(
-        "api.routes.integrations._start_pexpect_sync",
-        return_value=(None, None),
-    ):
+    mock_ctx = _mock_httpx_post(503, {"error": "setup_token_failed"})
+
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post("/api/integrations/anthropic/start")
 
     assert resp.status_code == 502
@@ -111,22 +123,20 @@ async def test_start_no_url_returns_502(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_success(auth_app_client):
-    """Stash a fake pending entry; complete receives token from _complete_pexpect_sync and persists it."""
+    """Pending session_id entry forwarded to pool; token returned and stored in vault."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
     fake_token = "sk-ant-oat01-FAKETOKEN_abc123"
-    mock_child = MagicMock()
 
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "child": mock_child,
+        "session_id": "sess-xyz",
         "started_at": time.time(),
     }
 
-    with patch(
-        "api.routes.integrations._complete_pexpect_sync",
-        return_value=("ok", fake_token),
-    ):
+    mock_ctx = _mock_httpx_post(200, {"result": "ok", "token": fake_token})
+
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "auth_code_123"},
@@ -142,21 +152,18 @@ async def test_complete_success(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_no_token_in_output_returns_error(auth_app_client):
-    """If _complete_pexpect_sync finds no token it returns 'failed'; endpoint surfaces an error."""
+    """Pool manager returns 'failed'; endpoint surfaces an error dict."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
-    mock_child = MagicMock()
-
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "child": mock_child,
+        "session_id": "sess-xyz",
         "started_at": time.time(),
     }
 
-    with patch(
-        "api.routes.integrations._complete_pexpect_sync",
-        return_value=("failed", ""),
-    ):
+    mock_ctx = _mock_httpx_post(200, {"result": "failed", "token": None})
+
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "auth_code_123"},
@@ -176,24 +183,16 @@ async def test_complete_success_does_not_log_token(auth_app_client, caplog):
     client, mock_vault, app = auth_app_client
 
     fake_token = "sk-ant-oat01-SECRET_TOKEN_value_xyz789"
-    mock_child = MagicMock()
-    mock_child.before = (
-        b"\x1b[2K\x1b[1Gpasted code\n"
-        b"OAuth token created!\n"
-        + fake_token.encode()
-        + b"\n"
-    )
 
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "child": mock_child,
+        "session_id": "sess-secret",
         "started_at": time.time(),
     }
 
+    mock_ctx = _mock_httpx_post(200, {"result": "ok", "token": fake_token})
+
     caplog.set_level(logging.DEBUG, logger="api.routes.integrations")
-    with patch(
-        "api.routes.integrations._complete_pexpect_sync",
-        return_value=("ok", fake_token),
-    ):
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "auth_code_123"},
@@ -226,21 +225,18 @@ async def test_complete_no_pending_returns_404(auth_app_client):
 
 @pytest.mark.asyncio
 async def test_complete_process_timeout_returns_504(auth_app_client):
-    """If _complete_pexpect_sync returns 'timeout', endpoint returns 504."""
+    """Pool manager returns 'timeout'; endpoint returns 504."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
-    mock_child = MagicMock()
-
     ant_routes._pending_setups[TEST_USER_ID] = {
-        "child": mock_child,
+        "session_id": "sess-timeout",
         "started_at": time.time(),
     }
 
-    with patch(
-        "api.routes.integrations._complete_pexpect_sync",
-        return_value=("timeout", ""),
-    ):
+    mock_ctx = _mock_httpx_post(200, {"result": "timeout", "token": None})
+
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "code"},
@@ -333,28 +329,24 @@ async def test_start_requires_auth():
 
 @pytest.mark.asyncio
 async def test_complete_broken_pipe_returns_502(auth_app_client):
-    """If _complete_pexpect_sync returns 'error' (e.g. sendline failed), return 502."""
+    """Pool manager returns 'error'; endpoint returns 502."""
     import api.routes.integrations as routes
     client, mock_vault, app = auth_app_client
 
-    mock_child = MagicMock()
-
     routes._pending_setups[TEST_USER_ID] = {
-        "child": mock_child,
+        "session_id": "sess-broken",
         "started_at": time.time(),
     }
 
-    with patch(
-        "api.routes.integrations._complete_pexpect_sync",
-        return_value=("error", ""),
-    ):
+    mock_ctx = _mock_httpx_post(200, {"result": "error", "token": None})
+
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post(
             "/api/integrations/anthropic/complete",
             json={"code": "code"},
         )
 
     assert resp.status_code == 502
-    # Entry should be cleaned up
     assert TEST_USER_ID not in routes._pending_setups
 
 
@@ -367,6 +359,7 @@ async def test_cfg_vault_key_roundtrip(monkeypatch):
     """A key from Fernet.generate_key().decode() round-trips through cfg → CredentialsVault."""
     from cryptography.fernet import Fernet
     from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
 
     raw_key = Fernet.generate_key()
     monkeypatch.setenv("TETHER_VAULT_KEY", raw_key.decode())
@@ -394,7 +387,6 @@ async def test_cfg_vault_key_roundtrip(monkeypatch):
 
     @asynccontextmanager
     async def fake_get_conn(pool, user_id=None):
-        from unittest.mock import AsyncMock
         yield AsyncMock()
 
     with patch("api.credentials_vault.store_credentials_blob", side_effect=fake_store), \
@@ -407,27 +399,25 @@ async def test_cfg_vault_key_roundtrip(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 10. /start pending entry must NOT contain temp_dir
+# 10. /start pending entry must contain session_id (not child or temp_dir)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_start_pending_entry_has_no_temp_dir(auth_app_client):
-    """After /start succeeds, the pending entry must not have a 'temp_dir' key.
-    claude setup-token writes only to stdout — no filesystem temp dir needed.
-    """
+async def test_start_pending_entry_has_session_id(auth_app_client):
+    """After /start succeeds, the pending entry must have session_id and no child/temp_dir."""
     import api.routes.integrations as ant_routes
     client, mock_vault, app = auth_app_client
 
-    mock_child = MagicMock()
     expected_url = "https://console.anthropic.com/oauth/authorize?code=abc"
+    mock_ctx = _mock_httpx_post(200, {"session_id": "sess-check", "url": expected_url})
 
-    with patch(
-        "api.routes.integrations._start_pexpect_sync",
-        return_value=(mock_child, expected_url),
-    ):
+    with patch("httpx.AsyncClient", return_value=mock_ctx):
         resp = await client.post("/api/integrations/anthropic/start")
 
     assert resp.status_code == 200
     entry = ant_routes._pending_setups.get(TEST_USER_ID)
     assert entry is not None
-    assert "temp_dir" not in entry, "pending entry must not contain temp_dir after OAuth migration"
+    assert "session_id" in entry
+    assert entry["session_id"] == "sess-check"
+    assert "child" not in entry, "pending entry must not contain pexpect child"
+    assert "temp_dir" not in entry, "pending entry must not contain temp_dir"

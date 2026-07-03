@@ -119,13 +119,220 @@ async def read_context(
     depth: int = 0,
     include_sections: bool = False,
     include_tasks: bool = False,
+    conversation_id: str = "",
+    M: int = 4,
+    N: int = 3,
+    source: str = "sections",
 ) -> list:
     """Read context nodes. No params=roots. depth: 0=node only, 1=children, -1=full subtree.
-    Section bodies in cat-n format (1-indexed line numbers with tabs)."""
+    Section bodies in cat-n format (1-indexed line numbers with tabs).
+
+    conversation_id: Current conversation UUID. REQUIRED (v2) — returns
+        {error: 'conversation_id_required'} if absent.
+    M: Detail level for node data summary (1=title, 2=one-liner, 3=themes, 4=full sections).
+    N: Scope envelope — max tree-edges from conversation's context node. Nodes outside
+        N edges return {error: 'out_of_scope', target: ...} instead of data.
+    source: 'sections' (user-authored, default) | 'memory' (bot-authored) | 'both'.
+    """
     from tether_mcp.tools.read_context import execute_read_context
     pool = await _get_pool()
     async with pg.get_conn(pool, get_user_id()) as conn:
-        return await execute_read_context(conn, paths, node_ids, depth, include_sections, include_tasks)
+        return await execute_read_context(
+            conn, paths, node_ids, depth, include_sections, include_tasks,
+            conversation_id=conversation_id or None,
+            M=M, N=N, source=source,
+        )
+
+
+@mcp.tool()
+async def read_memory(
+    scope: str = "user",
+    key: str = "",
+    prefix: str = "",
+    M: int = 2,
+) -> dict:
+    """Read user memory (L2 or L3) at a given detail level.
+
+    scope: 'user' (L2 working memory) | 'user_durable' (L3 compacted patterns).
+    key:    Exact key for a single-entry lookup (returns full value).
+    prefix: Filter by key prefix, e.g. 'preferences/'.
+    M:      1=keys only, 2=key+preview (default), 3=key+truncated, 4=full value.
+    """
+    from tether_mcp.tools.read_memory import execute_read_memory
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_read_memory(
+            conn,
+            scope=scope,
+            key=key or None,
+            prefix=prefix or None,
+            M=M,
+        )
+
+
+@mcp.tool()
+async def read_node_memory(
+    node_id: str,
+    title: str = "",
+    M: int = 4,
+    conversation_id: str = "",
+) -> dict:
+    """Read bot-authored notes (origin='conversation_agent') on a context node.
+
+    node_id:         UUID of the context node.
+    title:           Optional section name filter.
+    M:               1=names only, 2=preview, 3=truncated, 4=full (default).
+    conversation_id: Current conversation UUID (for read-credit logging).
+    """
+    from tether_mcp.tools.read_node_memory import execute_read_node_memory
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_read_node_memory(
+            conn,
+            node_id=node_id,
+            title=title or None,
+            M=M,
+            conversation_id=conversation_id or None,
+        )
+
+
+@mcp.tool()
+async def write_node_memory(
+    node_id: str,
+    title: str,
+    data_type: str,
+    value: str,
+    mode: str = "additive",
+    conversation_id: str = "",
+    visible_to_user: bool = True,
+) -> dict:
+    """Write bot-authored notes to a context node section.
+
+    node_id:         UUID of the context node to write to.
+    title:           Section name (key within the node).
+    data_type:       Content type hint: 'text' | 'list' | 'json' | 'file'.
+    value:           Content to write.
+    mode:            'additive' (append) | 'edit' (replace) | 'delete'.
+    conversation_id: Current conversation UUID. REQUIRED (v2) — returns
+                     {error: 'conversation_id_required'} if absent.
+    visible_to_user: False hides this section from user-facing reads.
+
+    Enforcement (v2): conversation_id is required and a prior read_node_memory
+    call for this node in the same conversation must exist in node_read_log.
+    Returns {error: 'read_before_write_required'} if the read has not occurred.
+    """
+    from tether_mcp.tools.write_node_memory import execute_write_node_memory
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_write_node_memory(
+            conn,
+            node_id=node_id,
+            title=title,
+            data_type=data_type,
+            value=value,
+            mode=mode,
+            conversation_id=conversation_id or None,
+            visible_to_user=visible_to_user,
+        )
+
+
+@mcp.tool()
+async def propose_user_memory_write(
+    key: str,
+    value: str,
+    reason: str,
+    conversation_id: str = "",
+) -> dict:
+    """Stage a user_memory write proposal for Beacon review.
+
+    key:             Memory key, e.g. 'preferences/morning_routine'.
+    value:           Value to write.
+    reason:          Why this write is proposed (used by Beacon evaluator to decide).
+    conversation_id: Current conversation UUID (linked to the proposal).
+
+    The write is NOT committed immediately. Beacon evaluates after the conversation
+    concludes and auto-accepts user-invoked proposals.
+    """
+    from tether_mcp.tools.propose_user_memory_write import execute_propose_user_memory_write
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_propose_user_memory_write(
+            conn,
+            key=key,
+            value=value,
+            reason=reason,
+            conversation_id=conversation_id or None,
+        )
+
+
+@mcp.tool()
+async def search_context(
+    query: str,
+    scope: str = "user",
+    paths: list[str] = [],
+    limit: int = 5,
+) -> dict:
+    """Full-text search over context node section bodies (tsvector, ranked).
+
+    query: Natural language search query (plainto_tsquery).
+    scope: 'user' — RLS-enforced, searches user's own nodes only.
+    paths: Optional node paths to restrict search to their subtrees.
+    limit: Max results (1-20).
+    """
+    from tether_mcp.tools.search_context import execute_search_context
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_search_context(
+            conn, query=query, scope=scope, paths=paths or None, limit=limit
+        )
+
+
+@mcp.tool()
+async def search_memory(
+    query: str,
+    scope: str = "user",
+    tier: str = "both",
+    limit: int = 5,
+) -> dict:
+    """Search user memory entries by key or value (ILIKE, relevance-ranked).
+
+    query: Search string matched against key (ILIKE) and value (ILIKE).
+    scope: 'user' (default, kept for API compatibility).
+    tier:  'l2' → user_memory; 'l3' → user_durable_memory; 'both' → merged.
+    limit: Max results (1-20).
+    """
+    from tether_mcp.tools.search_memory import execute_search_memory
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_search_memory(
+            conn, query=query, scope=scope, tier=tier, limit=limit
+        )
+
+
+@mcp.tool()
+async def grep_context(
+    pattern: str,
+    scope: str = "user",
+    paths: list[str] = [],
+    limit: int = 20,
+) -> dict:
+    """Text search (ILIKE) over node section bodies.
+
+    pattern: Search string. Plain text wraps in % automatically; use % for custom wildcards.
+    scope:   'user' (RLS-enforced user nodes only).
+    paths:   Optional node paths to restrict search to their subtrees.
+    limit:   Max results (default 20, max 100).
+    """
+    from tether_mcp.tools.grep_context import execute_grep_context
+    pool = await _get_pool()
+    async with pg.get_conn(pool, get_user_id()) as conn:
+        return await execute_grep_context(
+            conn,
+            pattern=pattern,
+            scope=scope,
+            paths=paths or None,
+            limit=limit,
+        )
 
 
 @mcp.tool()

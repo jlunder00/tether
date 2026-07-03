@@ -3,14 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-from unittest.mock import MagicMock
 
 import pytest
+
+pytestmark = pytest.mark.timeout(60)
 
 from interactive_agent_layer.permissions import (
     PermissionGate,
     PermissionResultAllow,
     PermissionResultDeny,
+    PermissionTimeoutError,
 )
 from interactive_agent_layer.session import Session
 from interactive_agent_layer.translation import TranslationTable
@@ -35,45 +37,6 @@ def table():
     return TranslationTable.from_yaml(yaml_path)
 
 
-def _make_blocking_ws():
-    """
-    Return a mock ws whose push() blocks until unblocked.
-
-    Attributes:
-        ws.push_event   — asyncio.Event; set when push() is called
-        ws.release_event — asyncio.Event; push() awaits this before returning
-        ws.calls        — list of (ws_id, event) tuples
-    """
-    push_event = asyncio.Event()
-    release_event = asyncio.Event()
-    calls = []
-
-    async def _push(ws_id, event):
-        calls.append((ws_id, event))
-        push_event.set()
-        await release_event.wait()
-
-    ws = MagicMock()
-    ws.push = _push
-    ws.push_event = push_event
-    ws.release_event = release_event
-    ws.calls = calls
-    return ws
-
-
-@pytest.fixture
-def mock_ws():
-    """Simple non-blocking mock ws for tests that don't need interception."""
-    ws = MagicMock()
-
-    async def _push(ws_id, event):
-        pass
-
-    ws.push = _push
-    ws.calls = []
-    return ws
-
-
 @pytest.fixture
 def session():
     return Session(
@@ -86,21 +49,21 @@ def session():
 
 
 @pytest.fixture
-def gate_auto_approve(table, mock_ws, session):
+def gate_auto_approve(table, session):
     return PermissionGate(
         translation_table=table,
-        ws_publisher=mock_ws,
         session=session,
+        outbound_events=asyncio.Queue(),
         auto_approve_user_actions=True,
     )
 
 
 @pytest.fixture
-def gate_no_auto(table, mock_ws, session):
+def gate_no_auto(table, session):
     return PermissionGate(
         translation_table=table,
-        ws_publisher=mock_ws,
         session=session,
+        outbound_events=asyncio.Queue(),
         auto_approve_user_actions=False,
     )
 
@@ -135,68 +98,58 @@ async def test_passthrough_entry_always_allow(gate_no_auto):
 
 
 # ---------------------------------------------------------------------------
-# 4. UserAction + auto_approve=True → allow, no permission_request pushed
+# 4. UserAction + auto_approve=True → allow, no permission_request enqueued
 # ---------------------------------------------------------------------------
 
 async def test_user_action_auto_approve_allows(table, session):
-    """auto_approve should allow without touching ws at all."""
-    pushed = []
-
-    async def _noop_push(ws_id, event):
-        pushed.append(event)
-
-    ws = MagicMock()
-    ws.push = _noop_push
-
+    """auto_approve should allow without enqueuing a permission_request."""
+    queue: asyncio.Queue = asyncio.Queue()
     gate = PermissionGate(
         translation_table=table,
-        ws_publisher=ws,
         session=session,
+        outbound_events=queue,
         auto_approve_user_actions=True,
     )
     result = await gate.can_use_tool("upsert_tasks", {"count": 3, "tasks": []}, None)
     assert isinstance(result, PermissionResultAllow)
-    assert pushed == []
+    assert queue.empty(), "auto_approve must not enqueue permission_request"
 
 
 # ---------------------------------------------------------------------------
-# Helper: run gate concurrently with a blocking ws so we can intercept
+# Helper: run gate and intercept permission_request via outbound queue
 # ---------------------------------------------------------------------------
 
-async def _run_with_blocking_ws(table, session, tool_name, args, resolve_value, *, timeout=None):
+async def _run_with_queue(
+    table, session, tool_name, args, resolve_value, *, timeout=5.0
+):
     """
-    Run can_use_tool with a blocking ws.
-    Once the gate has pushed the permission_request, resolve the pending future
-    with resolve_value (True/False) or leave it (None → rely on natural timeout).
-    Returns (result, calls) where calls is the list of push call tuples.
+    Run can_use_tool and intercept the permission_request from the outbound queue.
+
+    Once the gate has enqueued the permission_request event, resolve the pending
+    future with resolve_value (True/False), or leave it (None → rely on timeout).
+    Returns (result, event) where event is the permission_request dict.
     """
-    ws = _make_blocking_ws()
+    queue: asyncio.Queue = asyncio.Queue()
     gate = PermissionGate(
         translation_table=table,
-        ws_publisher=ws,
         session=session,
+        outbound_events=queue,
         auto_approve_user_actions=False,
     )
 
     task = asyncio.create_task(gate.can_use_tool(tool_name, args, None))
 
-    # Wait until the gate has called push (the event is set inside _push).
-    await ws.push_event.wait()
+    # Wait until the gate enqueues the permission_request event.
+    event = await asyncio.wait_for(queue.get(), timeout=timeout)
 
-    # At this point the gate is suspended inside _push, so permission_pending is populated.
     if resolve_value is not None:
-        # Resolve the future first, then unblock push so the gate can proceed.
-        pending_copy = dict(session.permission_pending)
-        if pending_copy:
-            request_id = next(iter(pending_copy))
-            fut = pending_copy[request_id]
+        request_id = event["request_id"]
+        fut = session.permission_pending.get(request_id)
+        if fut is not None and not fut.done():
             fut.set_result(resolve_value)
 
-    # Unblock the ws.push() so the gate continues.
-    ws.release_event.set()
-
     result = await task
-    return result, ws.calls
+    return result, event
 
 
 # ---------------------------------------------------------------------------
@@ -204,46 +157,43 @@ async def _run_with_blocking_ws(table, session, tool_name, args, resolve_value, 
 # ---------------------------------------------------------------------------
 
 async def test_user_action_no_auto_approve_and_user_approves(table, session):
-    result, calls = await _run_with_blocking_ws(
+    result, event = await _run_with_queue(
         table, session, "upsert_tasks", {"count": 3, "tasks": ["task-1"]},
         resolve_value=True,
     )
 
     assert isinstance(result, PermissionResultAllow)
-    assert len(calls) == 1
-    ws_id, event = calls[0]
-    assert ws_id == "ws-1"
     assert event["type"] == "permission_request"
     assert event["session_id"] == "sess-1"
     assert "request_id" in event
-    assert "summary" in event
-    assert "details" in event
+    assert "kind" in event
+    assert "target" in event
+    assert "reason_from_bot" in event
 
 
 # ---------------------------------------------------------------------------
 # 6. UserAction + auto_approve=False → timeout → deny
 # ---------------------------------------------------------------------------
 
-async def test_user_action_timeout_denies(table, session, monkeypatch):
+async def test_user_action_timeout_raises_permission_timeout_error(table, session, monkeypatch):
     monkeypatch.setattr(
         "interactive_agent_layer.permissions.get_permission_timeout",
         lambda: 0.01,
     )
 
-    async def _noop_push(ws_id, event):
-        pass
-
-    ws = MagicMock()
-    ws.push = _noop_push
-
+    queue: asyncio.Queue = asyncio.Queue()
     gate = PermissionGate(
         translation_table=table,
-        ws_publisher=ws,
         session=session,
+        outbound_events=queue,
         auto_approve_user_actions=False,
     )
-    result = await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
-    assert isinstance(result, PermissionResultDeny)
+    # Don't resolve the future — let it time out naturally.
+    with pytest.raises(PermissionTimeoutError) as exc_info:
+        await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    # The exception carries the request_id so session.py can include it in the
+    # session_timeout event.
+    assert exc_info.value.request_id is not None
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +201,7 @@ async def test_user_action_timeout_denies(table, session, monkeypatch):
 # ---------------------------------------------------------------------------
 
 async def test_user_action_denied_by_user(table, session):
-    result, _ = await _run_with_blocking_ws(
+    result, _ = await _run_with_queue(
         table, session, "upsert_tasks", {"count": 1, "tasks": []},
         resolve_value=False,
     )
@@ -259,16 +209,15 @@ async def test_user_action_denied_by_user(table, session):
 
 
 # ---------------------------------------------------------------------------
-# 8. permission_summary interpolation
+# 8. target interpolation (was: permission_summary interpolation)
 # ---------------------------------------------------------------------------
 
-async def test_permission_summary_interpolation(table, session):
-    _, calls = await _run_with_blocking_ws(
+async def test_permission_target_interpolation(table, session):
+    _, event = await _run_with_queue(
         table, session, "upsert_tasks", {"count": 3, "tasks": []},
         resolve_value=True,
     )
-    _, event = calls[0]
-    assert event["summary"] == "Update 3 tasks"
+    assert event["target"] == "Update 3 tasks"
 
 
 # ---------------------------------------------------------------------------
@@ -276,7 +225,7 @@ async def test_permission_summary_interpolation(table, session):
 # ---------------------------------------------------------------------------
 
 async def test_permission_pending_cleaned_up_after_approval(table, session):
-    await _run_with_blocking_ws(
+    await _run_with_queue(
         table, session, "upsert_tasks", {"count": 1, "tasks": []},
         resolve_value=True,
     )
@@ -284,7 +233,7 @@ async def test_permission_pending_cleaned_up_after_approval(table, session):
 
 
 async def test_permission_pending_cleaned_up_after_denial(table, session):
-    await _run_with_blocking_ws(
+    await _run_with_queue(
         table, session, "upsert_tasks", {"count": 1, "tasks": []},
         resolve_value=False,
     )
@@ -297,17 +246,52 @@ async def test_permission_pending_cleaned_up_after_timeout(table, session, monke
         lambda: 0.01,
     )
 
-    async def _noop_push(ws_id, event):
-        pass
-
-    ws = MagicMock()
-    ws.push = _noop_push
-
+    queue: asyncio.Queue = asyncio.Queue()
     gate = PermissionGate(
         translation_table=table,
-        ws_publisher=ws,
         session=session,
+        outbound_events=queue,
         auto_approve_user_actions=False,
     )
-    await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    with pytest.raises(PermissionTimeoutError):
+        await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    # pending must be cleaned up even when PermissionTimeoutError is raised
     assert session.permission_pending == {}
+
+
+# ---------------------------------------------------------------------------
+# 10. PermissionTimeoutError carries correct request_id
+# ---------------------------------------------------------------------------
+
+async def test_permission_timeout_error_request_id_matches_event(table, session, monkeypatch):
+    """PermissionTimeoutError.request_id matches the request_id emitted in the event."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table,
+        session=session,
+        outbound_events=queue,
+        auto_approve_user_actions=False,
+    )
+
+    raised_request_id: str | None = None
+
+    async def _run():
+        nonlocal raised_request_id
+        try:
+            await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+        except PermissionTimeoutError as exc:
+            raised_request_id = exc.request_id
+            raise
+
+    # Capture the emitted event and let the timeout fire
+    event_task = asyncio.create_task(queue.get())
+    with pytest.raises(PermissionTimeoutError):
+        await _run()
+
+    emitted_event = await asyncio.wait_for(event_task, timeout=1.0)
+    assert raised_request_id == emitted_event["request_id"]

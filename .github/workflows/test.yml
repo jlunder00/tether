@@ -70,6 +70,7 @@ jobs:
                  tests/db/test_pg_sections.py \
                  tests/db/test_pg_auth_queries.py \
                  tests/db/test_pg_integrations.py \
+                 tests/db/test_memory_context_schema.py \
                  tests/api/ \
                  -v
 

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import type { ChatMessage } from '../types/chat'
+import type { ChatMessage, SystemMessagePriority } from '../types/chat'
 
 const props = defineProps<{ msg: ChatMessage }>()
 
@@ -11,12 +11,40 @@ const renderedHtml = computed(() => {
   const raw = marked.parse(props.msg.content) as string
   return DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
 })
+
+// Effective priority — only meaningful on system messages; absent = 'normal'.
+const systemPriority = computed<SystemMessagePriority>(() =>
+  props.msg.role === 'system' ? (props.msg.priority ?? 'normal') : 'normal'
+)
+
+// Icon prefix gives color-independent scanability (a11y requirement).
+const PRIORITY_ICON: Record<SystemMessagePriority, string> = {
+  normal: '',
+  important: '⏰',
+  urgent: '🚨',
+}
+const priorityIcon = computed(() => PRIORITY_ICON[systemPriority.value])
 </script>
 
 <template>
-  <!-- System message: centered, no bubble -->
+  <!-- System message — plain for normal; tinted box with icon for important/urgent -->
   <div v-if="msg.role === 'system'" class="flex justify-center text-center py-1">
-    <span class="text-xs italic text-[--fg-4]">{{ msg.content }}</span>
+    <!-- Normal: plain centered italic, no visual weight -->
+    <span v-if="systemPriority === 'normal'" class="text-xs italic text-[--fg-4]">
+      {{ msg.content }}
+    </span>
+    <!-- Important / Urgent: tinted rounded box with icon prefix -->
+    <span
+      v-else
+      :data-priority="systemPriority"
+      class="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-lg"
+      :class="systemPriority === 'urgent' ? 'system-bubble-urgent' : 'system-bubble-important'"
+    >
+      <!-- sr-only prefix conveys priority to screen readers without visual duplication -->
+      <span class="sr-only">{{ systemPriority === 'urgent' ? 'Urgent:' : 'Important:' }} </span>
+      <span aria-hidden="true">{{ priorityIcon }}</span>
+      {{ msg.content }}
+    </span>
   </div>
 
   <!-- User message: right-aligned bubble, plain text -->
@@ -39,6 +67,20 @@ const renderedHtml = computed(() => {
 </template>
 
 <style scoped>
+/* Priority tints for Beacon-driven system messages.
+   Uses semantic status tokens defined in themes.css — works across all themes. */
+.system-bubble-important {
+  background-color: var(--status-important-bg);
+  color: var(--status-important-fg);
+  border: 1px solid var(--status-important);
+}
+
+.system-bubble-urgent {
+  background-color: var(--status-urgent-bg);
+  color: var(--status-urgent-fg);
+  border: 1px solid var(--status-urgent);
+}
+
 /* Tailwind's `prose` hard-codes color via --tw-prose-* variables. Re-point
    them at theme tokens so bot replies stay readable in every theme/mode. */
 .bot-bubble {

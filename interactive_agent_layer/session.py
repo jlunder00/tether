@@ -1,9 +1,12 @@
 """Session dataclass and Layer class."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import dataclasses
 import hashlib
 import json
+import logging
 import time
 import uuid
 from collections.abc import Callable
@@ -11,8 +14,14 @@ from typing import AsyncIterator, Any
 
 from interactive_agent_layer.coalescing import CoalescingBuffer
 from interactive_agent_layer.config import get_auto_approve_user_actions
-from interactive_agent_layer.permissions import PermissionGate
-from interactive_agent_layer.pool_client import PoolClient
+from interactive_agent_layer.permissions import (
+    CheckGrantFn,
+    InsertGrantFn,
+    PermissionGate,
+    PermissionResultAllow,
+    PermissionTimeoutError,
+)
+from interactive_agent_layer.pool_client import PoolClient, PoolClientError
 from interactive_agent_layer.translation import (
     BackgroundEntry,
     BackgroundHiddenEntry,
@@ -21,6 +30,8 @@ from interactive_agent_layer.translation import (
     UserActionEntry,
 )
 from interactive_agent_layer.ws_publisher import WSPublisher
+
+log = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
@@ -35,6 +46,11 @@ class Session:
     created_at: float = dataclasses.field(default_factory=time.time)
     permission_pending: dict = dataclasses.field(default_factory=dict)
     coalescing_buffer: CoalescingBuffer = dataclasses.field(default_factory=CoalescingBuffer)
+    # Optional: linked conversation for per-conversation permission grants.
+    conversation_id: str | None = None
+    # Tracks the last emitted agent_action so we can synthesize a 'complete'
+    # status when the next distinct tool_use or turn_complete arrives.
+    last_emitted_action: dict | None = None
 
 
 def _stable_options_hash(options: dict) -> str:
@@ -59,6 +75,8 @@ class Layer:
         is_paid_fn: Callable[..., Any] | None = None,
         provider_fn: Callable[[str], str] | None = None,
         leaky_providers: list[str] | None = None,
+        check_grant_fn: CheckGrantFn | None = None,
+        insert_grant_fn: InsertGrantFn | None = None,
     ) -> None:
         self.sessions: dict[str, Session] = {}
         self.pool_client = pool_client
@@ -69,6 +87,11 @@ class Layer:
         self.is_paid_fn = is_paid_fn
         self.provider_fn = provider_fn
         self.leaky_providers = leaky_providers
+        # Per-conversation permission grant functions — injected by premium at
+        # startup. When present, PermissionGate checks existing grants before
+        # prompting the user and persists new grants after approval.
+        self.check_grant_fn = check_grant_fn
+        self.insert_grant_fn = insert_grant_fn
 
     def create_session(
         self,
@@ -76,6 +99,8 @@ class Layer:
         user_ws_id: str,
         agent_version: str,
         options: dict,
+        *,
+        conversation_id: str | None = None,
     ) -> Session:
         session_id = str(uuid.uuid4())
         session = Session(
@@ -84,6 +109,7 @@ class Layer:
             user_ws_id=user_ws_id,
             agent_version=agent_version,
             options=options,
+            conversation_id=conversation_id,
         )
         self.sessions[session_id] = session
         return session
@@ -98,20 +124,24 @@ class Layer:
         session = self.sessions[session_id]  # raises KeyError if missing
         options_hash = _stable_options_hash(session.options)
 
-        # TODO(pool-permissions): PermissionGate is constructed here but its
-        # can_use_tool callback cannot be passed to query_stream — the real
-        # PoolClient uses SSE (one-way server push) and has no mechanism to
-        # intercept tool execution before it happens. The gate's auto-approve
-        # path still functions correctly for event translation; the user_action
-        # deny path is dormant until the pool protocol gains a control-message
-        # channel. Tracked as a follow-up: pool control-protocol extension.
+        # PermissionGate routes pool control_request SSE events through policy:
+        # background/passthrough → auto-allow; user_action → prompt user or
+        # auto-approve based on config.  Decisions are forwarded back to the
+        # pool via send_control_response, which unblocks the pool's can_use_tool
+        # callback and lets the SDK proceed or skip the tool call.
+        #
+        # permission_request events are enqueued here and yielded on the SSE
+        # stream so they cross the process boundary to the dispatch / API layer.
+        # WSPublisher (in-process only) is not used for permission_request.
+        gate_events: asyncio.Queue[dict] = asyncio.Queue()
         gate = PermissionGate(
             translation_table=self.translation_table,
-            ws_publisher=self.ws_publisher,
             session=session,
+            outbound_events=gate_events,
             auto_approve_user_actions=get_auto_approve_user_actions(),
+            check_grant_fn=self.check_grant_fn,
+            insert_grant_fn=self.insert_grant_fn,
         )
-        _ = gate  # gate built for future wiring; currently dormant (see TODO above)
 
         handle = await self.pool_client.acquire(
             session.user_id, options_hash, session.options
@@ -121,6 +151,40 @@ class Layer:
             async for sdk_event in self.pool_client.query_stream(
                 handle, prompt, session_id=session_id
             ):
+                # Pool blocks its can_use_tool callback until we respond —
+                # process control events inline before translating other events.
+                if sdk_event.get("event") == "control_request":
+                    ctrl_task = asyncio.create_task(
+                        _handle_control_request(sdk_event, handle, gate, self.pool_client)
+                    )
+                    # Drain gate_events while the permission decision is pending.
+                    # For background/passthrough tools ctrl_task completes immediately
+                    # and the drain loop exits without yielding anything.
+                    # For user_action tools a permission_request event is put into
+                    # gate_events; we yield it on the SSE stream so dispatch's
+                    # event_fn can forward it to the user's WebSocket.
+                    async for gate_event in _drain_until_done(gate_events, ctrl_task):
+                        yield gate_event
+                    try:
+                        await ctrl_task  # propagate any exception
+                    except PermissionTimeoutError as exc:
+                        # User did not respond within the timeout — emit a
+                        # session_timeout event and end the turn cleanly.
+                        timeout_event = {
+                            "type": "session_timeout",
+                            "session_id": session_id,
+                            "reason": "permission_timeout",
+                            "request_id": exc.request_id,
+                        }
+                        await self.ws_publisher.push(session.user_ws_id, timeout_event)
+                        yield timeout_event
+                        return
+                    continue
+
+                if sdk_event.get("event") == "control_timeout":
+                    # Pool already denied the tool call; nothing to do.
+                    continue
+
                 async for layer_event in _translate_event(
                     session_id, sdk_event, self.translation_table, session
                 ):
@@ -140,16 +204,117 @@ class Layer:
             await self.pool_client.interrupt(handle)
 
 
+async def _handle_control_request(
+    event: dict,
+    handle_id: str,
+    gate: PermissionGate,
+    pool_client: PoolClient,
+) -> None:
+    """Route a pool control_request through PermissionGate and send the decision back.
+
+    If the pool already timed out and resolved the request before we respond,
+    send_control_response returns 404 — we swallow that specific error so the
+    turn can complete normally.
+    """
+    tool_name = event.get("tool_name", "")
+    tool_input = event.get("tool_input", {})
+    request_id = event.get("request_id", "")
+    subtype = event.get("subtype", "can_use_tool")
+
+    try:
+        result = await gate.can_use_tool(tool_name, tool_input, None)
+    except PermissionTimeoutError:
+        # User did not respond in time — tell the pool to deny, then propagate
+        # so run_turn can emit a session_timeout event and end the turn.
+        try:
+            await pool_client.send_control_response(
+                handle_id,
+                request_id=request_id,
+                subtype=subtype,
+                decision="deny",
+                denial_message="permission_timeout",
+            )
+        except PoolClientError as exc:
+            log.debug(
+                "send_control_response ignored on timeout (pool already resolved): %s request_id=%s",
+                exc,
+                request_id,
+            )
+        raise
+
+    decision = "allow" if isinstance(result, PermissionResultAllow) else "deny"
+    denial_message = getattr(result, "reason", None) if decision == "deny" else None
+
+    try:
+        await pool_client.send_control_response(
+            handle_id,
+            request_id=request_id,
+            subtype=subtype,
+            decision=decision,
+            denial_message=denial_message,
+        )
+    except PoolClientError as exc:
+        # 404 means pool already timed out and denied this request — safe to ignore.
+        log.debug(
+            "send_control_response ignored (pool already resolved): %s request_id=%s",
+            exc,
+            request_id,
+        )
+
+
+async def _drain_until_done(
+    queue: asyncio.Queue,
+    task: asyncio.Task,
+) -> AsyncIterator[dict]:
+    """Yield items from queue until task is done.
+
+    Uses asyncio.wait to race a queue.get() against the task completing so
+    we exit promptly without polling.  The get_task is cancelled on exit to
+    avoid leaving orphaned tasks.
+    """
+    while not task.done():
+        get_task: asyncio.Task = asyncio.ensure_future(queue.get())
+        try:
+            done, _ = await asyncio.wait(
+                [get_task, task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            get_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await get_task
+            raise
+        if get_task in done:
+            yield get_task.result()
+        else:
+            # task completed before a queue item arrived — clean up and exit
+            get_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await get_task
+
+
 async def _translate_event(
     session_id: str,
     sdk_event: dict,
     table: TranslationTable,
     session: Session,
 ) -> AsyncIterator[dict]:
-    """Translate a raw SDK event to one or more layer events."""
+    """Translate a raw SDK event to one or more layer events.
+
+    agent_action lifecycle (heuristic — no tool_result in pool stream):
+      - First tool_use for a (tool_name, phrase) key  → status='starting'
+      - Repeat within coalescing window              → status='running', same id
+      - New tool_use with a different id arrives     → emit 'complete' for the
+                                                       previous, then 'starting'
+      - turn_complete (result event) arrives         → emit 'complete' for any
+                                                       in-flight action, then
+                                                       emit turn_complete
+    """
     # Pool uses {"event": "cancelled"} (SSE event-field convention) when the
     # subprocess is interrupted — check this key first before the type dispatch.
     if sdk_event.get("event") == "cancelled":
+        # Clear any in-flight action without emitting complete on interrupt.
+        session.last_emitted_action = None
         yield {"type": "interrupted", "session_id": session_id}
         return
 
@@ -164,6 +329,10 @@ async def _translate_event(
         return
 
     if event_type == "result":
+        # Synthesize 'complete' for any action still in flight.
+        if session.last_emitted_action:
+            yield {**session.last_emitted_action, "status": "complete"}
+            session.last_emitted_action = None
         yield {
             "type": "turn_complete",
             "session_id": session_id,
@@ -178,31 +347,52 @@ async def _translate_event(
         entry = table.lookup(tool_name)
 
         if isinstance(entry, PassthroughEntry):
+            # Passthrough tools (e.g. send_status_update) emit a status event
+            # with phase='tool_call' so the frontend can show inline progress.
             yield {
                 "type": "status",
                 "session_id": session_id,
-                "message": args.get("text", ""),
+                "phase": "tool_call",
+                "text": args.get("text", ""),
             }
             return
 
         phrase = table.interpolate_phrase(entry, args)
         action_id, coalesced = session.coalescing_buffer.record(tool_name, phrase)
-        yield {
+
+        # If a DIFFERENT action is in flight, mark it complete before this one starts.
+        if session.last_emitted_action and session.last_emitted_action["id"] != action_id:
+            yield {**session.last_emitted_action, "status": "complete"}
+
+        status = "running" if coalesced else "starting"
+        event: dict = {
             "type": "agent_action",
             "session_id": session_id,
-            "action_id": action_id,
-            "action": phrase,
-            "coalesced": coalesced,
+            "id": action_id,
+            "tool_name": tool_name,
+            "friendly_text": phrase,
+            "status": status,
         }
+        session.last_emitted_action = event
+        yield event
         return
 
     if event_type == "status":
+        # Forwarded from bot pipeline phase signals (bot.py / register.py calls
+        # status_fn at classifier, main_reasoning, summarization transitions).
+        # The caller is responsible for supplying 'phase'; default to 'main_reasoning'.
         yield {
             "type": "status",
             "session_id": session_id,
-            "message": sdk_event.get("message", ""),
+            "phase": sdk_event.get("phase", "main_reasoning"),
+            "text": sdk_event.get("text", sdk_event.get("message", "")),
         }
         return
 
-    # Unknown event — forward as status for visibility
-    yield {"type": "status", "session_id": session_id, "message": str(sdk_event)}
+    # Unknown event — forward as status for visibility (phase unknown → main_reasoning)
+    yield {
+        "type": "status",
+        "session_id": session_id,
+        "phase": "main_reasoning",
+        "text": str(sdk_event),
+    }

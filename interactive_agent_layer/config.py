@@ -13,7 +13,7 @@ def is_enabled() -> bool:
 
 
 def get_permission_timeout() -> int:
-    return int(config.get("agent_layer.permission_timeout_seconds", 60))
+    return int(config.get("agent_layer.permission_timeout_seconds", 900))
 
 
 def get_auto_approve_user_actions() -> bool:

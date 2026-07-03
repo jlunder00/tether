@@ -1,13 +1,17 @@
 """FastAPI app for the interactive agent layer service."""
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from interactive_agent_layer.session import Layer, Session
+from interactive_agent_layer.session import Layer, Session, _stable_options_hash
+
+log = logging.getLogger(__name__)
 
 
 class SessionStartRequest(BaseModel):
@@ -67,9 +71,12 @@ def create_app(layer: Layer) -> FastAPI:
                 content={"error": "trial_exhausted", "upgrade_url": "/upgrade"},
             )
         # Publish live remaining count to the frontend picker.
+        # Pass user_id so the Redis channel is keyed on the stable JWT claim,
+        # not the per-connection user_ws_id.
         await layer.ws_publisher.push(
             body.user_ws_id,
             {"type": "trial_usage_update", "remaining": remaining},
+            user_id=body.user_id,
         )
         return None
 
@@ -86,6 +93,23 @@ def create_app(layer: Layer) -> FastAPI:
             agent_version=body.agent_version,
             options=body.options,
         )
+
+        # Belt-and-suspenders pool hint: fire-and-forget so the pool has a
+        # warm subprocess ready before the first turn starts.  Failures are
+        # logged but never block the session response.
+        async def _fire_hint() -> None:
+            try:
+                options_hash = _stable_options_hash(body.options)
+                await layer.pool_client.hint(body.user_id, options_hash, body.options)
+            except Exception as exc:
+                log.debug(
+                    "session_start: pool hint failed user_id=%s: %s",
+                    body.user_id,
+                    exc,
+                )
+
+        asyncio.create_task(_fire_hint())
+
         return {"session_id": session.session_id}
 
     @app.post("/session/{session_id}/turn")
@@ -93,8 +117,23 @@ def create_app(layer: Layer) -> FastAPI:
         require_session(session_id)
 
         async def event_generator():
-            async for event in layer.run_turn(session_id, body.prompt):
-                yield f"data: {json.dumps(event)}\n\n"
+            try:
+                async for event in layer.run_turn(session_id, body.prompt):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except Exception as exc:
+                # HTTP headers are already committed — we can't change the status
+                # code. Emit a turn_error event so the client gets a parseable
+                # in-band signal instead of an abrupt connection close.
+                import logging as _log
+                _log.getLogger(__name__).exception(
+                    "run_turn failed for session %s: %s", session_id, exc
+                )
+                error_event = {
+                    "type": "turn_error",
+                    "session_id": session_id,
+                    "message": str(exc),
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
 
         return StreamingResponse(
             event_generator(),

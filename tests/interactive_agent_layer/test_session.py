@@ -187,7 +187,7 @@ async def test_tool_use_emits_agent_action(layer):
     agent_actions = [e for e in events if e["type"] == "agent_action"]
     assert len(agent_actions) >= 1
     # get_anchors maps to "Reading your schedule"
-    actions_text = [e["action"] for e in agent_actions]
+    actions_text = [e["friendly_text"] for e in agent_actions]
     assert "Reading your schedule" in actions_text
 
 
@@ -199,12 +199,12 @@ async def test_passthrough_emits_status(layer):
         events.append(event)
 
     status_events = [e for e in events if e["type"] == "status"]
-    messages = [e["message"] for e in status_events]
-    assert "Still working" in messages
+    texts = [e["text"] for e in status_events]
+    assert "Still working" in texts
 
 
 async def test_coalescing_same_tool_deduplicates(layer):
-    """Two calls to same background tool within window → same action_id, second coalesced."""
+    """Two calls to same background tool within window → same id, second status='running'."""
     s = layer.create_session("user1", "wsid1", "v1", {})
     events = []
     async for event in layer.run_turn(s.session_id, "first turn"):
@@ -212,14 +212,23 @@ async def test_coalescing_same_tool_deduplicates(layer):
     async for event in layer.run_turn(s.session_id, "second turn"):
         events.append(event)
 
-    # get_anchors appears in both turns — second should be coalesced
-    get_anchors_events = [
+    # get_anchors appears in both turns — the starting events share the same id
+    # within the coalescing window; the second call emits status='running'.
+    get_anchors_starting = [
         e for e in events
-        if e["type"] == "agent_action" and e.get("action") == "Reading your schedule"
+        if e["type"] == "agent_action"
+        and e.get("friendly_text") == "Reading your schedule"
+        and e.get("status") == "starting"
     ]
-    assert len(get_anchors_events) == 2
-    assert get_anchors_events[0]["action_id"] == get_anchors_events[1]["action_id"]
-    assert get_anchors_events[1]["coalesced"] is True
+    get_anchors_running = [
+        e for e in events
+        if e["type"] == "agent_action"
+        and e.get("friendly_text") == "Reading your schedule"
+        and e.get("status") == "running"
+    ]
+    assert len(get_anchors_starting) >= 1
+    assert len(get_anchors_running) >= 1
+    assert get_anchors_starting[0]["id"] == get_anchors_running[0]["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +321,104 @@ async def test_interrupt_noop_when_no_active_turn():
     # No active handles
     await layer.interrupt(s.session_id)
     assert pool.interrupted_handles == []
+
+
+# ---------------------------------------------------------------------------
+# session_timeout event on permission timeout
+# ---------------------------------------------------------------------------
+
+class _PermissionRequestPool:
+    """Pool that emits a control_request event so the gate can time out."""
+
+    def __init__(self):
+        self.denied_request_id: str | None = None
+        self.deny_decision_sent: bool = False
+
+    async def acquire(self, user_id, options_hash, options, timeout_seconds=None):
+        return f"handle-{user_id}"
+
+    async def query_stream(self, handle_id, prompt, session_id="default"):
+        yield {
+            "event": "control_request",
+            "subtype": "can_use_tool",
+            "tool_name": "upsert_tasks",
+            "tool_input": {"count": 1, "tasks": []},
+            "request_id": "req-timeout-001",
+        }
+        # After control_request is handled (or timed out), yield turn result.
+        yield {"type": "result", "final_text": "done", "tokens_used": 1}
+
+    async def send_control_response(
+        self, handle_id, *, request_id, subtype, decision, denial_message=None
+    ):
+        self.denied_request_id = request_id
+        self.deny_decision_sent = decision == "deny"
+
+    async def release(self, handle_id, *, reusable=False):
+        pass
+
+    async def interrupt(self, handle_id):
+        pass
+
+
+async def test_session_timeout_event_emitted_on_permission_timeout(monkeypatch):
+    """When the gate times out, run_turn yields a session_timeout event and ends cleanly."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+    monkeypatch.setattr(
+        "interactive_agent_layer.session.get_auto_approve_user_actions",
+        lambda: False,
+    )
+
+    pool = _PermissionRequestPool()
+    layer = _make_layer(pool)
+    s = layer.create_session("user1", "wsid1", "v1", {})
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    types = [e["type"] for e in events]
+    assert "session_timeout" in types, f"Expected session_timeout in {types}"
+
+    timeout_events = [e for e in events if e["type"] == "session_timeout"]
+    assert len(timeout_events) == 1
+    te = timeout_events[0]
+    assert te["session_id"] == s.session_id
+    assert te["reason"] == "permission_timeout"
+
+    # request_id in session_timeout matches the permission_request sent to the user
+    # (the gate's UUID), so the frontend can clear the pending permission modal.
+    perm_requests = [e for e in events if e["type"] == "permission_request"]
+    assert len(perm_requests) == 1
+    assert te["request_id"] == perm_requests[0]["request_id"]
+
+    # session_timeout should be the last event (generator ends after it)
+    assert events[-1]["type"] == "session_timeout"
+
+
+async def test_session_timeout_sends_deny_to_pool(monkeypatch):
+    """On permission timeout, the pool receives a deny decision before the session ends."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+    monkeypatch.setattr(
+        "interactive_agent_layer.session.get_auto_approve_user_actions",
+        lambda: False,
+    )
+
+    pool = _PermissionRequestPool()
+    layer = _make_layer(pool)
+    s = layer.create_session("user1", "wsid1", "v1", {})
+
+    async for _ in layer.run_turn(s.session_id, "hi"):
+        pass
+
+    assert pool.deny_decision_sent, "Pool must receive deny decision on timeout"
+    assert pool.denied_request_id == "req-timeout-001"
 
 
 async def test_interrupt_unknown_session_noop():
