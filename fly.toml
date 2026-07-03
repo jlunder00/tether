@@ -15,9 +15,12 @@ primary_region = "sjc"
   force_https = true
   auto_stop_machines = "suspend"
   auto_start_machines = true
-  # bot long-polling requires a persistent connection — set to 0 once
-  # Telegram webhook mode ships (Phase 3b)
-  min_machines_running = 1
+  # Telegram webhook mode (Phase 3b) lets the machine itself sleep — the bot
+  # no longer needs a persistent long-polling connection when
+  # TELEGRAM_WEBHOOK_URL is set (see supervisord.conf [program:bot]).
+  # DO NOT MERGE this change until staging cold-start has been verified —
+  # see cc-context-store/tether/docs/infra/webhook-staging-verification.md
+  min_machines_running = 0
 
 [env]
   PYTHON_ENV = "production"
