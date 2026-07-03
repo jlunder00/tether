@@ -39,11 +39,14 @@ async def _build_node_response(
     current_node_id: str | None = None,
     N: int = 3,
     conversation_id: str | None = None,
+    _cascade_depth: int = 0,
 ) -> dict:
     """Build the response dict for a single node, optionally with children/sections/tasks.
 
     When current_node_id is set, each child is scope-checked against N edges.
     Out-of-scope children are represented as {error: 'out_of_scope', target: id}.
+    _cascade_depth tracks levels descended from the read_context source node;
+    when it reaches N, _add_children will not recurse further.
     """
     from db.pg_queries import get_node, get_children, get_sections, get_node_tasks
     from db.pg_queries.node_memory import get_node_summary, log_node_read, get_node_tree_distance
@@ -76,6 +79,7 @@ async def _build_node_response(
                         conn, result, node, depth, include_sections, include_tasks,
                         M, source, current_node_id=current_node_id, N=N,
                         conversation_id=conversation_id,
+                        _cascade_depth=_cascade_depth,
                     )
                 return result
 
@@ -114,6 +118,7 @@ async def _build_node_response(
             conn, result, node, depth, include_sections, include_tasks,
             M, source, current_node_id=current_node_id, N=N,
             conversation_id=conversation_id,
+            _cascade_depth=_cascade_depth,
         )
 
     return result
@@ -132,10 +137,19 @@ async def _add_children(
     current_node_id: str | None,
     N: int,
     conversation_id: str | None,
+    _cascade_depth: int = 0,
 ) -> None:
-    """Fetch children and add them to result['children'], applying per-child scope check."""
+    """Fetch children and add them to result['children'], applying per-child scope check.
+
+    Enforces M-level cascade depth gating: when N > 0 and _cascade_depth >= N,
+    children are not fetched (the current node is at the scope boundary).
+    """
     from db.pg_queries import get_children
     from db.pg_queries.node_memory import get_node_tree_distance, log_node_read
+
+    # M-level cascade gating: stop descending when we've reached N levels from source
+    if N > 0 and _cascade_depth >= N:
+        return
 
     children = await get_children(conn, node["id"])
     next_depth = depth - 1 if depth > 0 else -1
@@ -173,6 +187,7 @@ async def _add_children(
             await _build_node_response(
                 conn, child, next_depth, include_sections, include_tasks, M, source,
                 current_node_id=current_node_id, N=N, conversation_id=conversation_id,
+                _cascade_depth=_cascade_depth + 1,
             )
         )
 
