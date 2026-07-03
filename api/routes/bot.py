@@ -239,6 +239,12 @@ async def bot_chat(websocket: WebSocket,
             agent_version = data.get("agent_version") or "tether-agent-2.0"
             logger.info("bot_chat: agent_version=%s user_id=%s", agent_version, user_id)
 
+            # Optional: links the 2.0 layer session to a conversation so scope
+            # gating can resolve scope_source_node_id from the conversation's
+            # context_node_id. None when the frontend doesn't send one (e.g.
+            # no conversation selected) — fully backwards-compatible.
+            conversation_id = data.get("conversation_id")
+
             # Async status callback: called by the premium session's
             # send_status_update tool to push real-time progress frames.
             # If the WebSocket has gone away, log and re-raise so the session
@@ -306,6 +312,7 @@ async def bot_chat(websocket: WebSocket,
                     status_fn=status_fn,
                     event_fn=event_fn,
                     is_admin=websocket.state.is_admin,
+                    conversation_id=conversation_id,
                 )
             )
 

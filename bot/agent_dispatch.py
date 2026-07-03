@@ -106,6 +106,7 @@ async def _dispatch_v2_0(
     vault: Any = None,
     status_fn: Any = None,
     event_fn: Any = None,
+    conversation_id: str | None = None,
 ) -> None:
     """Run the tether-agent-2.0 pipeline via the interactive-agent-layer.
 
@@ -167,6 +168,7 @@ async def _dispatch_v2_0(
             agent_version="tether-agent-2.0",
             options=options,
             user_message=text,
+            conversation_id=conversation_id,
         )
 
         async for event in layer.turn(session_id, text):
@@ -424,6 +426,7 @@ async def dispatch_message(
     status_fn: Any = None,
     event_fn: Any = None,
     is_admin: bool = False,
+    conversation_id: str | None = None,
 ) -> None:
     """Dispatch a user message to the correct pipeline based on agent_version.
 
@@ -445,6 +448,9 @@ async def dispatch_message(
             permission requests, etc.) forwarded directly to the WS client.
         is_admin: When True, bypass subscription check for 2.5 dispatch (admin users
                   have no subscription row but must reach the premium handler).
+        conversation_id: Optional conversation this message belongs to. Forwarded
+            to the 2.0 layer session so scope gating can resolve the conversation's
+            context_node_id as scope_source_node_id. Not used by 1.0 or 2.5.
     """
     version = agent_version if agent_version in _KNOWN_VERSIONS else _DEFAULT_VERSION
     if version != agent_version:
@@ -463,6 +469,7 @@ async def dispatch_message(
         await _dispatch_v2_0(
             text, send_fn, pool, user_id,
             vault=vault, status_fn=status_fn, event_fn=event_fn,
+            conversation_id=conversation_id,
         )
         return
 

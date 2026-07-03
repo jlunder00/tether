@@ -27,8 +27,15 @@ class LayerClient:
         agent_version: str,
         options: dict,
         user_message: str,
+        conversation_id: str | None = None,
     ) -> str:
-        """Returns session_id string."""
+        """Returns session_id string.
+
+        conversation_id is optional — when provided it links the session to
+        a conversation so the layer can resolve scope_source_node_id from the
+        conversation's context_node_id (scope gating). Omitting it is fully
+        backwards-compatible.
+        """
         resp = await self.client.post(
             f"{self.base_url}/session/start",
             json={
@@ -37,6 +44,7 @@ class LayerClient:
                 "agent_version": agent_version,
                 "options": options,
                 "user_message": user_message,
+                "conversation_id": conversation_id,
             },
         )
         resp.raise_for_status()

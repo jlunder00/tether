@@ -7,7 +7,7 @@ export function makeTransport(
   opts?: { sendRaw?: (_msg: object) => void },
 ): BotTransport {
   return {
-    async *send(_text: string, _agentVersion: string) {
+    async *send(_text: string, _agentVersion: string, _conversationId?: string) {
       for (const event of events) {
         yield event
       }

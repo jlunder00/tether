@@ -9,11 +9,11 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import AsyncIterator, Any
 
 from interactive_agent_layer.coalescing import CoalescingBuffer
-from interactive_agent_layer.config import get_auto_approve_user_actions
+from interactive_agent_layer.config import get_auto_approve_user_actions, get_scope_radius
 from interactive_agent_layer.permissions import (
     CheckGrantFn,
     InsertGrantFn,
@@ -33,6 +33,15 @@ from interactive_agent_layer.ws_publisher import WSPublisher
 
 log = logging.getLogger(__name__)
 
+# Type aliases for Layer-level scope-gating callables. Signature includes
+# user_id explicitly (unlike PermissionGate's HopDistanceFn/ResolveNodePathFn,
+# which are per-session) so a single Layer-level instance works across all
+# sessions/users — run_turn wraps each with the current session's user_id
+# bound in before constructing PermissionGate. Mirrors CheckGrantFn/InsertGrantFn.
+RawHopDistanceFn = Callable[[str, str, str], Awaitable[int | None]]
+RawResolveNodePathFn = Callable[[str, str], Awaitable[str | None]]
+ResolveConversationScopeFn = Callable[[str, str], Awaitable[str | None]]
+
 
 @dataclasses.dataclass
 class Session:
@@ -51,6 +60,13 @@ class Session:
     # Tracks the last emitted agent_action so we can synthesize a 'complete'
     # status when the next distinct tool_use or turn_complete arrives.
     last_emitted_action: dict | None = None
+    # Scope-gating cache — resolved once (lazily, on first run_turn) and reused
+    # on subsequent turns. NOT stored in `options`: options feeds the pool's
+    # options_hash for subprocess partitioning, and mutating it after the hash
+    # is computed on turn 1 would silently repartition on turn 2+.
+    scope_source_node_id: str | None = None
+    scope_radius: int | None = None
+    _scope_resolved: bool = False
 
 
 def _stable_options_hash(options: dict) -> str:
@@ -77,6 +93,9 @@ class Layer:
         leaky_providers: list[str] | None = None,
         check_grant_fn: CheckGrantFn | None = None,
         insert_grant_fn: InsertGrantFn | None = None,
+        hop_distance_fn: RawHopDistanceFn | None = None,
+        resolve_node_path_fn: RawResolveNodePathFn | None = None,
+        resolve_conversation_scope_fn: ResolveConversationScopeFn | None = None,
     ) -> None:
         self.sessions: dict[str, Session] = {}
         self.pool_client = pool_client
@@ -92,6 +111,12 @@ class Layer:
         # prompting the user and persists new grants after approval.
         self.check_grant_fn = check_grant_fn
         self.insert_grant_fn = insert_grant_fn
+        # Scope-gating DB-bound functions — injected by premium at startup
+        # (see tether_premium.bot.scope_grants.get_scope_fns). All None means
+        # no scope enforcement, even if a session's options request it.
+        self.hop_distance_fn = hop_distance_fn
+        self.resolve_node_path_fn = resolve_node_path_fn
+        self.resolve_conversation_scope_fn = resolve_conversation_scope_fn
 
     def create_session(
         self,
@@ -124,6 +149,22 @@ class Layer:
         session = self.sessions[session_id]  # raises KeyError if missing
         options_hash = _stable_options_hash(session.options)
 
+        await self._resolve_scope(session)
+
+        # Bind the Layer-level (user_id, ...) -> ... scope functions to this
+        # session's user_id, producing the (from_id, to_id) -> ... / (path) -> ...
+        # shapes PermissionGate expects. None when the Layer has no scope
+        # functions injected (premium absent) — PermissionGate stays dormant.
+        session_hop_distance_fn = None
+        if self.hop_distance_fn is not None:
+            async def session_hop_distance_fn(from_id: str, to_id: str) -> int | None:
+                return await self.hop_distance_fn(session.user_id, from_id, to_id)
+
+        session_resolve_node_path_fn = None
+        if self.resolve_node_path_fn is not None:
+            async def session_resolve_node_path_fn(path: str) -> str | None:
+                return await self.resolve_node_path_fn(session.user_id, path)
+
         # PermissionGate routes pool control_request SSE events through policy:
         # background/passthrough → auto-allow; user_action → prompt user or
         # auto-approve based on config.  Decisions are forwarded back to the
@@ -141,6 +182,10 @@ class Layer:
             auto_approve_user_actions=get_auto_approve_user_actions(),
             check_grant_fn=self.check_grant_fn,
             insert_grant_fn=self.insert_grant_fn,
+            scope_source_node_id=session.scope_source_node_id,
+            scope_radius=session.scope_radius,
+            hop_distance_fn=session_hop_distance_fn,
+            resolve_node_path_fn=session_resolve_node_path_fn,
         )
 
         handle = await self.pool_client.acquire(
@@ -202,6 +247,44 @@ class Layer:
             return
         for handle in list(session.active_handles):
             await self.pool_client.interrupt(handle)
+
+    async def _resolve_scope(self, session: Session) -> None:
+        """Resolve session.scope_source_node_id / scope_radius, once per session.
+
+        Precedence for scope_source_node_id:
+          1. session.options["scope_source_node_id"] (explicit caller override)
+          2. resolve_conversation_scope_fn(user_id, conversation_id) — looks up
+             the conversation's context_node_id (premium-injected; None if
+             absent, no conversation_id, or the conversation has no node)
+
+        scope_radius: session.options["scope_radius"] if set, else the
+        config-driven default (get_scope_radius()) — but only when a
+        scope_source_node_id was actually resolved, so an unscoped session
+        never gets a radius with no anchor to measure from.
+
+        Cached via session._scope_resolved so this DB-touching resolution
+        runs at most once per session, not once per turn.
+        """
+        if session._scope_resolved:
+            return
+
+        scope_source_node_id = session.options.get("scope_source_node_id")
+        if (
+            scope_source_node_id is None
+            and self.resolve_conversation_scope_fn is not None
+            and session.conversation_id
+        ):
+            scope_source_node_id = await self.resolve_conversation_scope_fn(
+                session.user_id, session.conversation_id
+            )
+
+        scope_radius = session.options.get("scope_radius")
+        if scope_radius is None and scope_source_node_id is not None:
+            scope_radius = get_scope_radius()
+
+        session.scope_source_node_id = scope_source_node_id
+        session.scope_radius = scope_radius
+        session._scope_resolved = True
 
 
 async def _handle_control_request(

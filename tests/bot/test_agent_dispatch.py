@@ -198,6 +198,54 @@ async def test_dispatch_2_0_creates_layer_session_with_correct_options():
     assert set(opts.get("allowed_tools", [])) == set(expected_tools)
 
 
+async def test_dispatch_2_0_forwards_conversation_id_to_start_session():
+    """conversation_id passed to dispatch_message must reach start_session,
+    so the layer can resolve the conversation's scope_source_node_id."""
+    constructor, client = _make_layer_client()
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "do something",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user42",
+            vault=_make_mock_vault(),
+            conversation_id="conv-1",
+        )
+
+    call_kwargs = client.start_session.call_args
+    assert call_kwargs.kwargs.get("conversation_id") == "conv-1"
+
+
+async def test_dispatch_2_0_conversation_id_optional():
+    """conversation_id defaults to None — backwards compatible with existing callers."""
+    constructor, client = _make_layer_client()
+
+    with (
+        patch("bot.agent_dispatch.LayerClient", constructor),
+        patch("bot.agent_dispatch.handle_message", new=_fake_handle_1_0_response),
+    ):
+        from bot.agent_dispatch import dispatch_message
+
+        await dispatch_message(
+            "tether-agent-2.0",
+            "do something",
+            send_fn=lambda m: None,
+            pool=None,
+            user_id="user42",
+            vault=_make_mock_vault(),
+        )
+
+    call_kwargs = client.start_session.call_args
+    assert call_kwargs.kwargs.get("conversation_id") is None
+
+
 async def test_dispatch_2_0_turn_complete_sends_final_text_and_ends_session():
     """On turn_complete, send_fn must receive final_text and end_session must be called."""
     constructor, client = _make_layer_client(events=[
