@@ -52,8 +52,9 @@ async def create_pool() -> asyncpg.Pool:
     if _pool is None:
         _pool = await asyncpg.create_pool(
             dsn=os.environ["DATABASE_URL"],
-            min_size=2,
+            min_size=0,
             max_size=10,
+            max_inactive_connection_lifetime=60,
             command_timeout=30,
             init=register_jsonb_codec,
         )
