@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@vueuse/core": "^14.2.1",
-    "dompurify": "^3.4.0",
+    "dompurify": "^3.4.11",
     "marked": "^18.0.2",
     "pinia": "^3.0.4",
     "vue": "^3.5.12",
