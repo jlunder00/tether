@@ -29,6 +29,18 @@ class PermissionResultDeny:
     reason: str = "denied"
 
 
+class PermissionTimeoutError(Exception):
+    """Raised by PermissionGate when the user does not respond within the timeout.
+
+    Carries the ``request_id`` so the caller (session.py) can include it in
+    the ``session_timeout`` WebSocket event.
+    """
+
+    def __init__(self, request_id: str) -> None:
+        super().__init__(f"Permission request timed out: {request_id}")
+        self.request_id = request_id
+
+
 # Type aliases for injected grant functions
 CheckGrantFn = Callable[[str, str, str, str], Awaitable[bool]]
 InsertGrantFn = Callable[[str, str, str, str], Awaitable[None]]
@@ -132,7 +144,9 @@ class PermissionGate:
                 timeout=get_permission_timeout(),
             )
         except asyncio.TimeoutError:
-            approved = False
+            # Raise instead of silently denying — session.py catches this,
+            # emits a session_timeout event, and ends the turn cleanly.
+            raise PermissionTimeoutError(request_id)
         finally:
             self._session.permission_pending.pop(request_id, None)
 

@@ -3,7 +3,10 @@ import { ref, computed, watch, onUnmounted } from 'vue'
 import { useChatStore } from '../stores/chat'
 import type { PermissionKind } from '../types/chat'
 
-const TIMEOUT_MS = 60_000
+// After DISMISS_MS the full modal slides away to a compact waiting indicator.
+// The backend's 900s timeout is the sole authority for the actual deny —
+// the frontend timer only prevents the modal from blocking the UI indefinitely.
+const DISMISS_MS = 60_000
 
 const KIND_LABELS: Record<PermissionKind, string> = {
   read_out_of_scope: 'Read out-of-scope content',
@@ -13,6 +16,7 @@ const KIND_LABELS: Record<PermissionKind, string> = {
 
 const chatStore = useChatStore()
 const showReason = ref(false)
+const dismissed = ref(false)
 let timer: ReturnType<typeof setTimeout> | null = null
 
 const kindLabel = computed(() => {
@@ -30,16 +34,17 @@ function clearTimer() {
 function startTimer() {
   clearTimer()
   timer = setTimeout(() => {
-    if (chatStore.pendingPermissionRequest) {
-      chatStore.respondToPermission(chatStore.pendingPermissionRequest.request_id, false)
-    }
-  }, TIMEOUT_MS)
+    // Dismiss the intrusive modal — do NOT call respondToPermission.
+    // The backend will fire session_timeout at 900s if the user never responds.
+    dismissed.value = true
+  }, DISMISS_MS)
 }
 
 watch(
   () => chatStore.pendingPermissionRequest,
   (req) => {
     showReason.value = false
+    dismissed.value = false
     if (req) startTimer()
     else clearTimer()
   },
@@ -50,6 +55,7 @@ onUnmounted(() => clearTimer())
 
 function respond(approve: boolean) {
   clearTimer()
+  dismissed.value = false
   const req = chatStore.pendingPermissionRequest
   if (req) chatStore.respondToPermission(req.request_id, approve)
 }
@@ -57,8 +63,9 @@ function respond(approve: boolean) {
 
 <template>
   <Teleport to="body">
+    <!-- Full permission modal (shown until user interacts or 60s elapses) -->
     <div
-      v-if="chatStore.pendingPermissionRequest"
+      v-if="chatStore.pendingPermissionRequest && !dismissed"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
     >
       <div class="bg-[--bg-elev-1] border border-[--border-1] rounded-xl shadow-xl p-6 max-w-sm w-full mx-4">
@@ -97,6 +104,20 @@ function respond(approve: boolean) {
             Approve
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- Compact waiting indicator (after 60s dismiss, while backend waits up to 900s) -->
+    <div
+      v-else-if="chatStore.pendingPermissionRequest && dismissed"
+      class="fixed bottom-4 right-4 z-50"
+    >
+      <div
+        class="bg-[--bg-elev-1] border border-[--border-1] rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-3 max-w-xs cursor-pointer hover:bg-[--bg-elev-2] transition-colors"
+        @click="dismissed = false"
+      >
+        <span class="w-2 h-2 rounded-full bg-[--accent] animate-pulse flex-shrink-0" />
+        <span class="text-xs text-[--fg-2]">Waiting on your response</span>
       </div>
     </div>
   </Teleport>

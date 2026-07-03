@@ -27,6 +27,7 @@ export const useChatStore = defineStore('chat', () => {
   const permissionQueue = ref<PermissionRequest[]>([])
   const activeActions = ref<Map<string, LiveAgentAction>>(new Map())
   const currentPhase = ref<StatusPhase | null>(null)
+  const sessionTimedOut = ref(false)
 
   // Register heartbeat via a stable wrapper so it always reflects the current
   // transport, even after setBotTransport() replaces it post-auth.
@@ -43,6 +44,7 @@ export const useChatStore = defineStore('chat', () => {
 
     isStreaming.value = true
     isSessionActive.value = true
+    sessionTimedOut.value = false
     try {
       const agentVersion = useAgentPickerStore().selectedAgent
       for await (const event of getBotTransport().send(text, agentVersion)) {
@@ -113,6 +115,18 @@ export const useChatStore = defineStore('chat', () => {
             activeActions.value.clear()
             isSessionActive.value = false
             return
+          case 'session_timeout':
+            // Backend timed out waiting for permission — clear pending modal,
+            // mark session as timed out so UI can show a resume message.
+            // Do NOT send a permission_response — the backend already denied.
+            pendingPermissionRequest.value = null
+            permissionQueue.value = []
+            sessionTimedOut.value = true
+            activeActions.value.clear()
+            statusMessage.value = ''
+            currentPhase.value = null
+            isSessionActive.value = false
+            return
           case 'trial_usage_update':
             useAgentPickerStore().setTrialRemaining(event.remaining)
             break
@@ -148,5 +162,6 @@ export const useChatStore = defineStore('chat', () => {
     send,
     respondToPermission,
     sendInterrupt,
+    sessionTimedOut,
   }
 })

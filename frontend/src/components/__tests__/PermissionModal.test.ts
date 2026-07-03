@@ -147,7 +147,7 @@ describe('PermissionModal', () => {
     wrapper.unmount()
   })
 
-  it('60s timeout auto-denies if no response', async () => {
+  it('60s timeout dismisses modal to waiting indicator without auto-denying', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const wrapper = mountModal()
@@ -161,8 +161,60 @@ describe('PermissionModal', () => {
       }
       await wrapper.vm.$nextTick()
 
+      // Before timeout: full modal visible
+      expect(document.body.textContent).toContain('Permission Request')
+
       vi.advanceTimersByTime(60_000)
-      expect(spy).toHaveBeenCalledWith('req-timeout', false)
+      await wrapper.vm.$nextTick()
+
+      // After timeout: modal dismissed — NO auto-deny; backend is the authority
+      expect(spy).not.toHaveBeenCalled()
+
+      // Compact waiting indicator should appear instead
+      expect(document.body.textContent).toContain('Waiting on your response')
+
+      // Full modal should be gone
+      expect(document.body.textContent).not.toContain('Permission Request')
+
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('after dismiss, new pendingPermissionRequest resets to full modal', async () => {
+    // Verifies that the dismissed state resets when a new permission_request arrives.
+    // This covers the case where the user responds via the backend's session_timeout
+    // (clears the request) and then a new session starts with a fresh request.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const wrapper = mountModal()
+      const store = useChatStore()
+      store.pendingPermissionRequest = {
+        request_id: 'req-first',
+        kind: 'destructive',
+        target: 'tasks/all',
+        reason_from_bot: null,
+      }
+      await wrapper.vm.$nextTick()
+      vi.advanceTimersByTime(60_000)
+      await wrapper.vm.$nextTick()
+
+      // Modal is now dismissed → waiting indicator
+      expect(document.body.textContent).toContain('Waiting on your response')
+
+      // New request arrives (e.g. user sends another message, new session)
+      store.pendingPermissionRequest = {
+        request_id: 'req-second',
+        kind: 'user_section_edit',
+        target: 'section/work',
+        reason_from_bot: null,
+      }
+      await wrapper.vm.$nextTick()
+
+      // Full modal should reappear for the new request
+      expect(document.body.textContent).toContain('Permission Request')
+      expect(document.body.textContent).not.toContain('Waiting on your response')
       wrapper.unmount()
     } finally {
       vi.useRealTimers()

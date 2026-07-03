@@ -19,6 +19,7 @@ from interactive_agent_layer.permissions import (
     InsertGrantFn,
     PermissionGate,
     PermissionResultAllow,
+    PermissionTimeoutError,
 )
 from interactive_agent_layer.pool_client import PoolClient, PoolClientError
 from interactive_agent_layer.translation import (
@@ -164,7 +165,20 @@ class Layer:
                     # event_fn can forward it to the user's WebSocket.
                     async for gate_event in _drain_until_done(gate_events, ctrl_task):
                         yield gate_event
-                    await ctrl_task  # propagate any exception
+                    try:
+                        await ctrl_task  # propagate any exception
+                    except PermissionTimeoutError as exc:
+                        # User did not respond within the timeout — emit a
+                        # session_timeout event and end the turn cleanly.
+                        timeout_event = {
+                            "type": "session_timeout",
+                            "session_id": session_id,
+                            "reason": "permission_timeout",
+                            "request_id": exc.request_id,
+                        }
+                        await self.ws_publisher.push(session.user_ws_id, timeout_event)
+                        yield timeout_event
+                        return
                     continue
 
                 if sdk_event.get("event") == "control_timeout":
@@ -207,7 +221,27 @@ async def _handle_control_request(
     request_id = event.get("request_id", "")
     subtype = event.get("subtype", "can_use_tool")
 
-    result = await gate.can_use_tool(tool_name, tool_input, None)
+    try:
+        result = await gate.can_use_tool(tool_name, tool_input, None)
+    except PermissionTimeoutError:
+        # User did not respond in time — tell the pool to deny, then propagate
+        # so run_turn can emit a session_timeout event and end the turn.
+        try:
+            await pool_client.send_control_response(
+                handle_id,
+                request_id=request_id,
+                subtype=subtype,
+                decision="deny",
+                denial_message="permission_timeout",
+            )
+        except PoolClientError as exc:
+            log.debug(
+                "send_control_response ignored on timeout (pool already resolved): %s request_id=%s",
+                exc,
+                request_id,
+            )
+        raise
+
     decision = "allow" if isinstance(result, PermissionResultAllow) else "deny"
     denial_message = getattr(result, "reason", None) if decision == "deny" else None
 

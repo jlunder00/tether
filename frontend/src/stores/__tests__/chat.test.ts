@@ -255,3 +255,118 @@ describe('useChatStore', () => {
     expect(store.messages[1]).not.toHaveProperty('streaming')
   })
 })
+
+describe('useChatStore — session_timeout handling', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('session_timeout clears pendingPermissionRequest', async () => {
+    setBotTransport(makeTransport([
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req1',
+        kind: 'user_section_edit',
+        target: 'Read file',
+        reason_from_bot: null,
+      },
+      {
+        type: 'session_timeout',
+        session_id: 'sess1',
+        reason: 'permission_timeout',
+        request_id: 'req1',
+      },
+    ]))
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.pendingPermissionRequest).toBeNull()
+  })
+
+  it('session_timeout clears permissionQueue', async () => {
+    setBotTransport(makeTransport([
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req1',
+        kind: 'user_section_edit',
+        target: 'Read file',
+        reason_from_bot: null,
+      },
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req2',
+        kind: 'destructive',
+        target: 'Delete thing',
+        reason_from_bot: null,
+      },
+      {
+        type: 'session_timeout',
+        session_id: 'sess1',
+        reason: 'permission_timeout',
+        request_id: 'req1',
+      },
+    ]))
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.permissionQueue).toHaveLength(0)
+  })
+
+  it('session_timeout sets sessionTimedOut true', async () => {
+    setBotTransport(makeTransport([
+      {
+        type: 'session_timeout',
+        session_id: 'sess1',
+        reason: 'permission_timeout',
+        request_id: 'req1',
+      },
+    ]))
+    const store = useChatStore()
+    await store.send('hi')
+    expect(store.sessionTimedOut).toBe(true)
+  })
+
+  it('session_timeout does NOT call sendRaw with a deny', async () => {
+    const sendRaw = vi.fn()
+    setBotTransport(makeTransport([
+      {
+        type: 'permission_request',
+        session_id: 'sess1',
+        request_id: 'req1',
+        kind: 'user_section_edit',
+        target: 'Read file',
+        reason_from_bot: null,
+      },
+      {
+        type: 'session_timeout',
+        session_id: 'sess1',
+        reason: 'permission_timeout',
+        request_id: 'req1',
+      },
+    ], { sendRaw }))
+    const store = useChatStore()
+    await store.send('hi')
+    // Backend already denied — frontend must NOT send permission_response
+    expect(sendRaw).not.toHaveBeenCalled()
+  })
+
+  it('send resets sessionTimedOut on new send', async () => {
+    setBotTransport(makeTransport([
+      {
+        type: 'session_timeout',
+        session_id: 'sess1',
+        reason: 'permission_timeout',
+        request_id: 'req1',
+      },
+    ]))
+    const store = useChatStore()
+    await store.send('first')
+
+    setBotTransport(makeTransport([
+      { type: 'turn_complete', session_id: 'sess1', final_text: 'ok' },
+    ]))
+    await store.send('second')
+    expect(store.sessionTimedOut).toBe(false)
+  })
+})

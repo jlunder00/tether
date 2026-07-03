@@ -84,6 +84,9 @@ function onKeydown(e: KeyboardEvent) {
       <p v-if="chatStore.statusMessage" class="text-xs text-[--fg-4] text-center animate-pulse">
         {{ chatStore.statusMessage }}
       </p>
+      <p v-if="chatStore.sessionTimedOut" class="text-xs text-[--fg-4] text-center py-2 px-4 rounded-lg bg-[--bg-elev-2] mx-4">
+        Session timed out — send a message to resume
+      </p>
     </div>
 
     <!-- Composer -->
