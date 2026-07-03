@@ -25,6 +25,42 @@ async def test_session_start_returns_session_id(layer_client, layer):
     assert sid in layer.sessions
 
 
+async def test_session_start_threads_conversation_id(layer_client, layer):
+    """conversation_id in the /session/start body reaches Session.conversation_id
+    (needed so scope-source-node resolution can look up the conversation)."""
+    resp = await layer_client.post(
+        "/session/start",
+        json={
+            "user_id": "user1",
+            "user_ws_id": "wsid1",
+            "agent_version": "v1",
+            "options": {},
+            "user_message": "hello",
+            "conversation_id": "conv-abc",
+        },
+    )
+    assert resp.status_code == 200
+    sid = resp.json()["session_id"]
+    assert layer.sessions[sid].conversation_id == "conv-abc"
+
+
+async def test_session_start_conversation_id_optional(layer_client, layer):
+    """conversation_id is optional — omitting it is fully backwards-compatible."""
+    resp = await layer_client.post(
+        "/session/start",
+        json={
+            "user_id": "user1",
+            "user_ws_id": "wsid1",
+            "agent_version": "v1",
+            "options": {},
+            "user_message": "hello",
+        },
+    )
+    assert resp.status_code == 200
+    sid = resp.json()["session_id"]
+    assert layer.sessions[sid].conversation_id is None
+
+
 async def test_session_status(layer_client, layer):
     """Contract #4: GET /session/{id}/status returns state dict."""
     start_resp = await layer_client.post(

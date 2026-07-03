@@ -426,3 +426,214 @@ async def test_interrupt_unknown_session_noop():
     layer = _make_layer(_RealApiMockPool())
     # Should not raise
     await layer.interrupt("no-such-session")
+
+
+# ---------------------------------------------------------------------------
+# Scope-gating wiring — Layer.run_turn activates the dormant PermissionGate
+# scope seam (Task #3). Layer-level hop_distance_fn/resolve_node_path_fn/
+# resolve_conversation_scope_fn are (user_id, ...) -> ... shaped (a single
+# instance works across all sessions/users); run_turn wraps each with the
+# current session's user_id bound in before passing to PermissionGate.
+# ---------------------------------------------------------------------------
+
+class _ReadContextControlPool:
+    """Pool that emits a control_request for read_context, then completes."""
+
+    def __init__(self, node_ids=None):
+        self._node_ids = node_ids if node_ids is not None else ["far-node"]
+        self.decisions: list[str] = []
+        self.denial_messages: list[str | None] = []
+
+    async def acquire(self, user_id, options_hash, options, timeout_seconds=None):
+        return f"handle-{user_id}"
+
+    async def query_stream(self, handle_id, prompt, session_id="default"):
+        yield {
+            "event": "control_request",
+            "subtype": "can_use_tool",
+            "tool_name": "read_context",
+            "tool_input": {"node_ids": self._node_ids},
+            "request_id": "req-scope-001",
+        }
+        yield {"type": "result", "final_text": "done", "tokens_used": 1}
+
+    async def send_control_response(
+        self, handle_id, *, request_id, subtype, decision, denial_message=None
+    ):
+        self.decisions.append(decision)
+        self.denial_messages.append(denial_message)
+
+    async def release(self, handle_id, *, reusable=False):
+        pass
+
+    async def interrupt(self, handle_id):
+        pass
+
+
+def _scope_requests(events: list[dict]) -> list[dict]:
+    return [
+        e for e in events
+        if e.get("type") == "permission_request" and e.get("kind") == "read_out_of_scope"
+    ]
+
+
+async def test_run_turn_wires_scope_from_session_options(monkeypatch):
+    """scope_source_node_id/scope_radius in session.options + Layer.hop_distance_fn
+    activate scope gating: an out-of-range read_context target emits
+    read_out_of_scope and, on timeout, is denied."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout", lambda: 0.01
+    )
+
+    pool = _ReadContextControlPool(node_ids=["far-node"])
+    calls: list[tuple[str, str, str]] = []
+
+    async def hop_distance_fn(user_id, from_id, to_id):
+        calls.append((user_id, from_id, to_id))
+        return 10  # beyond radius
+
+    layer = _make_layer(pool)
+    layer.hop_distance_fn = hop_distance_fn
+
+    s = layer.create_session(
+        "user1", "wsid1", "v1",
+        options={"scope_source_node_id": "source-node", "scope_radius": 2},
+    )
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert calls == [("user1", "source-node", "far-node")]
+    assert len(_scope_requests(events)) == 1
+    assert pool.decisions == ["deny"]  # timed out, no approval
+
+
+async def test_run_turn_in_scope_target_allows_without_prompt(monkeypatch):
+    """In-scope read_context target is auto-allowed with no permission_request."""
+    pool = _ReadContextControlPool(node_ids=["near-node"])
+
+    async def hop_distance_fn(user_id, from_id, to_id):
+        return 1  # within radius
+
+    layer = _make_layer(pool)
+    layer.hop_distance_fn = hop_distance_fn
+
+    s = layer.create_session(
+        "user1", "wsid1", "v1",
+        options={"scope_source_node_id": "source-node", "scope_radius": 2},
+    )
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert _scope_requests(events) == []
+    assert pool.decisions == ["allow"]
+
+
+async def test_run_turn_no_scope_config_is_backwards_compatible():
+    """No scope keys in options, no Layer scope fns → no gating (existing behavior)."""
+    pool = _ReadContextControlPool(node_ids=["any-node"])
+    layer = _make_layer(pool)
+
+    s = layer.create_session("user1", "wsid1", "v1", options={})
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert _scope_requests(events) == []
+    assert pool.decisions == ["allow"]
+
+
+async def test_run_turn_resolves_scope_from_conversation_id(monkeypatch):
+    """No explicit scope options — resolve_conversation_scope_fn resolves
+    scope_source_node_id from conversation_id, scope_radius from config."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout", lambda: 0.01
+    )
+    monkeypatch.setattr(
+        "interactive_agent_layer.session.get_scope_radius", lambda: 2
+    )
+
+    pool = _ReadContextControlPool(node_ids=["far-node"])
+
+    resolve_calls: list[tuple[str, str]] = []
+
+    async def resolve_conversation_scope_fn(user_id, conversation_id):
+        resolve_calls.append((user_id, conversation_id))
+        return "resolved-node"
+
+    async def hop_distance_fn(user_id, from_id, to_id):
+        assert from_id == "resolved-node"
+        return 10  # beyond the config-default radius of 2
+
+    layer = _make_layer(pool)
+    layer.hop_distance_fn = hop_distance_fn
+    layer.resolve_conversation_scope_fn = resolve_conversation_scope_fn
+
+    s = layer.create_session(
+        "user1", "wsid1", "v1", options={}, conversation_id="conv-1",
+    )
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert resolve_calls == [("user1", "conv-1")]
+    assert len(_scope_requests(events)) == 1
+
+
+async def test_run_turn_conversation_scope_resolves_to_none_disables_gating():
+    """Conversation has no context_node_id → resolve returns None → no gating."""
+    pool = _ReadContextControlPool(node_ids=["any-node"])
+
+    async def resolve_conversation_scope_fn(user_id, conversation_id):
+        return None
+
+    hop_calls: list[tuple] = []
+
+    async def hop_distance_fn(user_id, from_id, to_id):
+        hop_calls.append((user_id, from_id, to_id))
+        return 10
+
+    layer = _make_layer(pool)
+    layer.hop_distance_fn = hop_distance_fn
+    layer.resolve_conversation_scope_fn = resolve_conversation_scope_fn
+
+    s = layer.create_session(
+        "user1", "wsid1", "v1", options={}, conversation_id="conv-1",
+    )
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert hop_calls == []  # scope_source_node_id is None → never reaches hop check
+    assert _scope_requests(events) == []
+    assert pool.decisions == ["allow"]
+
+
+async def test_layer_accepts_scope_fns_in_constructor():
+    """Layer.__init__ accepts hop_distance_fn/resolve_node_path_fn/
+    resolve_conversation_scope_fn kwargs (mirrors check_grant_fn/insert_grant_fn)."""
+    async def hop_distance_fn(user_id, from_id, to_id):
+        return 1
+
+    async def resolve_node_path_fn(user_id, path):
+        return "node-id"
+
+    async def resolve_conversation_scope_fn(user_id, conversation_id):
+        return "node-id"
+
+    layer = Layer(
+        pool_client=_RealApiMockPool(),
+        ws_publisher=WSPublisher(),
+        hop_distance_fn=hop_distance_fn,
+        resolve_node_path_fn=resolve_node_path_fn,
+        resolve_conversation_scope_fn=resolve_conversation_scope_fn,
+    )
+    assert layer.hop_distance_fn is hop_distance_fn
+    assert layer.resolve_node_path_fn is resolve_node_path_fn
+    assert layer.resolve_conversation_scope_fn is resolve_conversation_scope_fn

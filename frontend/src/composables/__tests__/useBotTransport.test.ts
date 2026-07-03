@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
-import { createMockTransport, getBotTransport, setBotTransport } from '../useBotTransport'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import {
+  createMockTransport,
+  createWebSocketTransport,
+  getBotTransport,
+  setBotTransport,
+} from '../useBotTransport'
 import type { BotTransport } from '../useBotTransport'
 import type { WsIncomingEvent } from '../../types/chat'
 
@@ -97,5 +102,93 @@ describe('getBotTransport / setBotTransport singleton', () => {
     }
     setBotTransport(newTransport)
     expect(getBotTransport()).toBe(newTransport)
+  })
+})
+
+describe('createWebSocketTransport — conversation_id in the WS payload', () => {
+  class MockWebSocket {
+    static OPEN = 1
+    static CLOSED = 3
+    readyState = MockWebSocket.OPEN
+    sent: string[] = []
+    onopen: (() => void) | null = null
+    onmessage: ((evt: MessageEvent) => void) | null = null
+    onerror: (() => void) | null = null
+    onclose: (() => void) | null = null
+
+    constructor(public url: string) {
+      // Simulate immediate connection open — matches jsdom's typical timing
+      // closely enough for this synchronous-in-tests-via-microtask send() path.
+      queueMicrotask(() => this.onopen?.())
+    }
+
+    send(data: string): void {
+      this.sent.push(data)
+    }
+
+    close(): void {
+      this.readyState = MockWebSocket.CLOSED
+      this.onclose?.()
+    }
+  }
+
+  let lastSocket: MockWebSocket
+
+  const originalWebSocket = globalThis.WebSocket
+
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket
+  })
+
+  function installMockWebSocket(): void {
+    function MockWebSocketCtor(url: string) {
+      lastSocket = new MockWebSocket(url)
+      return lastSocket
+    }
+    globalThis.WebSocket = MockWebSocketCtor as unknown as typeof WebSocket
+    Object.assign(globalThis.WebSocket, { OPEN: 1, CLOSED: 3 })
+  }
+
+  it('includes conversation_id in the sent payload when provided', async () => {
+    installMockWebSocket()
+    const transport = createWebSocketTransport()
+
+    const iter = transport.send('hello', 'tether-agent-2.0', 'conv-123')[Symbol.asyncIterator]()
+    // Kick off iteration so send() runs past the openPromise await and calls ws.send.
+    const first = iter.next()
+
+    // Let the mock socket's queued onopen fire, then resolve the turn.
+    await Promise.resolve()
+    await Promise.resolve()
+    lastSocket.onmessage?.({
+      data: JSON.stringify({ type: 'turn_complete', session_id: 's1', final_text: 'hi' }),
+    } as MessageEvent)
+    await first
+
+    expect(lastSocket.sent).toHaveLength(1)
+    const payload = JSON.parse(lastSocket.sent[0])
+    expect(payload.conversation_id).toBe('conv-123')
+
+    transport.close()
+  })
+
+  it('omits (or nulls) conversation_id when not provided — backwards compatible', async () => {
+    installMockWebSocket()
+    const transport = createWebSocketTransport()
+
+    const iter = transport.send('hello', 'tether-agent-2.0')[Symbol.asyncIterator]()
+    const first = iter.next()
+
+    await Promise.resolve()
+    await Promise.resolve()
+    lastSocket.onmessage?.({
+      data: JSON.stringify({ type: 'turn_complete', session_id: 's1', final_text: 'hi' }),
+    } as MessageEvent)
+    await first
+
+    const payload = JSON.parse(lastSocket.sent[0])
+    expect(payload.conversation_id == null).toBe(true)
+
+    transport.close()
   })
 })

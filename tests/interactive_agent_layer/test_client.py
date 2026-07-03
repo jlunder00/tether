@@ -37,6 +37,33 @@ async def test_start_session_returns_session_id(layer_client_with_app):
     assert len(sid) > 0
 
 
+async def test_start_session_forwards_conversation_id(layer_client_with_app, layer):
+    """conversation_id passed to start_session reaches Session.conversation_id."""
+    lc = layer_client_with_app
+    sid = await lc.start_session(
+        user_id="user1",
+        user_ws_id="wsid1",
+        agent_version="v1",
+        options={},
+        user_message="hello",
+        conversation_id="conv-xyz",
+    )
+    assert layer.sessions[sid].conversation_id == "conv-xyz"
+
+
+async def test_start_session_conversation_id_optional(layer_client_with_app, layer):
+    """conversation_id defaults to None — backwards compatible with existing callers."""
+    lc = layer_client_with_app
+    sid = await lc.start_session(
+        user_id="user1",
+        user_ws_id="wsid1",
+        agent_version="v1",
+        options={},
+        user_message="hello",
+    )
+    assert layer.sessions[sid].conversation_id is None
+
+
 async def test_end_session(layer_client_with_app, layer):
     """Contract #8: LayerClient.end_session calls POST /session/{id}/end."""
     lc = layer_client_with_app

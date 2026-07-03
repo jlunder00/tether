@@ -28,3 +28,13 @@ def get_trial_monthly_quota() -> int:
 def get_leaky_providers() -> list[str]:
     """Providers whose dashboards expose prompt content — 2.5 is disabled on these."""
     return list(config.get("agent_layer.leaky_providers", ["openrouter", "openai"]))
+
+
+def get_scope_radius() -> int:
+    """Default M (hop radius) for read_context scope gating.
+
+    Used when a session doesn't set scope_radius explicitly in options —
+    e.g. when scope_source_node_id is resolved from the conversation's
+    context_node_id at session-start rather than passed in by the caller.
+    """
+    return int(config.get("agent_layer.scope_radius", 3))

@@ -14,6 +14,25 @@ describe('useConversationChat', () => {
     setActivePinia(createPinia())
   })
 
+  describe('send() — forwards conversationId to the transport', () => {
+    it('passes the conversationId given to useConversationChat through to transport.send', async () => {
+      const sendSpy = vi.fn(async function* () {
+        yield { type: 'turn_complete', session_id: 's1', final_text: 'ok' } as WsIncomingEvent
+      })
+      setBotTransport({
+        send: sendSpy,
+        onHeartbeat: () => () => {},
+        close: vi.fn(),
+        sendRaw: vi.fn(),
+      })
+
+      const { send } = useConversationChat('conv-scoped-1')
+      await send('ping', () => {})
+
+      expect(sendSpy).toHaveBeenCalledWith('ping', 'tether-agent-2.0', 'conv-scoped-1')
+    })
+  })
+
   describe('send() — turn_complete.final_text handling', () => {
     it('returns final_text when only turn_complete arrives (no deltas)', async () => {
       // Simulates one_shot / non-streaming responses where the bot sends only

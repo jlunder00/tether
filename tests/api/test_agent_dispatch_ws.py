@@ -224,6 +224,31 @@ def test_ws_2_0_layer_delivers_response():
     assert tc["final_text"] == "Layer WS response"
 
 
+def test_ws_2_0_forwards_conversation_id_to_layer_session():
+    """conversation_id in the WS user message reaches LayerClient.start_session,
+    so scope gating can resolve the conversation's scope_source_node_id."""
+    constructor, client = _make_layer_constructor()
+    _dispatch_via_ws(
+        {"agent_version": "tether-agent-2.0", "conversation_id": "conv-77"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    call_kwargs = client.start_session.call_args
+    assert call_kwargs.kwargs.get("conversation_id") == "conv-77"
+
+
+def test_ws_2_0_conversation_id_optional():
+    """Omitting conversation_id is fully backwards-compatible (defaults to None)."""
+    constructor, client = _make_layer_constructor()
+    _dispatch_via_ws(
+        {"agent_version": "tether-agent-2.0"},
+        extra_patches=[("bot.agent_dispatch.LayerClient", constructor)],
+    )
+
+    call_kwargs = client.start_session.call_args
+    assert call_kwargs.kwargs.get("conversation_id") is None
+
+
 def test_ws_2_0_layer_unavailable_falls_back_silently():
     """2.0 path: when layer is unavailable, fall back to 1.0 — no stub in final_text."""
     import httpx

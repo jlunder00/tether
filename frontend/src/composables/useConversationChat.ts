@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { getBotTransport } from './useBotTransport'
 import { useAgentPickerStore } from '../stores/agentPicker'
 
-export function useConversationChat(_conversationId: string) {
+export function useConversationChat(conversationId: string) {
   const isStreaming = ref(false)
   const streamingContent = ref('')
 
@@ -12,7 +12,7 @@ export function useConversationChat(_conversationId: string) {
     let finalText = ''
     try {
       const agentVersion = useAgentPickerStore().selectedAgent
-      for await (const event of getBotTransport().send(text, agentVersion)) {
+      for await (const event of getBotTransport().send(text, agentVersion, conversationId)) {
         if (event.type === 'agent_text_delta') {
           streamingContent.value += event.delta
           onChunk(event.delta)

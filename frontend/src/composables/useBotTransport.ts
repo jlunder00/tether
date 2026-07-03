@@ -1,6 +1,15 @@
 export interface BotTransport {
-  /** Send user text with the selected agent version; yields typed WS events as they arrive. */
-  send(text: string, agentVersion: string): AsyncIterable<import('../types/chat').WsIncomingEvent>
+  /**
+   * Send user text with the selected agent version; yields typed WS events as they arrive.
+   * conversationId is optional — when provided it links the 2.0 layer session to that
+   * conversation so scope gating can resolve scope_source_node_id from the conversation's
+   * context_node_id. Omitting it is fully backwards-compatible.
+   */
+  send(
+    text: string,
+    agentVersion: string,
+    conversationId?: string,
+  ): AsyncIterable<import('../types/chat').WsIncomingEvent>
   /** Send a raw message on the underlying connection (permission_response, interrupt). No-op if closed. */
   sendRaw(msg: object): void
   /** Subscribe to heartbeat changes. Returns an unsubscribe fn. */
@@ -10,7 +19,7 @@ export interface BotTransport {
 }
 
 export function createMockTransport(): BotTransport {
-  async function* send(text: string, _agentVersion: string) {
+  async function* send(text: string, _agentVersion: string, _conversationId?: string) {
     const body = `Echo: ${text}\n\nThis is a **mocked** response.`
     yield { type: 'agent_text_delta' as const, session_id: 'mock', delta: body }
     yield { type: 'turn_complete' as const, session_id: 'mock', final_text: body }
@@ -101,7 +110,7 @@ export function createWebSocketTransport(): BotTransport {
   }
 
   return {
-    async *send(text: string, agentVersion: string) {
+    async *send(text: string, agentVersion: string, conversationId?: string) {
       // C1: don't send until the socket has opened.
       await openPromise
 
@@ -109,7 +118,12 @@ export function createWebSocketTransport(): BotTransport {
       // sends don't steal each other's chunks via the shared `incoming` queue.
       const localQueue: MessageEvent[] = incoming.splice(0)
 
-      ws.send(JSON.stringify({ type: 'user', content: text, agent_version: agentVersion }))
+      ws.send(JSON.stringify({
+        type: 'user',
+        content: text,
+        agent_version: agentVersion,
+        conversation_id: conversationId ?? null,
+      }))
 
       // C2: each recv registers both resolve and reject, so onerror/onclose
       // can break us out of this loop.

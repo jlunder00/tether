@@ -20,6 +20,9 @@ class SessionStartRequest(BaseModel):
     agent_version: str
     options: dict = {}
     user_message: str
+    # Optional: links the session to a conversation so scope gating can
+    # resolve scope_source_node_id from the conversation's context_node_id.
+    conversation_id: str | None = None
 
 
 class TurnRequest(BaseModel):
@@ -92,6 +95,7 @@ def create_app(layer: Layer) -> FastAPI:
             user_ws_id=body.user_ws_id,
             agent_version=body.agent_version,
             options=body.options,
+            conversation_id=body.conversation_id,
         )
 
         # Belt-and-suspenders pool hint: fire-and-forget so the pool has a
