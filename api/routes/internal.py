@@ -1,6 +1,16 @@
 """Internal API routes — not mounted in OpenAPI schema.
 
 Called by Fly.io cron machines. All endpoints require X-Internal-Token header.
+
+Neon/idle-spin-down note
+-------------------------
+``_run_notification_check`` is gated by ``shared.notify_due`` — a Redis
+next-due cache — so that regardless of how often this endpoint is actually
+invoked (by whatever scheduler ends up calling it), it costs nothing but a
+single Redis range query when no user has any anchor/followup/meeting-event
+work due right now. See shared/notify_due.py for the full scheme. This makes
+the endpoint safe to call as frequently as desired without keeping managed
+Postgres (Neon) awake between real due events.
 """
 from __future__ import annotations
 
@@ -9,11 +19,14 @@ import functools
 import logging
 import os
 import secrets
+import time
+from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from bot.message_handler import check_followups
 from bot import notify
+from shared import notify_due
 
 import db.postgres as pg
 import db.pg_auth_queries as pg_auth_queries
@@ -76,22 +89,49 @@ async def _get_all_linked_users(pool) -> list[dict]:
     return [{"id": str(r["id"]), "telegram_chat_id": r["telegram_chat_id"]} for r in rows]
 
 
-async def _check_anchor_transitions(pool, user_id: str, dispatch_fn) -> None:
-    """Check and fire any due anchor transitions for the given user."""
-    from datetime import datetime
+async def _get_linked_users_by_id(pool, user_ids: list[str]) -> list[dict]:
+    """Return linked-user rows scoped to *user_ids* — used once the Redis
+    next-due gate has already told us which users are actually due, so we
+    don't pay for a full-table scan on every notification-check invocation."""
+    if not user_ids:
+        return []
+    async with pg.get_conn(pool) as conn:
+        rows = await conn.fetch(
+            """
+            SELECT u.id, tc.telegram_chat_id
+            FROM users u
+            JOIN telegram_connections tc ON tc.user_id = u.id
+            WHERE tc.telegram_chat_id IS NOT NULL
+              AND tc.telegram_chat_id != ''
+              AND u.id = ANY($1::uuid[])
+            """,
+            user_ids,
+        )
+    return [{"id": str(r["id"]), "telegram_chat_id": r["telegram_chat_id"]} for r in rows]
+
+
+async def _check_anchor_transitions(pool, user_id: str, dispatch_fn) -> datetime | None:
+    """Check and fire any due anchor transitions for the given user.
+
+    Returns the next anchor-schedule boundary (start/end of a time block)
+    strictly after ``now``, or ``None`` if the user has no anchors at all.
+    Used by the caller to populate the Redis "anchor" due-component (see
+    shared/notify_due.py) — computed from data already fetched here, no
+    extra Postgres cost.
+    """
     from bot.handler_utils import get_current_anchor, is_anchor_active
     from bot.message_handler import _get_anchors_and_plan, _init_followup_states
-    from db.pg_queries.anchors import get_anchors
     from bot.anchor_trigger import trigger_anchor
 
+    now = datetime.now()
     try:
         from datetime import date as _date
         today = str(_date.today())
         anchors, plan = await _get_anchors_and_plan(pool, user_id, today)
+        await notify_due.set_cached_anchors(user_id, anchors)
         current_anchor = get_current_anchor(anchors)
         if current_anchor and is_anchor_active(current_anchor):
             if plan and current_anchor["id"] in plan.get("anchors", {}):
-                now = datetime.now()
                 await _init_followup_states(
                     pool, user_id, today, current_anchor["id"],
                     [t["id"] for t in plan["anchors"][current_anchor["id"]]["tasks"] if t.get("id")],
@@ -103,32 +143,116 @@ async def _check_anchor_transitions(pool, user_id: str, dispatch_fn) -> None:
                     user_id=user_id,
                     dispatch_fn=dispatch_fn,
                 )
-    except Exception as e:
-        logger.warning("Anchor transition check failed for user %s: %s", user_id, e)
+        return notify_due.next_anchor_boundary(anchors, now)
+    except Exception:
+        # Broad catch pre-dates this gating change (any downstream call —
+        # dispatch_fn, trigger_anchor — can raise many exception types this
+        # function can't enumerate). Logged at ERROR (not WARNING) with a
+        # traceback because a bug here is now indistinguishable, at the
+        # call site, from "this user simply has no anchors" — the caller
+        # branches on this returning None either way. This does not cause
+        # under-notification (the stale cached due-time just stays in the
+        # past, so the user is rechecked again next cycle), but a
+        # persistent failure here should be loud in logs rather than a
+        # quiet recurring WARNING.
+        logger.error(
+            "Anchor transition check failed for user_id=%s", user_id, exc_info=True
+        )
+        return None
+
+
+async def _recompute_and_cache_due(
+    user_id: str, anchor_next: datetime | None, followup_next: datetime | None
+) -> None:
+    """Write the freshest anchor/followup next-due estimates back to Redis.
+
+    Called once per user after a real check has run — self-perpetuating:
+    each real run recomputes its own future due time from data it already
+    fetched, so the cache never needs a separate background refresh job.
+    The "meeting" component is contributed independently by tether-premium's
+    drain_meeting_events via the same shared.notify_due.set_component_due —
+    this function only owns the anchor/followup components.
+    """
+    now_ts = time.time()
+    if anchor_next is not None:
+        await notify_due.set_component_due(user_id, "anchor", anchor_next.timestamp())
+    else:
+        # No anchors configured — nothing to re-check on a timer for this
+        # component; leave it unset (absent from the hash) rather than
+        # writing a synthetic "never" value, since a future anchor
+        # create/update will populate it and recompute the combined score.
+        pass
+    if followup_next is not None:
+        await notify_due.set_component_due(user_id, "followup", followup_next.timestamp())
+    else:
+        # No active followup rows right now — the anchor component's next
+        # boundary (which triggers _init_followup_states) is what will next
+        # wake this user for the followup side too.
+        pass
+    if anchor_next is None and followup_next is None:
+        logger.debug(
+            "notify_due: no anchor or followup component for user_id=%s — "
+            "relying on existing cache entries / fail-open on next check",
+            user_id,
+        )
+    _ = now_ts  # reserved for future observability (e.g. staleness metrics)
 
 
 async def _run_notification_check(pool, ws_manager) -> None:
-    """For each linked user: check anchor transitions, follow-ups, meeting events."""
+    """For each linked user: check anchor transitions, follow-ups, meeting events.
+
+    Gated by shared.notify_due: a single Redis range query decides which
+    users (if any) have real work due right now. When nothing is due, this
+    function returns without touching Postgres at all — see module docstring.
+    """
     if pool is None:
         logger.warning("_run_notification_check: no pool available, skipping")
         return
 
-    try:
-        users = await _get_all_linked_users(pool)
-    except Exception as e:
-        logger.error("_run_notification_check: failed to load users: %s", e)
+    now_ts = time.time()
+    due_user_ids = await notify_due.get_due_user_ids(now_ts)
+
+    if due_user_ids is None:
+        # Redis gating unavailable — fail open to the original, unfiltered
+        # behaviour rather than skipping notifications. ERROR (not WARNING):
+        # a one-off blip here is harmless, but if this fires on EVERY
+        # invocation it means gating has silently stopped working and the
+        # endpoint is back to a full Postgres scan every call — exactly the
+        # Neon-idle-spin-down regression this feature exists to prevent.
+        # There's no metric/counter for "N consecutive fail-opens" yet
+        # (follow-up item), so ERROR-level log visibility is the current
+        # signal that something needs attention.
+        logger.error(
+            "notify.check_gating_unavailable — falling back to full linked-user scan"
+        )
+        try:
+            users = await _get_all_linked_users(pool)
+        except Exception as e:
+            logger.error("_run_notification_check: failed to load users: %s", e)
+            return
+    elif not due_user_ids:
+        logger.debug("notify.check_skipped_empty")
         return
+    else:
+        logger.info("notify.check_processed n=%d", len(due_user_ids))
+        try:
+            users = await _get_linked_users_by_id(pool, due_user_ids)
+        except Exception as e:
+            logger.error("_run_notification_check: failed to load due users: %s", e)
+            return
 
     for user in users:
         user_id = str(user["id"])
+        anchor_next: datetime | None = None
         try:
             dispatch_fn = functools.partial(
                 notify.dispatch, pool=pool, ws_manager=ws_manager
             )
-            await _check_anchor_transitions(pool, user_id, dispatch_fn)
+            anchor_next = await _check_anchor_transitions(pool, user_id, dispatch_fn)
         except Exception as e:
             logger.warning("Anchor check failed for user %s: %s", user_id, e)
 
+        followup_next: datetime | None = None
         try:
             async def _notify_send(text, uid=user_id):
                 await notify.dispatch(
@@ -141,7 +265,7 @@ async def _run_notification_check(pool, ws_manager) -> None:
                 )
 
             send_fn = lambda text, uid=user_id: asyncio.ensure_future(_notify_send(text, uid))
-            await check_followups(pool, user_id, send_fn)
+            followup_next = await check_followups(pool, user_id, send_fn)
         except Exception as e:
             logger.warning("Followup check failed for user %s: %s", user_id, e)
 
@@ -166,6 +290,8 @@ async def _run_notification_check(pool, ws_manager) -> None:
             pass
         except Exception as e:
             logger.warning("Meeting event drain failed for user %s: %s", user_id, e)
+
+        await _recompute_and_cache_due(user_id, anchor_next, followup_next)
 
 
 async def _renew_expiring_watches(pool) -> None:

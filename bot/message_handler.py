@@ -55,6 +55,7 @@ from db.pg_queries import (
     create_node,
 )
 import db.postgres as pg
+from shared import notify_due
 import db.pg_auth_queries as pg_auth_queries
 from cryptography.fernet import Fernet
 
@@ -325,11 +326,33 @@ async def apply_mutations(mutations: list[dict], pool, user_id: str, today: str)
                 logger.error("Failed to apply mutation %s: %s", m, e)
 
 
-async def check_followups(pool, user_id: str, send_fn) -> None:
-    """Called every polling cycle. Sends batched pre/post-ack messages for due tasks."""
-    from datetime import datetime, date
-    now = datetime.now()
-    today = str(date.today())
+def _parse_ts(ts_str: str | None, *, default: "datetime") -> "datetime":
+    from datetime import datetime
+    if not ts_str:
+        return default
+    try:
+        return datetime.fromisoformat(ts_str)
+    except ValueError:
+        return default
+
+
+def classify_followup_row(row: dict, config: dict, now: "datetime") -> tuple[str | None, "datetime | None"]:
+    """Pure classification of a single followup_state row against its resolved
+    config: is it due right now, and if not (or after it fires), when's the
+    next candidate check time?
+
+    Returns ``(queue, next_candidate)``:
+      - ``queue`` is ``"pre"``/``"post"`` if the row is due right now for that
+        ack phase, else ``None``.
+      - ``next_candidate`` is the earliest ``datetime`` this row could next
+        become due — ``None`` if the row has exhausted its allotted pings for
+        its current phase (no further automatic check needed for it).
+
+    No I/O — depends only on the row, its config, and the current time, so
+    the next-due estimate used for Redis gating (see shared/notify_due.py)
+    is independently testable without a database.
+    """
+    from datetime import datetime, timedelta
 
     def minutes_since(ts_str: str | None) -> float:
         if not ts_str:
@@ -340,12 +363,55 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
             return float('inf')
         return (now - ts).total_seconds() / 60
 
+    if row["acknowledged_at"] is None:
+        ref_ts = row["last_ping_at"] or row["sequence_started_at"]
+        if row["pre_ack_pings_sent"] >= config["pre_ack_max_pings"]:
+            return None, None
+        if minutes_since(ref_ts) >= config["pre_ack_interval_min"]:
+            # Due now — will be pinged this pass. The next candidate (one
+            # interval after "now") is an approximation: the precise value
+            # depends on the ping actually being recorded by the caller.
+            return "pre", now + timedelta(minutes=config["pre_ack_interval_min"])
+        return None, _parse_ts(ref_ts, default=now) + timedelta(minutes=config["pre_ack_interval_min"])
+    else:
+        ref_ts = row["last_ping_at"] or row["acknowledged_at"]
+        if row["post_ack_pings_sent"] >= config["post_ack_pings"]:
+            return None, None
+        if minutes_since(ref_ts) >= config["post_ack_interval_min"]:
+            return "post", now + timedelta(minutes=config["post_ack_interval_min"])
+        return None, _parse_ts(ref_ts, default=now) + timedelta(minutes=config["post_ack_interval_min"])
+
+
+async def check_followups(pool, user_id: str, send_fn):
+    """Called every polling cycle. Sends batched pre/post-ack messages for due tasks.
+
+    Returns the earliest ``datetime`` at which a currently-active-but-not-yet-due
+    followup row could next become due (or ``None`` if there are no active rows
+    at all, i.e. the followup component is entirely governed by the next anchor
+    trigger). Callers use this to populate the Redis next-due gate
+    (``shared.notify_due.set_component_due(user_id, "followup", ...)``) so a
+    future invocation can skip this Postgres round-trip entirely when nothing
+    is due yet — see shared/notify_due.py for the full gating scheme.
+    """
+    from datetime import datetime, date
+    now = datetime.now()
+    today = str(date.today())
+
+    next_candidate: datetime | None = None
+
+    def _consider(candidate: datetime | None) -> None:
+        nonlocal next_candidate
+        if candidate is None:
+            return
+        if next_candidate is None or candidate < next_candidate:
+            next_candidate = candidate
+
     # Phase 1: load all data (connection held only for reads + config lookups)
     async with pg.get_conn(pool, user_id) as conn:
         rows = await get_active_followup_states(conn, today)
         if not rows:
             logger.debug("check_followups: no active followup states for %s", today)
-            return
+            return None
 
         pre_ack_due = []
         post_ack_due = []
@@ -365,16 +431,12 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
                 logger.debug("check_followups: skipping task %s — no followup config",
                              row["task_id"])
                 continue
-            if row["acknowledged_at"] is None:
-                ref_ts = row["last_ping_at"] or row["sequence_started_at"]
-                if (row["pre_ack_pings_sent"] < config["pre_ack_max_pings"]
-                        and minutes_since(ref_ts) >= config["pre_ack_interval_min"]):
-                    pre_ack_due.append(row)
-            else:
-                ref_ts = row["last_ping_at"] or row["acknowledged_at"]
-                if (row["post_ack_pings_sent"] < config["post_ack_pings"]
-                        and minutes_since(ref_ts) >= config["post_ack_interval_min"]):
-                    post_ack_due.append(row)
+            queue, candidate = classify_followup_row(row, config, now)
+            _consider(candidate)
+            if queue == "pre":
+                pre_ack_due.append(row)
+            elif queue == "post":
+                post_ack_due.append(row)
 
         plan = await get_plan(conn, today) if (pre_ack_due or post_ack_due) else {}
 
@@ -427,6 +489,8 @@ async def check_followups(pool, user_id: str, send_fn) -> None:
             async with pg.get_conn(pool, user_id) as conn:
                 for row in anchor_rows:
                     await record_ping(conn, row["id"], "post", now)
+
+    return next_candidate
 
 
 # ---------------------------------------------------------------------------
@@ -1423,11 +1487,41 @@ def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> No
             _active_chat = last_chat_id if last_chat_id else chat_id
             _send = lambda m, cid=_active_chat: _send_telegram(token, cid, m)
 
+            # Meeting events are PUSH-based (arrive via the WS listener into
+            # an in-process queue at unpredictable times), not time-based —
+            # there's no "next_due timestamp" to precompute for them, so they
+            # don't fit the Redis due-time gate below at all. drain_meeting_events
+            # already self-gates for free (checks its queue is non-empty before
+            # ever touching Postgres — see tether_premium docstring), so it is
+            # deliberately EXEMPT from the is_due() gate and always called: if
+            # it were nested inside the gate, a meeting event could arrive for
+            # a user with no anchor/followup due and sit un-drained until
+            # something else made that user "due" again.
             if last_user_id:
+                try:
+                    from tether_premium.bot.scheduling.events import drain_meeting_events
+                    loop.run_until_complete(drain_meeting_events(pool=pool, user_id=last_user_id, send_fn=_send))
+                except ImportError:
+                    pass
+                except Exception as _de:
+                    logger.warning("Meeting event drain failed: %s", _de)
+
+            # Redis next-due gate — this loop ticks every ~30s (Telegram
+            # long-poll timeout) regardless of whether anything is actually
+            # due; without this check every tick would hit Postgres 2-3x via
+            # _get_anchors_and_plan/check_followups even when idle, defeating
+            # managed-Postgres (Neon) auto-suspend. See shared/notify_due.py
+            # for the full scheme. Gated ONCE per user (not per sub-check) —
+            # anchor-transition can create new followup rows that
+            # check_followups then needs to see in the SAME pass, so splitting
+            # the gate per sub-function risks skipping just-created rows via a
+            # stale followup-only cache entry.
+            if last_user_id and loop.run_until_complete(notify_due.is_due(last_user_id)):
                 _anchors_and_plan = loop.run_until_complete(
                     _get_anchors_and_plan(pool, last_user_id, _today)
                 )
                 _anchors, _plan = _anchors_and_plan
+                loop.run_until_complete(notify_due.set_cached_anchors(last_user_id, _anchors))
                 _current_anchor = get_current_anchor(_anchors)
                 _anchor_running = _current_anchor and is_anchor_active(_current_anchor)
                 if not _anchor_running:
@@ -1441,16 +1535,21 @@ def run_polling(token: str, chat_id: str, poll_user_id: str | None = None) -> No
                             _dt.now()
                         ))
 
-            # Run follow-up pings for the active user
-            if last_user_id:
-                loop.run_until_complete(check_followups(pool, last_user_id, _send))
-                try:
-                    from tether_premium.bot.scheduling.events import drain_meeting_events
-                    loop.run_until_complete(drain_meeting_events(pool=pool, user_id=last_user_id, send_fn=_send))
-                except ImportError:
-                    pass
-                except Exception as _de:
-                    logger.warning("Meeting event drain failed: %s", _de)
+                _followup_next = loop.run_until_complete(check_followups(pool, last_user_id, _send))
+
+                # Recompute-after-run: write fresh anchor/followup next-due
+                # estimates back to Redis from data just fetched above (zero
+                # extra Postgres cost). Self-perpetuating — no separate
+                # background refresh job needed.
+                _anchor_next = notify_due.next_anchor_boundary(_anchors, _dt.now())
+                if _anchor_next is not None:
+                    loop.run_until_complete(
+                        notify_due.set_component_due(last_user_id, "anchor", _anchor_next.timestamp())
+                    )
+                if _followup_next is not None:
+                    loop.run_until_complete(
+                        notify_due.set_component_due(last_user_id, "followup", _followup_next.timestamp())
+                    )
         except Exception as e:
             logger.error("Polling error: %s", e)
             time.sleep(5)
