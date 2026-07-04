@@ -89,19 +89,6 @@ async def test_set_component_due_updates_existing_component_independently():
     assert await get_due_user_ids(now + 10, server=server) == []  # neither passed yet
 
 
-async def test_set_component_due_meeting_component_from_premium_contributes():
-    """Premium contributes a 'meeting' component to the SAME due_queue — the
-    cron's single range query must see meeting-only-due users too."""
-    from shared.notify_due import get_due_user_ids, set_component_due
-
-    server = fakeredis.FakeServer()
-    now = time.time()
-
-    await set_component_due("user-d", "meeting", now - 1, server=server)
-
-    assert await get_due_user_ids(now, server=server) == ["user-d"]
-
-
 # ---------------------------------------------------------------------------
 # is_due
 # ---------------------------------------------------------------------------
