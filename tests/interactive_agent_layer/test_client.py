@@ -1,6 +1,8 @@
 """Tests for LayerClient (contracts 7-8)."""
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -104,6 +106,47 @@ async def test_get_status(layer_client_with_app):
     status = await lc.get_status(sid)
     assert status["session_id"] == sid
     assert status["user_id"] == "user4"
+
+
+async def test_respond_to_permission_resolves_future_approve(layer_client_with_app, layer):
+    """LayerClient.respond_to_permission POSTs {"approve": True} and resolves the future."""
+    lc = layer_client_with_app
+    sid = await lc.start_session(
+        user_id="user6", user_ws_id="wsid6", agent_version="v1",
+        options={}, user_message="approve me",
+    )
+    session = layer.sessions[sid]
+    fut = asyncio.get_event_loop().create_future()
+    session.permission_pending["req-42"] = fut
+
+    await lc.respond_to_permission("req-42", True)
+
+    assert fut.done()
+    assert fut.result() is True
+
+
+async def test_respond_to_permission_resolves_future_deny(layer_client_with_app, layer):
+    """LayerClient.respond_to_permission POSTs {"approve": False} and resolves the future."""
+    lc = layer_client_with_app
+    sid = await lc.start_session(
+        user_id="user7", user_ws_id="wsid7", agent_version="v1",
+        options={}, user_message="deny me",
+    )
+    session = layer.sessions[sid]
+    fut = asyncio.get_event_loop().create_future()
+    session.permission_pending["req-43"] = fut
+
+    await lc.respond_to_permission("req-43", False)
+
+    assert fut.done()
+    assert fut.result() is False
+
+
+async def test_respond_to_permission_not_found_raises(layer_client_with_app):
+    """A request_id with no pending future (already resolved / never existed) raises."""
+    lc = layer_client_with_app
+    with pytest.raises(httpx.HTTPStatusError):
+        await lc.respond_to_permission("no-such-request", True)
 
 
 async def test_turn_yields_events(layer_client_with_app):

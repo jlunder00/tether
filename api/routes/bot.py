@@ -8,9 +8,44 @@ from db.pool_middleware import get_db_conn
 from api.auth import auth_dependency, ws_auth_dependency
 from bot.agent_dispatch import dispatch_message
 from bot.message_handler import handle_message
+from config.loader import config
+from interactive_agent_layer.client import LayerClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+async def _respond_to_permission(request_id, decision, user_id: str) -> None:
+    """POST the user's permission decision to the interactive-agent-layer.
+
+    decision is "approve" or "deny" (chatStore.respondToPermission in the
+    frontend); mapped here to the boolean PermissionRespondRequest.approve
+    the layer expects (interactive_agent_layer/server.py: PermissionRespondRequest).
+
+    Failures (layer unreachable, request_id already resolved/timed out, bad
+    request_id, etc.) are logged and swallowed — never raised to the caller.
+    The gate's own permission timeout (interactive_agent_layer/permissions.py)
+    is the backstop: a lost POST here just means the user waits for that
+    timeout to fire (denial) instead of getting an instant response.
+    """
+    if not request_id:
+        logger.warning(
+            "bot_chat: permission_response missing request_id, dropping. user_id=%s",
+            user_id,
+        )
+        return
+
+    approve = decision == "approve"
+    base_url: str = config.get("agent_layer.base_url", "http://127.0.0.1:5003")
+    try:
+        layer = LayerClient(base_url)
+        await layer.respond_to_permission(request_id, approve)
+    except Exception as exc:
+        logger.warning(
+            "bot_chat: permission_response POST failed request_id=%s decision=%r"
+            " user_id=%s: %s",
+            request_id, decision, user_id, exc,
+        )
 
 
 async def _cancel_and_wait(task: asyncio.Task, timeout: float = 5.0) -> None:
@@ -316,15 +351,43 @@ async def bot_chat(websocket: WebSocket,
                 )
             )
 
-            # Race session completion against the next incoming client message.
-            recv_task = asyncio.create_task(websocket.receive_json())
-            done, _pending = await asyncio.wait(
-                {session_task, recv_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            # Race session completion against incoming client frames — re-arming
+            # recv_task after each one so MULTIPLE mid-session frames (e.g. a
+            # permission_response, possibly followed by another) are all
+            # consumed within this turn. The old single-shot fall-through only
+            # ever looked at the FIRST non-stop frame and then just awaited the
+            # session to completion — any second frame (like a second
+            # permission_response, or the response to the layer's permission
+            # request at all) was silently dropped. That drop is exactly why
+            # permission_response never reached the layer before this fix.
+            stopped = False
+            while not session_task.done():
+                recv_task = asyncio.create_task(websocket.receive_json())
+                done, _pending = await asyncio.wait(
+                    {session_task, recv_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
 
-            # --- recv_task won (client sent something mid-session) ---
-            if recv_task in done and session_task not in done:
+                if recv_task not in done:
+                    # session_task finished first — recv_task is still pending.
+                    # Cancel and clean it up before leaving the loop.
+                    recv_task.cancel()
+                    try:
+                        await recv_task
+                    except asyncio.CancelledError:
+                        pass
+                    except WebSocketDisconnect:
+                        # Client disconnected while awaiting: propagate so the
+                        # outer handler can cancel session_task and return cleanly.
+                        raise
+                    except Exception as e:
+                        logger.warning(
+                            "bot_chat: unexpected error awaiting cancelled recv_task,"
+                            " user_id=%s: %s",
+                            user_id, e, exc_info=True,
+                        )
+                    break
+
                 try:
                     incoming = recv_task.result()
                 except Exception as exc:
@@ -333,50 +396,38 @@ async def bot_chat(websocket: WebSocket,
                     await _cancel_and_wait(session_task)
                     raise exc
 
-                if incoming.get("type") == "stop":
+                itype = incoming.get("type")
+
+                if itype == "stop":
                     # Await cancellation before sending "Stopped." to guarantee no
                     # further status frames from the session arrive after the ack.
                     await _cancel_and_wait(session_task)
                     await websocket.send_json({"type": "status", "content": "Stopped."})
                     await websocket.send_json({"type": "turn_complete", "final_text": "", "session_id": ""})
-                    session_task = None
-                    continue  # Back to outer loop — ready for next message
+                    stopped = True
+                    break
 
-                # Non-stop message mid-session (UI race / protocol error):
-                # drop it, let the session finish. recv_task is done (no orphan).
+                if itype == "permission_response":
+                    # Forward to the layer and keep looping — the session is
+                    # still running, awaiting this (or another) decision.
+                    await _respond_to_permission(
+                        incoming.get("request_id"), incoming.get("decision"), user_id,
+                    )
+                    continue
+
+                # Any other non-stop, non-permission_response frame (UI race or
+                # protocol error): drop it and keep looping so the session can
+                # still finish, or the client can still stop it / respond to a
+                # permission request afterwards.
                 logger.warning(
                     "bot_chat: mid-session message type=%r dropped (session continues),"
                     " user_id=%s",
-                    incoming.get("type"), user_id,
+                    itype, user_id,
                 )
-                # Fall through to await session_task, with recv_task cleanup in finally.
 
-            # --- session_task won (or fell through from non-stop mid-session case) ---
-            # Await session if not yet done; always clean up recv_task.
-            try:
-                if not session_task.done():
-                    await session_task
-            finally:
-                # Cancel and clean up recv_task in all cases (normal, exception, cancel).
-                if not recv_task.done():
-                    recv_task.cancel()
-                    try:
-                        await recv_task
-                    except asyncio.CancelledError:
-                        pass
-                    except WebSocketDisconnect:
-                        # Client disconnected while awaiting session: propagate so
-                        # the outer handler can cancel session_task and return cleanly.
-                        raise
-                    except Exception as e:
-                        logger.warning(
-                            "bot_chat: unexpected error awaiting cancelled recv_task,"
-                            " user_id=%s: %s",
-                            user_id, e, exc_info=True,
-                        )
-
-            if session_task is None or session_task.cancelled():
-                continue
+            if stopped:
+                session_task = None
+                continue  # Back to outer loop — ready for next message
 
             # Re-raise any exception from handle_message so error handlers below
             # can send a user-facing error frame and keep the connection alive.
