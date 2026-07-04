@@ -236,14 +236,13 @@ async def _run_notification_check(pool, ws_manager) -> None:
 
     for user in users:
         user_id = str(user["id"])
-        anchor_next: datetime | None = None
-        try:
-            dispatch_fn = functools.partial(
-                notify.dispatch, pool=pool, ws_manager=ws_manager
-            )
-            anchor_next = await _check_anchor_transitions(pool, user_id, dispatch_fn)
-        except Exception as e:
-            logger.warning("Anchor check failed for user %s: %s", user_id, e)
+        # No try/except here: _check_anchor_transitions already catches and
+        # logs everything internally (returning None on failure) — an outer
+        # catch here could never fire and was dead code.
+        dispatch_fn = functools.partial(
+            notify.dispatch, pool=pool, ws_manager=ws_manager
+        )
+        anchor_next = await _check_anchor_transitions(pool, user_id, dispatch_fn)
 
         followup_next: datetime | None = None
         try:
