@@ -1,6 +1,8 @@
 """Internal API routes — not mounted in OpenAPI schema.
 
-Called by Fly.io cron machines. All endpoints require X-Internal-Token header.
+Invoked by an external scheduler (exact mechanism/cadence is deployment
+config, not tracked in this repo). All endpoints require X-Internal-Token
+header.
 
 Neon/idle-spin-down note
 -------------------------
@@ -52,7 +54,8 @@ def _verify_internal_token(request: Request) -> None:
 
 @router.post("/notifications/check")
 async def check_notifications(request: Request, background_tasks: BackgroundTasks):
-    """Called by Fly.io cron every minute. Queues notification check as BackgroundTask."""
+    """Queues a notification check as a BackgroundTask. Gated by shared.notify_due
+    (see module docstring), so safe to invoke at whatever cadence the caller uses."""
     _verify_internal_token(request)
     pool = request.app.state.pool
     ws_manager = getattr(request.app.state, "ws_manager", None)

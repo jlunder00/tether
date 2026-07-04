@@ -58,7 +58,9 @@ def _current_anchor(anchors: list[dict], now: Optional[datetime] = None) -> dict
     return active
 
 
-# ─── 9 Consolidated MCP Tools ───────────────────────────────────────────────
+# ─── MCP Tools (16 registered; consolidation toward a smaller intent-based
+# surface is tracked separately — see cc-context-store/tether/docs/mcp/
+# mcp-consolidation-spec.md) ─────────────────────────────────────────────────
 
 @mcp.tool()
 async def upsert_tasks(tasks: list[dict]) -> list[dict]:
