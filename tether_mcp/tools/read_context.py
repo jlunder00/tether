@@ -48,8 +48,8 @@ async def _build_node_response(
     _cascade_depth tracks levels descended from the read_context source node;
     when it reaches N, _add_children will not recurse further.
     """
-    from db.pg_queries import get_node, get_children, get_sections, get_node_tasks
-    from db.pg_queries.node_memory import get_node_summary, log_node_read, get_node_tree_distance
+    from db.pg_queries import get_node, get_sections, get_node_tasks
+    from db.pg_queries.node_memory import get_node_summary, log_node_read
     from tether_mcp.write_modes import format_cat_n, line_count
 
     # Ensure we have full node dict (with section_types and children_count)
