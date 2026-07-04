@@ -290,3 +290,68 @@ async def test_next_anchor_boundary_returns_none_when_all_rows_malformed():
 
     anchors = [{"id": "bad", "time": "garbage"}]
     assert next_anchor_boundary(anchors, _dt(8, 0)) is None
+
+
+# ---------------------------------------------------------------------------
+# Startup self-check + log-once-per-process for "REDIS_URL not configured"
+#
+# This is the observability fix for PR #470: the bot process shipped
+# without REDIS_URL in supervisord.conf, and the only symptom was a
+# per-tick WARNING that was easy to miss. log_startup_status() gives one
+# unmissable line at process boot; _warn_no_redis_configured_once() (used
+# internally by _get_client) collapses what used to be per-call WARNING
+# spam into a single ERROR the first time it's actually hit.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_no_redis_warned_flag():
+    """The "logged once" flag is process-global state — reset it around
+    every test in this module so tests don't leak into each other."""
+    import shared.notify_due as notify_due_module
+
+    notify_due_module._logged_no_redis_configured = False
+    yield
+    notify_due_module._logged_no_redis_configured = False
+
+
+async def test_log_startup_status_logs_info_when_redis_configured(monkeypatch, caplog):
+    from shared import notify_due
+
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+    with caplog.at_level("INFO", logger="shared.notify_due"):
+        notify_due.log_startup_status()
+
+    assert any("REDIS_URL configured" in r.message for r in caplog.records)
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
+
+
+async def test_log_startup_status_logs_error_when_redis_not_configured(monkeypatch, caplog):
+    from shared import notify_due
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with caplog.at_level("ERROR", logger="shared.notify_due"):
+        notify_due.log_startup_status()
+
+    assert any(
+        r.levelname == "ERROR" and "REDIS_URL not set" in r.message
+        for r in caplog.records
+    )
+
+
+async def test_no_redis_configured_warning_logs_only_once_per_process(monkeypatch, caplog):
+    """Repeated gated calls (e.g. every ~30s polling tick) with no REDIS_URL
+    must not spam the log — only the first call logs anything."""
+    from shared import notify_due
+
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with caplog.at_level("ERROR", logger="shared.notify_due"):
+        await notify_due.is_due("user-1", time.time())
+        await notify_due.is_due("user-1", time.time())
+        await notify_due.get_due_user_ids(time.time())
+        await notify_due.set_component_due("user-1", "anchor", time.time())
+
+    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(error_records) == 1, (
+        f"expected exactly one ERROR log across all 4 calls, got {len(error_records)}: "
+        f"{[r.message for r in error_records]}"
+    )

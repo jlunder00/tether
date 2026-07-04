@@ -1565,6 +1565,13 @@ def main() -> None:
     )
     logger.info("log level: %s", level_name)
 
+    # Startup self-check: log once whether this process can see REDIS_URL.
+    # run_polling()'s notify_due gating is the primary target of the Neon
+    # idle-spin-down fix — this is the single check that would have made
+    # the missing REDIS_URL on [program:bot] (PR #470) immediately visible
+    # in logs instead of silently inert gating.
+    notify_due.log_startup_status()
+
     # Load the vault key and look up the polling user's bot token from DB.
     # Per Jason's Phase 1 override: no env-var fallback. The token lives in
     # telegram_connections.bot_token_encrypted only.
