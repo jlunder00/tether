@@ -58,6 +58,21 @@ class LayerClient:
         resp = await self.client.post(f"{self.base_url}/session/{session_id}/interrupt")
         resp.raise_for_status()
 
+    async def respond_to_permission(self, request_id: str, approve: bool) -> None:
+        """POST the user's decision for a pending permission_request.
+
+        Matches PermissionRespondRequest (interactive_agent_layer/server.py) —
+        body is exactly {"approve": bool}, nothing else. Raises on 404 (the
+        request already resolved, timed out, or never existed) or any other
+        HTTP error; callers should treat that as best-effort and swallow it —
+        the gate's own permission timeout is the backstop.
+        """
+        resp = await self.client.post(
+            f"{self.base_url}/permission/{request_id}/respond",
+            json={"approve": approve},
+        )
+        resp.raise_for_status()
+
     async def get_status(self, session_id: str) -> dict:
         resp = await self.client.get(f"{self.base_url}/session/{session_id}/status")
         resp.raise_for_status()
