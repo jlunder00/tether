@@ -7,10 +7,17 @@ Neon/idle-spin-down note
 ``_run_notification_check`` is gated by ``shared.notify_due`` — a Redis
 next-due cache — so that regardless of how often this endpoint is actually
 invoked (by whatever scheduler ends up calling it), it costs nothing but a
-single Redis range query when no user has any anchor/followup/meeting-event
-work due right now. See shared/notify_due.py for the full scheme. This makes
-the endpoint safe to call as frequently as desired without keeping managed
+single Redis range query when no user has any anchor/followup work due
+right now. See shared/notify_due.py for the full scheme. This makes the
+endpoint safe to call as frequently as desired without keeping managed
 Postgres (Neon) awake between real due events.
+
+Note: this endpoint does NOT drain meeting events. `drain_meeting_events`
+reads from an in-process queue owned by the BOT process
+(`tether_premium.bot.scheduling.events`, populated by a WS-listener thread
+started only inside `bot/message_handler.py`'s `run_polling()`) — this API
+process cannot see that queue, so calling it here would always be a no-op.
+Meeting-event draining happens exclusively via the bot's polling loop.
 """
 from __future__ import annotations
 
@@ -199,11 +206,14 @@ async def _recompute_and_cache_due(
 
 
 async def _run_notification_check(pool, ws_manager) -> None:
-    """For each linked user: check anchor transitions, follow-ups, meeting events.
+    """For each linked user: check anchor transitions and follow-ups.
 
     Gated by shared.notify_due: a single Redis range query decides which
     users (if any) have real work due right now. When nothing is due, this
     function returns without touching Postgres at all — see module docstring.
+
+    Does not drain meeting events — see the module docstring's note on why
+    that would always be a no-op in this (API) process.
     """
     if pool is None:
         logger.warning("_run_notification_check: no pool available, skipping")
@@ -268,28 +278,6 @@ async def _run_notification_check(pool, ws_manager) -> None:
             followup_next = await check_followups(pool, user_id, send_fn)
         except Exception as e:
             logger.warning("Followup check failed for user %s: %s", user_id, e)
-
-        try:
-            from tether_premium.bot.scheduling.events import drain_meeting_events
-
-            async def _notify_meeting_send(text, uid=user_id):
-                await notify.dispatch(
-                    uid,
-                    "meeting_event",
-                    text,
-                    pool,
-                    priority="important",
-                    ws_manager=ws_manager,
-                )
-
-            meeting_send = lambda text, uid=user_id: asyncio.ensure_future(
-                _notify_meeting_send(text, uid)
-            )
-            await drain_meeting_events(pool=pool, user_id=user_id, send_fn=meeting_send)
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.warning("Meeting event drain failed for user %s: %s", user_id, e)
 
         await _recompute_and_cache_due(user_id, anchor_next, followup_next)
 
