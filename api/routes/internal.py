@@ -176,33 +176,16 @@ async def _recompute_and_cache_due(
     Called once per user after a real check has run — self-perpetuating:
     each real run recomputes its own future due time from data it already
     fetched, so the cache never needs a separate background refresh job.
-    The "meeting" component is contributed independently by tether-premium's
-    drain_meeting_events via the same shared.notify_due.set_component_due —
-    this function only owns the anchor/followup components.
+    A ``None`` estimate means "nothing to re-check on a timer for this
+    component right now" — left unset (absent from the hash) rather than
+    writing a synthetic "never" value, so a future write (e.g. an anchor
+    create/update, or the next anchor boundary re-triggering follow-ups)
+    naturally repopulates and recomputes the combined score.
     """
-    now_ts = time.time()
     if anchor_next is not None:
         await notify_due.set_component_due(user_id, "anchor", anchor_next.timestamp())
-    else:
-        # No anchors configured — nothing to re-check on a timer for this
-        # component; leave it unset (absent from the hash) rather than
-        # writing a synthetic "never" value, since a future anchor
-        # create/update will populate it and recompute the combined score.
-        pass
     if followup_next is not None:
         await notify_due.set_component_due(user_id, "followup", followup_next.timestamp())
-    else:
-        # No active followup rows right now — the anchor component's next
-        # boundary (which triggers _init_followup_states) is what will next
-        # wake this user for the followup side too.
-        pass
-    if anchor_next is None and followup_next is None:
-        logger.debug(
-            "notify_due: no anchor or followup component for user_id=%s — "
-            "relying on existing cache entries / fail-open on next check",
-            user_id,
-        )
-    _ = now_ts  # reserved for future observability (e.g. staleness metrics)
 
 
 async def _run_notification_check(pool, ws_manager) -> None:
