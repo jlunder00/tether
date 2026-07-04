@@ -86,6 +86,14 @@ async def lifespan(app):
     import os as _startup_os
     if _startup_os.environ.get("ENVIRONMENT") == "production":
         _check_jwt_secret(cfg.JWT_SECRET)
+
+    # Startup self-check: log once whether this process can see REDIS_URL.
+    # This is the single check that would have made the missing REDIS_URL
+    # on [program:bot] (PR #470) immediately visible instead of silently
+    # inert Neon idle-spin-down gating.
+    from shared import notify_due as _notify_due
+    _notify_due.log_startup_status()
+
     async with _pool_lifespan(app):
         # Initialize credentials vault if key is configured
         from api.credentials_vault import CredentialsVault

@@ -74,6 +74,12 @@ _DUE_QUEUE_KEY = "notify:due_queue"
 _DUE_HASH_PREFIX = "notify:due"
 _ANCHORS_KEY_PREFIX = "notify:anchors"
 
+# Set once this process has logged that REDIS_URL is unconfigured, so the
+# warning fires once (at ERROR — this is a config problem, not a transient
+# blip) instead of spamming on every gated call (e.g. every ~30s polling
+# tick). See _warn_no_redis_configured_once() and log_startup_status().
+_logged_no_redis_configured = False
+
 # Safety-net TTL on per-user cache entries. If a code path ever fails to
 # recompute-after-run (a bug), the entry eventually expires and reads fall
 # back to the "unknown user" fail-open path rather than staying wrong forever.
@@ -97,6 +103,46 @@ def anchors_cache_key(user_id: str) -> str:
     return f"{_ANCHORS_KEY_PREFIX}:{user_id}"
 
 
+def _warn_no_redis_configured_once() -> None:
+    """Log, once per process, that REDIS_URL is unconfigured.
+
+    This fires only for the "genuinely no REDIS_URL in this process's
+    environment" case (not test overrides via redis_client/server, and not
+    real Redis errors — those keep their own per-occurrence logging).
+    ERROR level and one-shot: this is exactly the class of bug that shipped
+    silently in PR #468 (bot process missing REDIS_URL in supervisord.conf,
+    fixed in PR #470) — a config gap, not a transient blip, and a per-tick
+    WARNING spam was easy to miss/ignore in logs.
+    """
+    global _logged_no_redis_configured
+    if _logged_no_redis_configured:
+        return
+    _logged_no_redis_configured = True
+    logger.error(
+        "notify_due: REDIS_URL not set in this process — Neon idle-spin-down "
+        "gating fails open (always 'due') for every check made from here. "
+        "If this process calls shared.notify_due (currently: api, bot), the "
+        "gating fix is silently doing nothing in this process — check "
+        "supervisord.conf's [program:*] environment= line for REDIS_URL."
+    )
+
+
+def log_startup_status() -> None:
+    """Log this process's notify_due/Redis configuration once, at startup.
+
+    Call this once during process startup (e.g. api's lifespan, bot's
+    main()) — it's the single check that would have made the missing
+    REDIS_URL on [program:bot] (see PR #470) immediately obvious in logs
+    instead of silently inert gating discovered only via later investigation.
+    """
+    if get_redis_url():
+        logger.info(
+            "notify_due: REDIS_URL configured — Neon idle-spin-down gating active"
+        )
+    else:
+        _warn_no_redis_configured_once()
+
+
 async def _get_client(
     redis_client: Any = None,
     redis_url: str | None = None,
@@ -111,6 +157,7 @@ async def _get_client(
         return faioredis.FakeRedis(server=server)
     url = redis_url or get_redis_url()
     if url is None:
+        _warn_no_redis_configured_once()
         return None
     import redis.asyncio as aioredis
 
@@ -137,11 +184,8 @@ async def set_component_due(
     """
     client = await _get_client(redis_client, redis_url, server)
     if client is None:
-        logger.warning(
-            "notify_due.set_component_due: no Redis configured — "
-            "cache write skipped for user_id=%s component=%s",
-            user_id, component,
-        )
+        # _get_client already logged the (once-per-process) "not configured"
+        # ERROR — no per-call log here to avoid ~30s-tick spam.
         return
     try:
         hkey = _due_hash_key(user_id)
@@ -177,10 +221,8 @@ async def get_due_user_ids(
         now = _time.time()
     client = await _get_client(redis_client, redis_url, server)
     if client is None:
-        logger.warning(
-            "notify_due.get_due_user_ids: no Redis configured — "
-            "gating unavailable, caller should fall back to unfiltered check"
-        )
+        # _get_client already logged the (once-per-process) "not configured"
+        # ERROR — no per-call log here to avoid spam on every cron tick.
         return None
     try:
         members = await client.zrangebyscore(_DUE_QUEUE_KEY, "-inf", now)
@@ -252,10 +294,8 @@ async def set_cached_anchors(
 
     client = await _get_client(redis_client, redis_url, server)
     if client is None:
-        logger.warning(
-            "notify_due.set_cached_anchors: no Redis configured — "
-            "cache write skipped for user_id=%s", user_id,
-        )
+        # _get_client already logged the (once-per-process) "not configured"
+        # ERROR — no per-call log here to avoid spam.
         return
     try:
         await client.set(
