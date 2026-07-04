@@ -143,12 +143,24 @@ def log_startup_status() -> None:
         _warn_no_redis_configured_once()
 
 
+_client_cache: dict[str, Any] = {}
+
+
 async def _get_client(
     redis_client: Any = None,
     redis_url: str | None = None,
     server: Any = None,
 ) -> Any:
-    """Build (or reuse) an async Redis client. Returns None if unavailable."""
+    """Build (or reuse) an async Redis client. Returns None if unavailable.
+
+    Real (URL-based) clients are cached module-level, keyed by URL, so
+    repeated gated calls (e.g. every ~30s polling tick) reuse one
+    redis.asyncio client/connection pool instead of constructing a new one
+    on every call. Test-injection paths (``redis_client=...`` or
+    ``server=...``) are deliberately NOT cached — each call still returns
+    the caller-provided client or a fresh ``FakeRedis`` wrapper, exactly as
+    before, so test isolation is unaffected.
+    """
     if redis_client is not None:
         return redis_client
     if server is not None:
@@ -159,9 +171,14 @@ async def _get_client(
     if url is None:
         _warn_no_redis_configured_once()
         return None
+    cached = _client_cache.get(url)
+    if cached is not None:
+        return cached
     import redis.asyncio as aioredis
 
-    return aioredis.from_url(url)
+    client = aioredis.from_url(url)
+    _client_cache[url] = client
+    return client
 
 
 async def set_component_due(
