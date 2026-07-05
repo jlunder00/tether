@@ -47,10 +47,28 @@ async def create_node(
     return _node(row)
 
 
-async def get_node(conn: asyncpg.Connection, node_id: str) -> dict | None:
-    row = await conn.fetchrow(
-        "SELECT * FROM context_nodes WHERE id = $1", _uuid.UUID(node_id)
-    )
+async def get_node(
+    conn: asyncpg.Connection,
+    node_id: str,
+    *,
+    user_id: str | None = None,
+) -> dict | None:
+    """Fetch a single context node by id.
+
+    user_id: RLS hardening — when provided, binds this value directly as an
+    explicit `AND user_id = $N` filter instead of relying solely on
+    RLS/the session GUC. When None (default), behavior is unchanged
+    (RLS-only), backward compatible.
+    """
+    if user_id is not None:
+        row = await conn.fetchrow(
+            "SELECT * FROM context_nodes WHERE id = $1 AND user_id = $2::uuid",
+            _uuid.UUID(node_id), _uuid.UUID(user_id),
+        )
+    else:
+        row = await conn.fetchrow(
+            "SELECT * FROM context_nodes WHERE id = $1", _uuid.UUID(node_id)
+        )
     if not row:
         return None
     d = _node(row)

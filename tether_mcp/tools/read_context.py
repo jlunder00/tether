@@ -61,7 +61,7 @@ async def _build_node_response(
 
     # Ensure we have full node dict (with section_types and children_count)
     if "section_types" not in node or "children_count" not in node:
-        full = await get_node(conn, node["id"])
+        full = await get_node(conn, node["id"], user_id=user_id)
         if full is None:
             return node
         node = full
@@ -273,7 +273,7 @@ async def execute_read_context(
 
     # Resolve node_ids
     for nid in (node_ids or []):
-        node = await get_node(conn, nid)
+        node = await get_node(conn, nid, user_id=user_id)
         if node is None:
             results.append(None)
         else:

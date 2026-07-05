@@ -44,7 +44,7 @@ async def execute_read_node_memory(
     from db.pg_queries.sections import get_sections
 
     # Verify node exists
-    node = await get_node(conn, node_id)
+    node = await get_node(conn, node_id, user_id=user_id)
     if node is None:
         return {"error": "node_not_found", "node_id": node_id}
 

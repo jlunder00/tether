@@ -32,7 +32,7 @@ def _make_patches(children_map: dict, nodes: dict, conv_node_id=None):
     async def fake_get_children(conn, parent_id):
         return children_map.get(str(parent_id) if parent_id else None, [])
 
-    async def fake_get_node(conn, node_id):
+    async def fake_get_node(conn, node_id, *, user_id=None):
         return nodes.get(str(node_id))
 
     async def fake_get_node_by_path(conn, path, *, user_id=None):
@@ -251,9 +251,15 @@ async def test_real_execute_read_context_no_conversation_id_returns_real_roots(c
 
 @pytest.mark.asyncio
 async def test_rls_hardening_mismatched_user_id_returns_nothing(conn):
-    """Defense-in-depth: even on a connection where RLS/session GUC would
-    otherwise allow it, an explicit mismatched user_id must return nothing
-    from the hardened node_memory queries."""
+    """Defense-in-depth: the explicit user_id bind is a real filter, not a
+    no-op — a mismatched user_id must return nothing from the hardened
+    node_memory queries even though this connection's session GUC
+    (app.current_user_id) is set to TEST_USER_ID and would otherwise permit
+    it via RLS alone. (This test uses the GUC-scoped `conn` fixture, not an
+    unscoped connection — see tests/db/test_pg_nodes.py's RLS-hardening
+    block for the unscoped-connection case and its sandbox caveat: the
+    local dev Postgres role is BYPASSRLS, so RLS-as-deny can't be exercised
+    directly here; the explicit-bind code path can be, and is, above.)"""
     from tests.tether_mcp.conftest import TEST_USER_ID
     from db.pg_queries.node_memory import log_node_read, get_conversation_reads
 
