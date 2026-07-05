@@ -58,12 +58,13 @@ async def test_read_tasks_all(seeded):
 
 
 @pytest.mark.asyncio
-async def test_read_context_requires_conversation_id(seeded):
-    """v2: read_context without conversation_id returns a structured error, not a list."""
+async def test_read_context_without_conversation_id_returns_real_data(seeded):
+    """read_context is pure retrieval (brief-1a demotion): no conversation_id
+    required, no error envelope — real root nodes come back regardless."""
     from tether_mcp.server import read_context
     result = await read_context()
-    assert isinstance(result, dict), "Expected error dict when conversation_id is absent"
-    assert result.get("error") == "conversation_id_required"
+    assert isinstance(result, list), "read_context must return real data, not an error dict"
+    assert any(r.get("name") == "Work" for r in result)
 
 
 @pytest.mark.asyncio

@@ -1,17 +1,25 @@
 """read_context tool — batched reads with depth traversal, sections (cat -n), tasks,
-M-level summary, scope envelope enforcement, and source filtering.
+M-level summary, and source filtering.
 
-Params added/hardened in memory-context v2:
-  conversation_id — REQUIRED (v2). Returns {error: 'conversation_id_required'} if absent.
-                    Enables N scope envelope enforcement.
+read_context is PURE RETRIEVAL. It does not enforce scope or authorization —
+PermissionGate (interactive_agent_layer/permissions.py) is the sole enforcer
+(design review §5.1); by the time a read_context call reaches this module, the
+gate has already judged whether it should happen. This module never refuses a
+read and never returns an out_of_scope error dict.
+
+Params:
+  conversation_id — OPTIONAL. When present, each read logs a read-credit
+                    against it (bookkeeping only, e.g. for write_node_memory's
+                    read-before-write check). When absent, reads simply are
+                    not credited — retrieval still proceeds normally.
   M               — M-level detail for node data summary.
                     1=title only, 2=one-liner, 3=themes+abstract, 4=full (default: 4).
                     When M < last, returns from node_data_summary if cached;
                     falls back to node_sections at M=4.
-  N               — Scope envelope in tree-edges from current_node.
-                    Requests outside N edges return {error: 'out_of_scope'}.
-                    Note: children returned during depth traversal are also scope-checked;
-                    out-of-scope children are replaced with {error: 'out_of_scope', ...}.
+  traverse_depth  — Cost bound in tree-edges from current_node: how far the
+                    cascade descends before it stops expanding children.
+                    Not an authorization boundary — nodes beyond the bound are
+                    simply not expanded, no error dicts.
   source          — 'sections' | 'memory' | 'both' (default: 'sections').
                     'sections': return user-authored sections (origin='user').
                     'memory':   return bot-authored sections (origin='conversation_agent').
@@ -36,20 +44,19 @@ async def _build_node_response(
     M: int = 4,
     source: str = "sections",
     *,
-    current_node_id: str | None = None,
-    N: int = 3,
     conversation_id: str | None = None,
+    user_id: str | None = None,
+    traverse_depth: int = 3,
     _cascade_depth: int = 0,
 ) -> dict:
     """Build the response dict for a single node, optionally with children/sections/tasks.
 
-    When current_node_id is set, each child is scope-checked against N edges.
-    Out-of-scope children are represented as {error: 'out_of_scope', target: id}.
     _cascade_depth tracks levels descended from the read_context source node;
-    when it reaches N, _add_children will not recurse further.
+    when it reaches traverse_depth, _add_children will not recurse further
+    (a cost bound, not an authorization boundary).
     """
     from db.pg_queries import get_node, get_sections, get_node_tasks
-    from db.pg_queries.node_memory import get_node_summary, log_node_read
+    from db.pg_queries.node_memory import get_node_summary
     from tether_mcp.write_modes import format_cat_n, line_count
 
     # Ensure we have full node dict (with section_types and children_count)
@@ -77,9 +84,8 @@ async def _build_node_response(
                 if depth != 0:
                     await _add_children(
                         conn, result, node, depth, include_sections, include_tasks,
-                        M, source, current_node_id=current_node_id, N=N,
-                        conversation_id=conversation_id,
-                        _cascade_depth=_cascade_depth,
+                        M, source, conversation_id=conversation_id, user_id=user_id,
+                        traverse_depth=traverse_depth, _cascade_depth=_cascade_depth,
                     )
                 return result
 
@@ -112,13 +118,12 @@ async def _build_node_response(
     if include_tasks:
         result["tasks"] = await get_node_tasks(conn, node["id"])
 
-    # Children (recursive, with per-child scope check)
+    # Children (recursive)
     if depth != 0:
         await _add_children(
             conn, result, node, depth, include_sections, include_tasks,
-            M, source, current_node_id=current_node_id, N=N,
-            conversation_id=conversation_id,
-            _cascade_depth=_cascade_depth,
+            M, source, conversation_id=conversation_id, user_id=user_id,
+            traverse_depth=traverse_depth, _cascade_depth=_cascade_depth,
         )
 
     return result
@@ -134,21 +139,23 @@ async def _add_children(
     M: int,
     source: str,
     *,
-    current_node_id: str | None,
-    N: int,
     conversation_id: str | None,
+    user_id: str | None,
+    traverse_depth: int,
     _cascade_depth: int = 0,
 ) -> None:
-    """Fetch children and add them to result['children'], applying per-child scope check.
+    """Fetch children and add them to result['children'].
 
-    Enforces M-level cascade depth gating: when N > 0 and _cascade_depth >= N,
-    children are not fetched (the current node is at the scope boundary).
+    Enforces cascade cost gating only: when traverse_depth > 0 and
+    _cascade_depth >= traverse_depth, children are not fetched (a cost bound,
+    not an authorization boundary — no error dicts are produced).
     """
     from db.pg_queries import get_children
-    from db.pg_queries.node_memory import get_node_tree_distance, log_node_read
+    from db.pg_queries.node_memory import log_node_read
 
-    # M-level cascade gating: stop descending when we've reached N levels from source
-    if N > 0 and _cascade_depth >= N:
+    # Cost-bound cascade gating: stop descending once traverse_depth levels
+    # from the read_context source node have been reached.
+    if traverse_depth > 0 and _cascade_depth >= traverse_depth:
         return
 
     children = await get_children(conn, node["id"])
@@ -158,27 +165,14 @@ async def _add_children(
     for child in children:
         child_id = str(child["id"]) if not isinstance(child["id"], str) else child["id"]
 
-        # Scope check each child independently
-        if current_node_id and N > 0:
-            dist = await get_node_tree_distance(conn, current_node_id, child_id, N)
-            if dist is None:
-                result["children"].append({
-                    "error": "out_of_scope",
-                    "target": child_id,
-                    "message": (
-                        f"Node {child_id} is more than {N} tree-edges from "
-                        f"conversation context node {current_node_id}."
-                    ),
-                })
-                continue
-
-        # Log read credit for in-scope children
+        # Log read credit for children read during cascade traversal
         if conversation_id:
             try:
                 await log_node_read(
                     conn, child_id, M,
                     conversation_id=conversation_id,
                     title=child.get("name"),
+                    user_id=user_id,
                 )
             except Exception:
                 pass
@@ -186,8 +180,8 @@ async def _add_children(
         result["children"].append(
             await _build_node_response(
                 conn, child, next_depth, include_sections, include_tasks, M, source,
-                current_node_id=current_node_id, N=N, conversation_id=conversation_id,
-                _cascade_depth=_cascade_depth + 1,
+                conversation_id=conversation_id, user_id=user_id,
+                traverse_depth=traverse_depth, _cascade_depth=_cascade_depth + 1,
             )
         )
 
@@ -201,10 +195,13 @@ async def execute_read_context(
     include_tasks: bool = False,
     conversation_id: str | None = None,
     M: int = 4,
-    N: int = 3,
+    traverse_depth: int = 3,
     source: str = "sections",
-) -> list | dict:
+    user_id: str | None = None,
+) -> list:
     """Fetch context nodes with optional depth traversal, section content, and linked tasks.
+
+    Pure retrieval — no authorization is performed here (see module docstring).
 
     Args:
         conn: asyncpg connection (user-scoped via RLS).
@@ -217,86 +214,62 @@ async def execute_read_context(
         include_sections: If True, add "sections" dict grouped by section_type.
             Each section entry has {name, body (cat-n format), line_count, origin}.
         include_tasks: If True, add "tasks" list from get_node_tasks.
-        conversation_id: Current conversation UUID. Required (v2) — returns
-            {error: 'conversation_id_required'} if absent.
+        conversation_id: Current conversation UUID. Optional — when present,
+            reads are credit-logged for bookkeeping (e.g. write_node_memory's
+            read-before-write check); when absent, retrieval proceeds
+            identically, just without logging.
         M: M-level detail for node data (1=title, 2=one-liner, 3=themes, 4=full).
             When M < 4, returns from node_data_summary cache if available;
             falls back to node_sections at M=4.
-        N: Scope envelope — max tree-edges from conversation's current_node.
-            Requests outside N edges return {error: 'out_of_scope', ...}.
-            Children during depth traversal are also scope-checked.
+        traverse_depth: Cascade cost bound — max tree-edges from the source
+            node before children stop being expanded. Not an authorization
+            boundary.
         source: 'sections' (default, user-authored) | 'memory' (bot-authored) | 'both'.
+        user_id: RLS hardening — explicit caller-supplied user_id, bound
+            directly on read-credit inserts instead of relying solely on the
+            session GUC. Optional, backward compatible.
 
     Returns:
-        List of node dicts (or error dicts for out-of-scope entries).
-        If no paths and no node_ids, returns root nodes.
-        {error: 'conversation_id_required', message: str} if conversation_id is absent.
+        List of node dicts. If no paths and no node_ids, returns root nodes.
     """
     from db.pg_queries import get_node, get_node_by_path, get_children
-    from db.pg_queries.node_memory import (
-        log_node_read,
-        get_context_node_id_for_conversation,
-        get_node_tree_distance,
-    )
+    from db.pg_queries.node_memory import log_node_read
 
-    # v2: conversation_id is required
-    if not conversation_id:
-        return {
-            "error": "conversation_id_required",
-            "message": "conversation_id is required for read_context in v2.",
-        }
-
-    # Resolve conversation scope (current_node_id may be None if conversation is unlinked)
-    current_node_id = await get_context_node_id_for_conversation(conn, conversation_id)
-
-    async def _fetch_and_check(node: dict) -> dict:
-        """Apply scope check, log read, build response."""
+    async def _fetch_and_log(node: dict) -> dict:
+        """Log read credit (if conversation context present), build response."""
         node_id = str(node["id"]) if not isinstance(node["id"], str) else node["id"]
 
-        # Scope envelope check for the top-level requested node
-        if current_node_id and N > 0:
-            dist = await get_node_tree_distance(conn, current_node_id, node_id, N)
-            if dist is None:
-                return {
-                    "error": "out_of_scope",
-                    "target": node_id,
-                    "message": (
-                        f"Node {node_id} is more than {N} tree-edges from "
-                        f"conversation context node {current_node_id}. "
-                        "Request permission via the conversation to access it."
-                    ),
-                }
-
-        # Log read credit for the top-level node
         if conversation_id:
             try:
                 await log_node_read(
                     conn, node_id, M,
                     conversation_id=conversation_id,
                     title=node.get("name"),
+                    user_id=user_id,
                 )
             except Exception:
                 pass
 
         return await _build_node_response(
             conn, node, depth, include_sections, include_tasks, M, source,
-            current_node_id=current_node_id, N=N, conversation_id=conversation_id,
+            conversation_id=conversation_id, user_id=user_id,
+            traverse_depth=traverse_depth,
         )
 
     # No args → return root nodes
     if not paths and not node_ids:
         roots = await get_children(conn, parent_id=None)
-        return [await _fetch_and_check(root) for root in roots]
+        return [await _fetch_and_log(root) for root in roots]
 
     results = []
 
     # Resolve paths
     for path in (paths or []):
-        node = await get_node_by_path(conn, path)
+        node = await get_node_by_path(conn, path, user_id=user_id)
         if node is None:
             results.append(None)
         else:
-            results.append(await _fetch_and_check(node))
+            results.append(await _fetch_and_log(node))
 
     # Resolve node_ids
     for nid in (node_ids or []):
@@ -304,6 +277,6 @@ async def execute_read_context(
         if node is None:
             results.append(None)
         else:
-            results.append(await _fetch_and_check(node))
+            results.append(await _fetch_and_log(node))
 
     return results

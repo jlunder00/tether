@@ -140,7 +140,8 @@ class TestReadBeforeWriteEnforcement:
 
     @pytest.mark.asyncio
     async def test_has_read_check_uses_correct_args(self, conn):
-        """has_read_node_in_conversation is called with (conn, node_id, conversation_id)."""
+        """has_read_node_in_conversation is called with (conn, node_id, conversation_id),
+        plus the optional RLS-hardening user_id kwarg (None unless the caller binds it)."""
         mocks = _make_mocks(has_read=False)
         await _run(
             conn, mocks,
@@ -148,7 +149,9 @@ class TestReadBeforeWriteEnforcement:
             mode="edit",
             conversation_id=CONV_ID,
         )
-        mocks["has_read_node_in_conversation"].assert_called_once_with(conn, NODE_ID, CONV_ID)
+        mocks["has_read_node_in_conversation"].assert_called_once_with(
+            conn, NODE_ID, CONV_ID, user_id=None
+        )
 
 
 # ---------------------------------------------------------------------------
