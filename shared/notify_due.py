@@ -1,4 +1,4 @@
-"""Redis next-due gating for notification checks (anchors/followups/meetings).
+"""Redis next-due gating for notification checks (anchors/followups).
 
 Purpose
 -------
@@ -20,19 +20,19 @@ code just computed a fresh estimate for it. This means a single Redis query
 (``get_due_user_ids``) — done by the cron-style entry point — sees a user
 as due if ANY one component says so, regardless of which side wrote it.
 
-Meeting events are NOT modeled as a component here. They're PUSH-based
-(delivered via an in-process WS-listener queue owned by tether-premium's
+Meeting events are NOT modeled as a component here, and never have been
+written by any caller. They're PUSH-based (delivered via an in-process
+WS-listener queue owned by tether-premium's
 ``tether_premium.bot.scheduling.events``, at unpredictable times) rather
 than time-based, so there's no meaningful "next_due timestamp" to
 precompute for them — they don't fit this module's timestamp-gating model.
 ``drain_meeting_events`` already self-gates for free (it checks its queue
 is non-empty before ever touching Postgres) and is deliberately called
 UNCONDITIONALLY by ``run_polling``, exempt from the ``is_due()`` gate here
-— see the call site in bot/message_handler.py for the reasoning. The
-``"meeting"`` value below is reserved in the ``Component`` type for
-possible future use (e.g. if the event queue is ever moved to a shared/
-cross-process backing store), but nothing currently writes it, and none
-of the gates in this repo currently depend on it.
+— see the call site in bot/message_handler.py for the reasoning. If meeting
+events ever need cross-process draining (e.g. the event queue moving to a
+shared backing store), that redesign should introduce its own mechanism
+rather than reusing this module's timestamp model.
 
 Redis layout
 ------------
@@ -85,7 +85,7 @@ _logged_no_redis_configured = False
 # back to the "unknown user" fail-open path rather than staying wrong forever.
 _SAFETY_TTL_SECONDS = 24 * 3600
 
-Component = Literal["anchor", "followup", "meeting"]
+Component = Literal["anchor", "followup"]
 
 
 def get_redis_url() -> str | None:
@@ -143,12 +143,24 @@ def log_startup_status() -> None:
         _warn_no_redis_configured_once()
 
 
+_client_cache: dict[str, Any] = {}
+
+
 async def _get_client(
     redis_client: Any = None,
     redis_url: str | None = None,
     server: Any = None,
 ) -> Any:
-    """Build (or reuse) an async Redis client. Returns None if unavailable."""
+    """Build (or reuse) an async Redis client. Returns None if unavailable.
+
+    Real (URL-based) clients are cached module-level, keyed by URL, so
+    repeated gated calls (e.g. every ~30s polling tick) reuse one
+    redis.asyncio client/connection pool instead of constructing a new one
+    on every call. Test-injection paths (``redis_client=...`` or
+    ``server=...``) are deliberately NOT cached — each call still returns
+    the caller-provided client or a fresh ``FakeRedis`` wrapper, exactly as
+    before, so test isolation is unaffected.
+    """
     if redis_client is not None:
         return redis_client
     if server is not None:
@@ -159,9 +171,14 @@ async def _get_client(
     if url is None:
         _warn_no_redis_configured_once()
         return None
+    cached = _client_cache.get(url)
+    if cached is not None:
+        return cached
     import redis.asyncio as aioredis
 
-    return aioredis.from_url(url)
+    client = aioredis.from_url(url)
+    _client_cache[url] = client
+    return client
 
 
 async def set_component_due(

@@ -89,19 +89,6 @@ async def test_set_component_due_updates_existing_component_independently():
     assert await get_due_user_ids(now + 10, server=server) == []  # neither passed yet
 
 
-async def test_set_component_due_meeting_component_from_premium_contributes():
-    """Premium contributes a 'meeting' component to the SAME due_queue — the
-    cron's single range query must see meeting-only-due users too."""
-    from shared.notify_due import get_due_user_ids, set_component_due
-
-    server = fakeredis.FakeServer()
-    now = time.time()
-
-    await set_component_due("user-d", "meeting", now - 1, server=server)
-
-    assert await get_due_user_ids(now, server=server) == ["user-d"]
-
-
 # ---------------------------------------------------------------------------
 # is_due
 # ---------------------------------------------------------------------------
@@ -355,3 +342,69 @@ async def test_no_redis_configured_warning_logs_only_once_per_process(monkeypatc
         f"expected exactly one ERROR log across all 4 calls, got {len(error_records)}: "
         f"{[r.message for r in error_records]}"
     )
+
+
+# ---------------------------------------------------------------------------
+# _get_client: module-level client caching keyed by URL (A9)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _reset_client_cache():
+    """The URL->client cache is process-global state — reset it around every
+    test in this module so tests don't leak cached clients into each other."""
+    import shared.notify_due as notify_due_module
+
+    notify_due_module._client_cache.clear()
+    yield
+    notify_due_module._client_cache.clear()
+
+
+async def test_get_client_reuses_same_client_for_same_url():
+    from shared.notify_due import _get_client
+
+    first = await _get_client(redis_url="redis://localhost:6379/0")
+    second = await _get_client(redis_url="redis://localhost:6379/0")
+
+    assert first is second
+
+
+async def test_get_client_different_urls_get_different_clients():
+    from shared.notify_due import _get_client
+
+    a = await _get_client(redis_url="redis://localhost:6379/0")
+    b = await _get_client(redis_url="redis://localhost:6379/1")
+
+    assert a is not b
+
+
+async def test_get_client_injected_redis_client_bypasses_cache():
+    """An explicitly-injected redis_client (test/caller override) must be
+    returned as-is every time, never substituted with a cached instance."""
+    from shared.notify_due import _get_client
+
+    injected = object()
+
+    result1 = await _get_client(redis_client=injected, redis_url="redis://localhost:6379/0")
+    result2 = await _get_client(redis_client=injected, redis_url="redis://localhost:6379/0")
+
+    assert result1 is injected
+    assert result2 is injected
+
+
+async def test_get_client_server_injection_still_returns_fresh_fakeredis_each_call():
+    """The fakeredis `server=` test-injection path must be unaffected by the
+    URL cache — existing tests share state via the FakeServer, not via a
+    cached client object, and must keep working exactly as before."""
+    from shared.notify_due import _get_client
+
+    server = fakeredis.FakeServer()
+
+    client1 = await _get_client(server=server)
+    client2 = await _get_client(server=server)
+
+    # Not the same object (each call wraps a fresh FakeRedis), but both
+    # share the same underlying FakeServer so data written via one is
+    # visible via the other -- this is what existing tests rely on.
+    assert client1 is not client2
+    await client1.set("k", "v")
+    assert await client2.get("k") == b"v"

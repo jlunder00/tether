@@ -1,16 +1,25 @@
 """Internal API routes — not mounted in OpenAPI schema.
 
-Called by Fly.io cron machines. All endpoints require X-Internal-Token header.
+Invoked by an external scheduler (exact mechanism/cadence is deployment
+config, not tracked in this repo). All endpoints require X-Internal-Token
+header.
 
 Neon/idle-spin-down note
 -------------------------
 ``_run_notification_check`` is gated by ``shared.notify_due`` — a Redis
 next-due cache — so that regardless of how often this endpoint is actually
 invoked (by whatever scheduler ends up calling it), it costs nothing but a
-single Redis range query when no user has any anchor/followup/meeting-event
-work due right now. See shared/notify_due.py for the full scheme. This makes
-the endpoint safe to call as frequently as desired without keeping managed
+single Redis range query when no user has any anchor/followup work due
+right now. See shared/notify_due.py for the full scheme. This makes the
+endpoint safe to call as frequently as desired without keeping managed
 Postgres (Neon) awake between real due events.
+
+Note: this endpoint does NOT drain meeting events. `drain_meeting_events`
+reads from an in-process queue owned by the BOT process
+(`tether_premium.bot.scheduling.events`, populated by a WS-listener thread
+started only inside `bot/message_handler.py`'s `run_polling()`) — this API
+process cannot see that queue, so calling it here would always be a no-op.
+Meeting-event draining happens exclusively via the bot's polling loop.
 """
 from __future__ import annotations
 
@@ -45,7 +54,8 @@ def _verify_internal_token(request: Request) -> None:
 
 @router.post("/notifications/check")
 async def check_notifications(request: Request, background_tasks: BackgroundTasks):
-    """Called by Fly.io cron every minute. Queues notification check as BackgroundTask."""
+    """Queues a notification check as a BackgroundTask. Gated by shared.notify_due
+    (see module docstring), so safe to invoke at whatever cadence the caller uses."""
     _verify_internal_token(request)
     pool = request.app.state.pool
     ws_manager = getattr(request.app.state, "ws_manager", None)
@@ -169,41 +179,27 @@ async def _recompute_and_cache_due(
     Called once per user after a real check has run — self-perpetuating:
     each real run recomputes its own future due time from data it already
     fetched, so the cache never needs a separate background refresh job.
-    The "meeting" component is contributed independently by tether-premium's
-    drain_meeting_events via the same shared.notify_due.set_component_due —
-    this function only owns the anchor/followup components.
+    A ``None`` estimate means "nothing to re-check on a timer for this
+    component right now" — left unset (absent from the hash) rather than
+    writing a synthetic "never" value, so a future write (e.g. an anchor
+    create/update, or the next anchor boundary re-triggering follow-ups)
+    naturally repopulates and recomputes the combined score.
     """
-    now_ts = time.time()
     if anchor_next is not None:
         await notify_due.set_component_due(user_id, "anchor", anchor_next.timestamp())
-    else:
-        # No anchors configured — nothing to re-check on a timer for this
-        # component; leave it unset (absent from the hash) rather than
-        # writing a synthetic "never" value, since a future anchor
-        # create/update will populate it and recompute the combined score.
-        pass
     if followup_next is not None:
         await notify_due.set_component_due(user_id, "followup", followup_next.timestamp())
-    else:
-        # No active followup rows right now — the anchor component's next
-        # boundary (which triggers _init_followup_states) is what will next
-        # wake this user for the followup side too.
-        pass
-    if anchor_next is None and followup_next is None:
-        logger.debug(
-            "notify_due: no anchor or followup component for user_id=%s — "
-            "relying on existing cache entries / fail-open on next check",
-            user_id,
-        )
-    _ = now_ts  # reserved for future observability (e.g. staleness metrics)
 
 
 async def _run_notification_check(pool, ws_manager) -> None:
-    """For each linked user: check anchor transitions, follow-ups, meeting events.
+    """For each linked user: check anchor transitions and follow-ups.
 
     Gated by shared.notify_due: a single Redis range query decides which
     users (if any) have real work due right now. When nothing is due, this
     function returns without touching Postgres at all — see module docstring.
+
+    Does not drain meeting events — see the module docstring's note on why
+    that would always be a no-op in this (API) process.
     """
     if pool is None:
         logger.warning("_run_notification_check: no pool available, skipping")
@@ -243,14 +239,13 @@ async def _run_notification_check(pool, ws_manager) -> None:
 
     for user in users:
         user_id = str(user["id"])
-        anchor_next: datetime | None = None
-        try:
-            dispatch_fn = functools.partial(
-                notify.dispatch, pool=pool, ws_manager=ws_manager
-            )
-            anchor_next = await _check_anchor_transitions(pool, user_id, dispatch_fn)
-        except Exception as e:
-            logger.warning("Anchor check failed for user %s: %s", user_id, e)
+        # No try/except here: _check_anchor_transitions already catches and
+        # logs everything internally (returning None on failure) — an outer
+        # catch here could never fire and was dead code.
+        dispatch_fn = functools.partial(
+            notify.dispatch, pool=pool, ws_manager=ws_manager
+        )
+        anchor_next = await _check_anchor_transitions(pool, user_id, dispatch_fn)
 
         followup_next: datetime | None = None
         try:
@@ -268,28 +263,6 @@ async def _run_notification_check(pool, ws_manager) -> None:
             followup_next = await check_followups(pool, user_id, send_fn)
         except Exception as e:
             logger.warning("Followup check failed for user %s: %s", user_id, e)
-
-        try:
-            from tether_premium.bot.scheduling.events import drain_meeting_events
-
-            async def _notify_meeting_send(text, uid=user_id):
-                await notify.dispatch(
-                    uid,
-                    "meeting_event",
-                    text,
-                    pool,
-                    priority="important",
-                    ws_manager=ws_manager,
-                )
-
-            meeting_send = lambda text, uid=user_id: asyncio.ensure_future(
-                _notify_meeting_send(text, uid)
-            )
-            await drain_meeting_events(pool=pool, user_id=user_id, send_fn=meeting_send)
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.warning("Meeting event drain failed for user %s: %s", user_id, e)
 
         await _recompute_and_cache_due(user_id, anchor_next, followup_next)
 
