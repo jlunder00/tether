@@ -85,20 +85,5 @@ services:
       - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
     restart: unless-stopped
 
-  sync:
-    build: *build
-    image: ${TETHER_IMAGE:-ghcr.io/jlunder00/tether}:${IMAGE_TAG:-latest}
-    command: ["python", "-m", "sync"]
-    volumes:
-      - ${TETHER_DATA_DIR:-~/.tether-config}:/data
-    environment:
-      - TETHER_CONFIG_DIR=/data
-      - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql://tether_app:${TETHER_APP_PASSWORD:-tether_app_dev}@postgres:5432/tether
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
 volumes:
   pgdata:
