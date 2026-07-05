@@ -21,6 +21,7 @@ async def execute_read_node_memory(
     M: int = 4,
     *,
     conversation_id: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Return bot-authored sections for a context node.
 
@@ -30,6 +31,9 @@ async def execute_read_node_memory(
         title:           Optional section name filter.
         M:               Detail level — 1 (names only), 2 (preview), 3 (truncated), 4 (full).
         conversation_id: Current conversation UUID (for read-credit logging).
+        user_id:         RLS hardening — explicit caller-supplied user_id, bound
+                         directly on the read-credit insert. Optional, backward
+                         compatible.
 
     Returns:
         {node_id, sections: [{section_type, name, body?, preview?, origin}]}
@@ -40,7 +44,7 @@ async def execute_read_node_memory(
     from db.pg_queries.sections import get_sections
 
     # Verify node exists
-    node = await get_node(conn, node_id)
+    node = await get_node(conn, node_id, user_id=user_id)
     if node is None:
         return {"error": "node_not_found", "node_id": node_id}
 
@@ -87,6 +91,7 @@ async def execute_read_node_memory(
                 conn, node_id, M,
                 conversation_id=conversation_id,
                 title=node.get("name"),
+                user_id=user_id,
             )
         except Exception:
             pass

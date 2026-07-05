@@ -47,10 +47,28 @@ async def create_node(
     return _node(row)
 
 
-async def get_node(conn: asyncpg.Connection, node_id: str) -> dict | None:
-    row = await conn.fetchrow(
-        "SELECT * FROM context_nodes WHERE id = $1", _uuid.UUID(node_id)
-    )
+async def get_node(
+    conn: asyncpg.Connection,
+    node_id: str,
+    *,
+    user_id: str | None = None,
+) -> dict | None:
+    """Fetch a single context node by id.
+
+    user_id: RLS hardening — when provided, binds this value directly as an
+    explicit `AND user_id = $N` filter instead of relying solely on
+    RLS/the session GUC. When None (default), behavior is unchanged
+    (RLS-only), backward compatible.
+    """
+    if user_id is not None:
+        row = await conn.fetchrow(
+            "SELECT * FROM context_nodes WHERE id = $1 AND user_id = $2::uuid",
+            _uuid.UUID(node_id), _uuid.UUID(user_id),
+        )
+    else:
+        row = await conn.fetchrow(
+            "SELECT * FROM context_nodes WHERE id = $1", _uuid.UUID(node_id)
+        )
     if not row:
         return None
     d = _node(row)
@@ -65,21 +83,47 @@ async def get_node(conn: asyncpg.Connection, node_id: str) -> dict | None:
     return d
 
 
-async def get_node_by_path(conn: asyncpg.Connection, path: str) -> dict | None:
+async def get_node_by_path(
+    conn: asyncpg.Connection,
+    path: str,
+    *,
+    user_id: str | None = None,
+) -> dict | None:
+    """Resolve a slash-separated path (e.g. "Projects/Tether") to a node.
+
+    user_id: RLS hardening — when provided, each step's lookup binds this
+    value directly as an explicit `AND user_id = $N` filter instead of
+    relying solely on RLS/the session GUC. This makes path resolution
+    correct even on an unscoped connection. When None (default), behavior
+    is unchanged (RLS-only).
+    """
     parts = [p for p in path.split("/") if p]
     if not parts:
         return None
-    row = await conn.fetchrow(
-        "SELECT id FROM context_nodes WHERE parent_id IS NULL AND name = $1", parts[0]
-    )
+    uid = _uuid.UUID(user_id) if user_id is not None else None
+    if uid is not None:
+        row = await conn.fetchrow(
+            "SELECT id FROM context_nodes WHERE parent_id IS NULL AND name = $1 AND user_id = $2::uuid",
+            parts[0], uid,
+        )
+    else:
+        row = await conn.fetchrow(
+            "SELECT id FROM context_nodes WHERE parent_id IS NULL AND name = $1", parts[0]
+        )
     if not row:
         return None
     resolved_id = row["id"]
     for segment in parts[1:]:
-        row = await conn.fetchrow(
-            "SELECT id FROM context_nodes WHERE parent_id = $1 AND name = $2",
-            resolved_id, segment,
-        )
+        if uid is not None:
+            row = await conn.fetchrow(
+                "SELECT id FROM context_nodes WHERE parent_id = $1 AND name = $2 AND user_id = $3::uuid",
+                resolved_id, segment, uid,
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT id FROM context_nodes WHERE parent_id = $1 AND name = $2",
+                resolved_id, segment,
+            )
         if not row:
             return None
         resolved_id = row["id"]

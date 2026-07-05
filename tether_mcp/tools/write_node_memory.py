@@ -32,6 +32,7 @@ async def execute_write_node_memory(
     *,
     conversation_id: str | None = None,
     visible_to_user: bool = True,
+    user_id: str | None = None,
 ) -> dict:
     """Write a bot-authored section to a context node.
 
@@ -71,7 +72,9 @@ async def execute_write_node_memory(
         }
 
     # v2: a read of this node must exist in node_read_log for this conversation
-    has_read = await has_read_node_in_conversation(conn, node_id, conversation_id)
+    has_read = await has_read_node_in_conversation(
+        conn, node_id, conversation_id, user_id=user_id
+    )
     if not has_read:
         return {
             "error": "read_before_write_required",
@@ -104,7 +107,8 @@ async def execute_write_node_memory(
     # Log write as a read credit so future reads know this conversation touched the node
     try:
         await log_node_read(
-            conn, node_id, 999, conversation_id=conversation_id, title=title
+            conn, node_id, 999, conversation_id=conversation_id, title=title,
+            user_id=user_id,
         )
     except Exception:
         pass  # don't fail the write if log fails

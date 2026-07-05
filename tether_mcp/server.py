@@ -123,26 +123,34 @@ async def read_context(
     include_tasks: bool = False,
     conversation_id: str = "",
     M: int = 4,
-    N: int = 3,
+    traverse_depth: int = 3,
     source: str = "sections",
 ) -> list:
     """Read context nodes. No params=roots. depth: 0=node only, 1=children, -1=full subtree.
     Section bodies in cat-n format (1-indexed line numbers with tabs).
 
-    conversation_id: Current conversation UUID. REQUIRED (v2) — returns
-        {error: 'conversation_id_required'} if absent.
-    M: Detail level for node data summary (1=title, 2=one-liner, 3=themes, 4=full sections).
-    N: Scope envelope — max tree-edges from conversation's context node. Nodes outside
-        N edges return {error: 'out_of_scope', target: ...} instead of data.
+    Pure retrieval — scope/authorization is judged upstream by PermissionGate
+    before this tool is called; this tool never refuses a request itself.
+
+    conversation_id: Current conversation UUID. Optional — when present, reads
+        are credit-logged for bookkeeping (e.g. write_node_memory's
+        read-before-write check).
+    M: Detail level requested for node data summary (1=title, 2=one-liner,
+        3=themes, 4=full sections) — subject to the gate's own judgment of
+        what detail is appropriate, not enforced here.
+    traverse_depth: Cascade cost bound — max tree-edges from the source node
+        before children stop being expanded. Not an authorization boundary.
     source: 'sections' (user-authored, default) | 'memory' (bot-authored) | 'both'.
     """
     from tether_mcp.tools.read_context import execute_read_context
     pool = await _get_pool()
-    async with pg.get_conn(pool, get_user_id()) as conn:
+    user_id = get_user_id()
+    async with pg.get_conn(pool, user_id) as conn:
         return await execute_read_context(
             conn, paths, node_ids, depth, include_sections, include_tasks,
             conversation_id=conversation_id or None,
-            M=M, N=N, source=source,
+            M=M, traverse_depth=traverse_depth, source=source,
+            user_id=user_id,
         )
 
 
@@ -188,13 +196,15 @@ async def read_node_memory(
     """
     from tether_mcp.tools.read_node_memory import execute_read_node_memory
     pool = await _get_pool()
-    async with pg.get_conn(pool, get_user_id()) as conn:
+    user_id = get_user_id()
+    async with pg.get_conn(pool, user_id) as conn:
         return await execute_read_node_memory(
             conn,
             node_id=node_id,
             title=title or None,
             M=M,
             conversation_id=conversation_id or None,
+            user_id=user_id,
         )
 
 
@@ -225,7 +235,8 @@ async def write_node_memory(
     """
     from tether_mcp.tools.write_node_memory import execute_write_node_memory
     pool = await _get_pool()
-    async with pg.get_conn(pool, get_user_id()) as conn:
+    user_id = get_user_id()
+    async with pg.get_conn(pool, user_id) as conn:
         return await execute_write_node_memory(
             conn,
             node_id=node_id,
@@ -235,6 +246,7 @@ async def write_node_memory(
             mode=mode,
             conversation_id=conversation_id or None,
             visible_to_user=visible_to_user,
+            user_id=user_id,
         )
 
 
