@@ -1,7 +1,10 @@
 """Tests for interactive_agent_layer.envelope — ScopeEnvelope + loaders + ⊆ validator."""
 from __future__ import annotations
 
+import pathlib
+
 import pytest
+import yaml
 
 from interactive_agent_layer.envelope import (
     ScopeEnvelope,
@@ -10,6 +13,17 @@ from interactive_agent_layer.envelope import (
     load_permission_envelope,
     validate_injection_subset,
 )
+
+
+def _load_committed_app_config() -> dict:
+    """Load the committed config/app_config.yaml (not user overrides)."""
+    base = pathlib.Path(__file__).resolve()
+    for parent in base.parents:
+        candidate = parent / "config" / "app_config.yaml"
+        if candidate.exists():
+            with open(candidate) as f:
+                return yaml.safe_load(f)
+    raise FileNotFoundError("config/app_config.yaml not found from test location")
 
 
 # ---------------------------------------------------------------------------
@@ -170,3 +184,27 @@ def test_load_injection_envelope_validates_against_matching_scenario(monkeypatch
     # Scenario "tight" clamps injection radius to 0 too, still within its own
     # scenario permission radius (0) -> should not raise.
     load_injection_envelope(scenario="tight")
+
+
+# ---------------------------------------------------------------------------
+# The committed config/app_config.yaml scope: block
+# ---------------------------------------------------------------------------
+
+def test_committed_yaml_scope_block_matches_inert_defaults():
+    cfg = _load_committed_app_config()
+    scope = cfg["scope"]
+    assert scope["permission"] == {"radius": 3, "m_max": 4, "decay": 1}
+    assert scope["injection"] == {"radius": 1, "m_max": 2, "decay": 0}
+    assert scope["scenarios"] == {}
+
+
+def test_committed_yaml_scope_block_passes_subset_validation():
+    cfg = _load_committed_app_config()
+    perm = ScopeEnvelope(**cfg["scope"]["permission"])
+    inj = ScopeEnvelope(**cfg["scope"]["injection"])
+    validate_injection_subset(inj, perm)  # must not raise
+
+
+def test_committed_yaml_permission_timeout_is_120():
+    cfg = _load_committed_app_config()
+    assert cfg["agent_layer"]["permission_timeout_seconds"] == 120
