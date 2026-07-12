@@ -1,4 +1,9 @@
-"""Tests for read_context scope gating via PermissionGate (TDD — written before implementation)."""
+"""Tests for read_context scope gating via PermissionGate + ScopeEnvelope.
+
+Uses ScopeEnvelope(radius=2, m_max=4, decay=0) for most cases (flat M=4
+within radius, matching the old flat scope_radius=2 behavior) plus dedicated
+graded-M cases that exercise the decay curve.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +11,7 @@ import pathlib
 
 import pytest
 
+from interactive_agent_layer.envelope import ScopeEnvelope
 from interactive_agent_layer.permissions import (
     PermissionGate,
     PermissionResultAllow,
@@ -13,6 +19,8 @@ from interactive_agent_layer.permissions import (
 )
 from interactive_agent_layer.session import Session
 from interactive_agent_layer.translation import TranslationTable
+
+FLAT_ENVELOPE = ScopeEnvelope(radius=2, m_max=4, decay=0)
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +50,7 @@ def session():
         agent_version="tether-agent-2.0",
         options={
             "scope_source_node_id": "node-source",
-            "scope_radius": 2,
+            "permission_envelope": FLAT_ENVELOPE,
         },
     )
 
@@ -51,10 +59,12 @@ def _make_gate(
     table,
     session,
     hop_fn=None,
-    scope_mode="tree_distance",
+    envelope=FLAT_ENVELOPE,
     resolve_path_fn=None,
     *,
     auto_approve=False,
+    check_grant_fn=None,
+    insert_grant_fn=None,
 ):
     return PermissionGate(
         translation_table=table,
@@ -62,17 +72,22 @@ def _make_gate(
         outbound_events=asyncio.Queue(),
         auto_approve_user_actions=auto_approve,
         scope_source_node_id=session.options.get("scope_source_node_id"),
-        scope_radius=session.options.get("scope_radius"),
-        scope_mode=scope_mode,
+        scope_envelope=envelope,
         hop_distance_fn=hop_fn,
         resolve_node_path_fn=resolve_path_fn,
+        check_grant_fn=check_grant_fn,
+        insert_grant_fn=insert_grant_fn,
     )
 
 
-async def _run_scope_check(table, session, args, hop_fn, resolve_path_fn=None):
+async def _run_scope_check(
+    table, session, args, hop_fn, resolve_path_fn=None,
+    envelope=FLAT_ENVELOPE, check_grant_fn=None, insert_grant_fn=None,
+):
     """Run can_use_tool for read_context, intercept the permission_request event.
 
-    Returns (task, event, session) — caller must resolve the future before awaiting task.
+    Returns (task, event, queue) — caller must resolve the future before
+    awaiting task, and may drain `queue` afterward for permission_resolved.
     """
     queue: asyncio.Queue = asyncio.Queue()
     gate = PermissionGate(
@@ -81,13 +96,15 @@ async def _run_scope_check(table, session, args, hop_fn, resolve_path_fn=None):
         outbound_events=queue,
         auto_approve_user_actions=False,
         scope_source_node_id=session.options.get("scope_source_node_id"),
-        scope_radius=session.options.get("scope_radius"),
+        scope_envelope=envelope,
         hop_distance_fn=hop_fn,
         resolve_node_path_fn=resolve_path_fn,
+        check_grant_fn=check_grant_fn,
+        insert_grant_fn=insert_grant_fn,
     )
     task = asyncio.create_task(gate.can_use_tool("read_context", args, None))
     event = await asyncio.wait_for(queue.get(), timeout=5.0)
-    return task, event
+    return task, event, queue
 
 
 # ---------------------------------------------------------------------------
@@ -109,14 +126,14 @@ async def test_read_context_no_scope_source_always_allow(table, session):
 
 
 async def test_read_context_hop_fn_none_always_allow(table, session):
-    """When hop_distance_fn is None (even if source is set), gate is inactive."""
+    """When hop_distance_fn is None (even if source/envelope are set), gate is inactive."""
     gate = PermissionGate(
         translation_table=table,
         session=session,
         outbound_events=asyncio.Queue(),
         auto_approve_user_actions=False,
         scope_source_node_id="node-source",
-        scope_radius=2,
+        scope_envelope=FLAT_ENVELOPE,
         hop_distance_fn=None,
     )
     result = await gate.can_use_tool("read_context", {"node_ids": ["node-far-away"]}, None)
@@ -140,7 +157,7 @@ async def test_read_context_no_targets_always_allow(table, session):
 
 
 async def test_read_context_in_scope_node_id_allows(table, session):
-    """Distance ≤ M → allow without prompting."""
+    """Distance ≤ radius → allow without prompting."""
 
     async def hop_fn(from_id, to_id):
         return 1  # within radius 2
@@ -165,7 +182,7 @@ async def test_read_context_all_targets_in_scope_allows(table, session):
     """All node_ids within scope → allow without prompting."""
 
     async def hop_fn(from_id, to_id):
-        return 2  # exactly at M boundary — in scope
+        return 2  # exactly at radius boundary — in scope
 
     gate = _make_gate(table, session, hop_fn)
     result = await gate.can_use_tool(
@@ -180,12 +197,12 @@ async def test_read_context_all_targets_in_scope_allows(table, session):
 
 
 async def test_read_context_out_of_scope_emits_permission_request(table, session):
-    """Distance > M → permission_request with kind='read_out_of_scope' emitted."""
+    """Distance > radius → permission_request with kind='read_out_of_scope' emitted."""
 
     async def hop_fn(from_id, to_id):
         return 5  # exceeds radius 2
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session, {"node_ids": ["node-distant"]}, hop_fn
     )
     request_id = event["request_id"]
@@ -206,7 +223,7 @@ async def test_read_context_out_of_scope_user_denies(table, session):
     async def hop_fn(from_id, to_id):
         return 5
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session, {"node_ids": ["node-distant"]}, hop_fn
     )
     request_id = event["request_id"]
@@ -224,7 +241,7 @@ async def test_read_context_none_distance_treated_as_out_of_scope(table, session
     async def hop_fn(from_id, to_id):
         return None  # unrelated trees
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session, {"node_ids": ["node-unrelated"]}, hop_fn
     )
     request_id = event["request_id"]
@@ -243,7 +260,7 @@ async def test_read_context_first_offender_is_reported_in_target(table, session)
     async def hop_fn(from_id, to_id):
         return 1 if to_id == "node-close" else 5
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session,
         {"node_ids": ["node-close", "node-distant"]},
         hop_fn,
@@ -272,7 +289,7 @@ async def test_read_context_path_resolved_and_gated(table, session):
     async def resolve_path(path):
         return "node-resolved-from-path"
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session,
         {"paths": ["Projects/OutOfScope"]},
         hop_fn,
@@ -296,7 +313,7 @@ async def test_read_context_unresolvable_path_is_out_of_scope(table, session):
     async def resolve_path(path):
         return None  # path not found
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session,
         {"paths": ["NonExistent/Ghost"]},
         hop_fn,
@@ -328,6 +345,198 @@ async def test_read_context_path_in_scope_allows(table, session):
 
 
 # ---------------------------------------------------------------------------
+# D: Graded envelope — requested_M vs m_allowed(d)
+# ---------------------------------------------------------------------------
+
+GRADED_ENVELOPE = ScopeEnvelope(radius=3, m_max=4, decay=1)  # m_allowed: 4,3,2,1
+
+
+async def test_read_context_in_radius_but_M_exceeds_m_allowed_gates(table, session):
+    """d=2 (within radius 3) but requested M=4 > m_allowed(2)=2 → gated."""
+
+    async def hop_fn(from_id, to_id):
+        return 2
+
+    task, event, _ = await _run_scope_check(
+        table, session, {"node_ids": ["node-mid"], "M": 4}, hop_fn,
+        envelope=GRADED_ENVELOPE,
+    )
+    request_id = event["request_id"]
+    fut = session.permission_pending.get(request_id)
+    fut.set_result(True)
+    await task
+
+    assert event.get("kind") == "read_out_of_scope"
+
+
+async def test_read_context_in_radius_M_within_m_allowed_allows(table, session):
+    """d=2, requested M=2 <= m_allowed(2)=2 → allowed without prompting."""
+
+    async def hop_fn(from_id, to_id):
+        return 2
+
+    gate = _make_gate(table, session, hop_fn, envelope=GRADED_ENVELOPE)
+    result = await gate.can_use_tool(
+        "read_context", {"node_ids": ["node-mid"], "M": 2}, None
+    )
+    assert isinstance(result, PermissionResultAllow)
+
+
+async def test_read_context_default_M_is_4(table, session):
+    """Omitting M defaults to 4 (matches read_context's own tool default)."""
+
+    async def hop_fn(from_id, to_id):
+        return 0  # m_allowed(0) = 4, so default M=4 must pass
+
+    gate = _make_gate(table, session, hop_fn, envelope=GRADED_ENVELOPE)
+    result = await gate.can_use_tool("read_context", {"node_ids": ["node-source"]}, None)
+    assert isinstance(result, PermissionResultAllow)
+
+
+async def test_read_context_beyond_radius_still_gates_regardless_of_M(table, session):
+    """d=4 > radius 3 → gated even at the lowest M=1."""
+
+    async def hop_fn(from_id, to_id):
+        return 4
+
+    task, event, _ = await _run_scope_check(
+        table, session, {"node_ids": ["node-far"], "M": 1}, hop_fn,
+        envelope=GRADED_ENVELOPE,
+    )
+    fut = session.permission_pending.get(event["request_id"])
+    fut.set_result(True)
+    await task
+    assert event.get("kind") == "read_out_of_scope"
+
+
+# ---------------------------------------------------------------------------
+# E: Grant check/insert on the scope-read path (DD 3.2 gap fix)
+# ---------------------------------------------------------------------------
+
+
+async def test_scope_grant_exists_skips_permission_request(table, session):
+    """check_grant_fn returning True auto-allows without emitting permission_request."""
+
+    async def hop_fn(from_id, to_id):
+        return 5  # out of scope
+
+    async def has_grant(user_id, conversation_id, target, kind):
+        assert kind == "read_out_of_scope"
+        return True
+
+    gate = _make_gate(table, session, hop_fn, check_grant_fn=has_grant)
+    result = await gate.can_use_tool("read_context", {"node_ids": ["node-distant"]}, None)
+    assert isinstance(result, PermissionResultAllow)
+
+
+async def test_scope_grant_inserted_on_approval(table, session):
+    """On user approval, insert_grant_fn is called with (user_id, conv_id, target, kind)."""
+
+    async def hop_fn(from_id, to_id):
+        return 5
+
+    async def no_grant(user_id, conversation_id, target, kind):
+        return False
+
+    inserted: list[dict] = []
+
+    async def insert_grant(user_id, conversation_id, target, kind):
+        inserted.append({"user_id": user_id, "conv": conversation_id,
+                         "target": target, "kind": kind})
+
+    task, event, _ = await _run_scope_check(
+        table, session, {"node_ids": ["node-distant"]}, hop_fn,
+        check_grant_fn=no_grant, insert_grant_fn=insert_grant,
+    )
+    fut = session.permission_pending.get(event["request_id"])
+    fut.set_result(True)
+    await task
+
+    assert len(inserted) == 1
+    assert inserted[0]["kind"] == "read_out_of_scope"
+    assert inserted[0]["target"] == "node-distant"
+
+
+async def test_scope_grant_not_inserted_on_denial(table, session):
+    """On user denial, insert_grant_fn is NOT called."""
+
+    async def hop_fn(from_id, to_id):
+        return 5
+
+    async def no_grant(user_id, conversation_id, target, kind):
+        return False
+
+    inserted: list = []
+
+    async def insert_grant(user_id, conversation_id, target, kind):
+        inserted.append(kind)
+
+    task, event, _ = await _run_scope_check(
+        table, session, {"node_ids": ["node-distant"]}, hop_fn,
+        check_grant_fn=no_grant, insert_grant_fn=insert_grant,
+    )
+    fut = session.permission_pending.get(event["request_id"])
+    fut.set_result(False)
+    await task
+
+    assert inserted == []
+
+
+# ---------------------------------------------------------------------------
+# F: permission_resolved on the scope-read path
+# ---------------------------------------------------------------------------
+
+
+async def test_scope_permission_resolved_emitted_on_approval(table, session):
+    async def hop_fn(from_id, to_id):
+        return 5
+
+    task, event, queue = await _run_scope_check(
+        table, session, {"node_ids": ["node-distant"]}, hop_fn
+    )
+    fut = session.permission_pending.get(event["request_id"])
+    fut.set_result(True)
+    await task
+
+    resolved = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert resolved["type"] == "permission_resolved"
+    assert resolved["request_id"] == event["request_id"]
+    assert resolved["resolution"] == "approved"
+
+
+async def test_scope_permission_resolved_emitted_on_timeout(table, session, monkeypatch):
+    """Read-kind timeout resolves as deny AND still emits permission_resolved
+    (no exception raised — reads deny-and-continue per DD §4.5)."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+
+    async def hop_fn(from_id, to_id):
+        return 5
+
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table,
+        session=session,
+        outbound_events=queue,
+        auto_approve_user_actions=False,
+        scope_source_node_id="node-source",
+        scope_envelope=FLAT_ENVELOPE,
+        hop_distance_fn=hop_fn,
+    )
+    result = await gate.can_use_tool("read_context", {"node_ids": ["node-far"]}, None)
+    assert isinstance(result, PermissionResultDeny)
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    resolved = [e for e in events if e["type"] == "permission_resolved"]
+    assert len(resolved) == 1
+    assert resolved[0]["resolution"] == "timeout"
+
+
+# ---------------------------------------------------------------------------
 # Scope check does not affect other tools
 # ---------------------------------------------------------------------------
 
@@ -355,7 +564,7 @@ async def test_scope_gate_pending_cleaned_up_after_approve(table, session):
     async def hop_fn(from_id, to_id):
         return 5
 
-    task, event = await _run_scope_check(
+    task, event, _ = await _run_scope_check(
         table, session, {"node_ids": ["node-far"]}, hop_fn
     )
     request_id = event["request_id"]
@@ -384,7 +593,7 @@ async def test_scope_gate_timeout_denies(table, session, monkeypatch):
         outbound_events=queue,
         auto_approve_user_actions=False,
         scope_source_node_id="node-source",
-        scope_radius=2,
+        scope_envelope=FLAT_ENVELOPE,
         hop_distance_fn=hop_fn,
     )
     result = await gate.can_use_tool("read_context", {"node_ids": ["node-far"]}, None)

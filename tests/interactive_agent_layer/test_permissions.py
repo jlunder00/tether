@@ -263,6 +263,103 @@ async def test_permission_pending_cleaned_up_after_timeout(table, session, monke
 # 10. PermissionTimeoutError carries correct request_id
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 11. permission_resolved — emitted on every terminal resolution
+# ---------------------------------------------------------------------------
+
+async def _drain_all(queue: asyncio.Queue, task: asyncio.Task) -> list[dict]:
+    """Collect every event put on queue until task completes."""
+    events: list[dict] = []
+    while not task.done():
+        get_task = asyncio.ensure_future(queue.get())
+        done, _ = await asyncio.wait([get_task, task], return_when=asyncio.FIRST_COMPLETED)
+        if get_task in done:
+            events.append(get_task.result())
+        else:
+            get_task.cancel()
+    # Drain anything left in the queue after task completion.
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    return events
+
+
+async def test_permission_resolved_emitted_on_approval(table, session):
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table, session=session, outbound_events=queue,
+        auto_approve_user_actions=False,
+    )
+    task = asyncio.create_task(gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None))
+    request_event = await asyncio.wait_for(queue.get(), timeout=5.0)
+    fut = session.permission_pending.get(request_event["request_id"])
+    fut.set_result(True)
+    await task
+    resolved = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert resolved["type"] == "permission_resolved"
+    assert resolved["request_id"] == request_event["request_id"]
+    assert resolved["resolution"] == "approved"
+
+
+async def test_permission_resolved_emitted_on_denial(table, session):
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table, session=session, outbound_events=queue,
+        auto_approve_user_actions=False,
+    )
+    task = asyncio.create_task(gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None))
+    request_event = await asyncio.wait_for(queue.get(), timeout=5.0)
+    fut = session.permission_pending.get(request_event["request_id"])
+    fut.set_result(False)
+    await task
+    resolved = await asyncio.wait_for(queue.get(), timeout=5.0)
+    assert resolved["type"] == "permission_resolved"
+    assert resolved["resolution"] == "denied"
+
+
+async def test_permission_resolved_emitted_on_timeout_before_raise(table, session, monkeypatch):
+    """Write-kind timeout still emits permission_resolved before raising."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout",
+        lambda: 0.01,
+    )
+    queue: asyncio.Queue = asyncio.Queue()
+    gate = PermissionGate(
+        translation_table=table, session=session, outbound_events=queue,
+        auto_approve_user_actions=False,
+    )
+    with pytest.raises(PermissionTimeoutError):
+        await gate.can_use_tool("upsert_tasks", {"count": 1, "tasks": []}, None)
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    kinds = [e["type"] for e in events]
+    assert "permission_request" in kinds
+    resolved = [e for e in events if e["type"] == "permission_resolved"]
+    assert len(resolved) == 1
+    assert resolved[0]["resolution"] == "timeout"
+
+
+# ---------------------------------------------------------------------------
+# 12. reason_from_bot plumbed from optional tool-call 'reason' arg
+# ---------------------------------------------------------------------------
+
+async def test_reason_from_bot_plumbed_from_tool_args(table, session):
+    result, event = await _run_with_queue(
+        table, session, "upsert_tasks",
+        {"count": 1, "tasks": [], "reason": "user asked for it"},
+        resolve_value=True,
+    )
+    assert event["reason_from_bot"] == "user asked for it"
+
+
+async def test_reason_from_bot_defaults_to_none(table, session):
+    result, event = await _run_with_queue(
+        table, session, "upsert_tasks", {"count": 1, "tasks": []},
+        resolve_value=True,
+    )
+    assert event["reason_from_bot"] is None
+
+
 async def test_permission_timeout_error_request_id_matches_event(table, session, monkeypatch):
     """PermissionTimeoutError.request_id matches the request_id emitted in the event."""
     monkeypatch.setattr(

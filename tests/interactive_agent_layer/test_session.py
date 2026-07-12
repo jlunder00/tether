@@ -5,6 +5,7 @@ import pathlib
 
 import pytest
 
+from interactive_agent_layer.envelope import ScopeEnvelope
 from interactive_agent_layer.session import Layer, Session
 from interactive_agent_layer.ws_publisher import WSPublisher
 
@@ -478,7 +479,7 @@ def _scope_requests(events: list[dict]) -> list[dict]:
 
 
 async def test_run_turn_wires_scope_from_session_options(monkeypatch):
-    """scope_source_node_id/scope_radius in session.options + Layer.hop_distance_fn
+    """scope_source_node_id/permission_envelope in session.options + Layer.hop_distance_fn
     activate scope gating: an out-of-range read_context target emits
     read_out_of_scope and, on timeout, is denied."""
     monkeypatch.setattr(
@@ -497,7 +498,10 @@ async def test_run_turn_wires_scope_from_session_options(monkeypatch):
 
     s = layer.create_session(
         "user1", "wsid1", "v1",
-        options={"scope_source_node_id": "source-node", "scope_radius": 2},
+        options={
+            "scope_source_node_id": "source-node",
+            "permission_envelope": {"radius": 2, "m_max": 4, "decay": 0},
+        },
     )
 
     events = []
@@ -521,7 +525,10 @@ async def test_run_turn_in_scope_target_allows_without_prompt(monkeypatch):
 
     s = layer.create_session(
         "user1", "wsid1", "v1",
-        options={"scope_source_node_id": "source-node", "scope_radius": 2},
+        options={
+            "scope_source_node_id": "source-node",
+            "permission_envelope": {"radius": 2, "m_max": 4, "decay": 0},
+        },
     )
 
     events = []
@@ -549,12 +556,13 @@ async def test_run_turn_no_scope_config_is_backwards_compatible():
 
 async def test_run_turn_resolves_scope_from_conversation_id(monkeypatch):
     """No explicit scope options — resolve_conversation_scope_fn resolves
-    scope_source_node_id from conversation_id, scope_radius from config."""
+    scope_source_node_id from conversation_id, scope_envelope from config."""
     monkeypatch.setattr(
         "interactive_agent_layer.permissions.get_permission_timeout", lambda: 0.01
     )
     monkeypatch.setattr(
-        "interactive_agent_layer.session.get_scope_radius", lambda: 2
+        "interactive_agent_layer.session.load_permission_envelope",
+        lambda: ScopeEnvelope(radius=2, m_max=4, decay=0),
     )
 
     pool = _ReadContextControlPool(node_ids=["far-node"])
@@ -583,6 +591,45 @@ async def test_run_turn_resolves_scope_from_conversation_id(monkeypatch):
 
     assert resolve_calls == [("user1", "conv-1")]
     assert len(_scope_requests(events)) == 1
+
+
+async def test_run_turn_permission_envelope_option_overrides_config_default(monkeypatch):
+    """session.options['permission_envelope'] wins over load_permission_envelope()
+    — whole-envelope override, caller-supplied at spawn (never model-supplied)."""
+    monkeypatch.setattr(
+        "interactive_agent_layer.permissions.get_permission_timeout", lambda: 0.01
+    )
+
+    def _unexpected_config_default():
+        raise AssertionError("load_permission_envelope() must not be called when option is set")
+
+    monkeypatch.setattr(
+        "interactive_agent_layer.session.load_permission_envelope",
+        _unexpected_config_default,
+    )
+
+    pool = _ReadContextControlPool(node_ids=["near-node"])
+
+    async def hop_distance_fn(user_id, from_id, to_id):
+        return 1  # within the override's radius of 5
+
+    layer = _make_layer(pool)
+    layer.hop_distance_fn = hop_distance_fn
+
+    s = layer.create_session(
+        "user1", "wsid1", "v1",
+        options={
+            "scope_source_node_id": "source-node",
+            "permission_envelope": {"radius": 5, "m_max": 4, "decay": 0},
+        },
+    )
+
+    events = []
+    async for event in layer.run_turn(s.session_id, "hi"):
+        events.append(event)
+
+    assert _scope_requests(events) == []
+    assert pool.decisions == ["allow"]
 
 
 async def test_run_turn_conversation_scope_resolves_to_none_disables_gating():
