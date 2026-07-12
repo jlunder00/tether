@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from interactive_agent_layer.envelope import (
+    MAX_HOP_DISTANCE_BOUND,
     ScopeEnvelope,
     ScopeConfigError,
     load_injection_envelope,
@@ -126,6 +127,32 @@ def test_load_permission_envelope_from_config(monkeypatch):
     monkeypatch.setattr("interactive_agent_layer.envelope.config.get", fake_get)
     env = load_permission_envelope()
     assert env == ScopeEnvelope(radius=5, m_max=4, decay=1)
+
+
+def test_load_permission_envelope_rejects_radius_beyond_hop_distance_bound(monkeypatch):
+    """A nonsensical radius > MAX_HOP_DISTANCE_BOUND fails fast at load time
+    instead of silently behaving as if capped (the DB query bounds max_N to
+    this same constant, so a larger configured radius would never actually
+    be honored — better to raise than silently under-enforce)."""
+    def fake_get(key, default=None):
+        if key == "scope.permission":
+            return {"radius": MAX_HOP_DISTANCE_BOUND + 1, "m_max": 4, "decay": 1}
+        return default
+
+    monkeypatch.setattr("interactive_agent_layer.envelope.config.get", fake_get)
+    with pytest.raises(ScopeConfigError):
+        load_permission_envelope()
+
+
+def test_load_permission_envelope_radius_at_bound_is_allowed(monkeypatch):
+    def fake_get(key, default=None):
+        if key == "scope.permission":
+            return {"radius": MAX_HOP_DISTANCE_BOUND, "m_max": 4, "decay": 1}
+        return default
+
+    monkeypatch.setattr("interactive_agent_layer.envelope.config.get", fake_get)
+    env = load_permission_envelope()
+    assert env.radius == MAX_HOP_DISTANCE_BOUND
 
 
 def test_load_permission_envelope_scenario_partial_merge(monkeypatch):

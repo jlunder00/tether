@@ -30,6 +30,16 @@ from config.loader import config
 _PERMISSION_DEFAULT = {"radius": 3, "m_max": 4, "decay": 1}
 _INJECTION_DEFAULT = {"radius": 1, "m_max": 2, "decay": 0}
 
+# The distance-query call sites (db.pg_queries.nodes.get_node_tree_distance,
+# and premium's scope_grants.make_hop_distance_fn) bound their bounded-BFS
+# walk to this same constant as max_N. A configured permission.radius beyond
+# this bound would never actually be honored by the DB query — it would
+# silently behave as if capped rather than enforcing the configured radius.
+# load_permission_envelope() rejects that at load time instead (fail fast,
+# no silent under-enforcement, consistent with validate_injection_subset's
+# raise-not-clamp policy).
+MAX_HOP_DISTANCE_BOUND = 20
+
 
 class ScopeConfigError(Exception):
     """Raised when the injection envelope is not a subset of the permission
@@ -63,10 +73,23 @@ def _merge_scenario(base: dict, scenario: str | None, subkey: str) -> dict:
 
 def load_permission_envelope(scenario: str | None = None) -> ScopeEnvelope:
     """Load the PermissionGate envelope from `scope.permission`, with an
-    optional per-scenario partial override from `scope.scenarios.<name>.permission`."""
+    optional per-scenario partial override from `scope.scenarios.<name>.permission`.
+
+    Raises ScopeConfigError if radius exceeds MAX_HOP_DISTANCE_BOUND — the
+    distance query bounds its walk to that same constant, so a larger
+    configured radius would never be honored.
+    """
     base = config.get("scope.permission", _PERMISSION_DEFAULT) or _PERMISSION_DEFAULT
     merged = _merge_scenario(base, scenario, "permission")
-    return ScopeEnvelope(**merged)
+    envelope = ScopeEnvelope(**merged)
+    if envelope.radius > MAX_HOP_DISTANCE_BOUND:
+        raise ScopeConfigError(
+            f"permission envelope radius ({envelope.radius}) exceeds "
+            f"MAX_HOP_DISTANCE_BOUND ({MAX_HOP_DISTANCE_BOUND}) — the distance "
+            f"query would never honor a radius this large (scope.permission"
+            f"{f'.scenarios.{scenario}' if scenario else ''})"
+        )
+    return envelope
 
 
 def load_injection_envelope(scenario: str | None = None) -> ScopeEnvelope:
