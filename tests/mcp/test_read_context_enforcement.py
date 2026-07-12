@@ -65,9 +65,11 @@ def _patch_all(mocks: dict):
         # get_node_tree_distance must not exist as a call path anymore; if the
         # implementation still imports/calls it, patching it as a stub that
         # raises makes any accidental reintroduction fail loudly.
+        # (Lives in db.pg_queries.nodes as of the distance-query consolidation
+        # — moved from node_memory, generalized to multi-root.)
         stack.enter_context(
             patch(
-                "db.pg_queries.node_memory.get_node_tree_distance",
+                "db.pg_queries.nodes.get_node_tree_distance",
                 AsyncMock(side_effect=AssertionError(
                     "execute_read_context must not call get_node_tree_distance "
                     "(scope enforcement lives solely in PermissionGate)"
