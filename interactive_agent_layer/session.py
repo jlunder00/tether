@@ -13,7 +13,8 @@ from collections.abc import Awaitable, Callable
 from typing import AsyncIterator, Any
 
 from interactive_agent_layer.coalescing import CoalescingBuffer
-from interactive_agent_layer.config import get_auto_approve_user_actions, get_scope_radius
+from interactive_agent_layer.config import get_auto_approve_user_actions
+from interactive_agent_layer.envelope import ScopeEnvelope, load_permission_envelope
 from interactive_agent_layer.permissions import (
     CheckGrantFn,
     InsertGrantFn,
@@ -65,7 +66,7 @@ class Session:
     # options_hash for subprocess partitioning, and mutating it after the hash
     # is computed on turn 1 would silently repartition on turn 2+.
     scope_source_node_id: str | None = None
-    scope_radius: int | None = None
+    scope_envelope: ScopeEnvelope | None = None
     _scope_resolved: bool = False
 
 
@@ -183,7 +184,7 @@ class Layer:
             check_grant_fn=self.check_grant_fn,
             insert_grant_fn=self.insert_grant_fn,
             scope_source_node_id=session.scope_source_node_id,
-            scope_radius=session.scope_radius,
+            scope_envelope=session.scope_envelope,
             hop_distance_fn=session_hop_distance_fn,
             resolve_node_path_fn=session_resolve_node_path_fn,
         )
@@ -249,7 +250,7 @@ class Layer:
             await self.pool_client.interrupt(handle)
 
     async def _resolve_scope(self, session: Session) -> None:
-        """Resolve session.scope_source_node_id / scope_radius, once per session.
+        """Resolve session.scope_source_node_id / scope_envelope, once per session.
 
         Precedence for scope_source_node_id:
           1. session.options["scope_source_node_id"] (explicit caller override)
@@ -257,10 +258,17 @@ class Layer:
              the conversation's context_node_id (premium-injected; None if
              absent, no conversation_id, or the conversation has no node)
 
-        scope_radius: session.options["scope_radius"] if set, else the
-        config-driven default (get_scope_radius()) — but only when a
-        scope_source_node_id was actually resolved, so an unscoped session
-        never gets a radius with no anchor to measure from.
+        scope_envelope: session.options["permission_envelope"] if set (a
+        whole-envelope override, caller-supplied at session spawn — NEVER
+        model-supplied), else the config-driven default
+        (load_permission_envelope()) — but only when a scope_source_node_id
+        was actually resolved, so an unscoped session never gets an envelope
+        with no anchor to measure from.
+
+        The option value must be a plain dict (radius/m_max/decay), not a
+        ScopeEnvelope instance: session.options feeds _stable_options_hash's
+        json.dumps for the pool's subprocess partitioning, and ScopeEnvelope
+        (a dataclass) is not JSON-serializable.
 
         Cached via session._scope_resolved so this DB-touching resolution
         runs at most once per session, not once per turn.
@@ -278,12 +286,16 @@ class Layer:
                 session.user_id, session.conversation_id
             )
 
-        scope_radius = session.options.get("scope_radius")
-        if scope_radius is None and scope_source_node_id is not None:
-            scope_radius = get_scope_radius()
+        scope_envelope_option = session.options.get("permission_envelope")
+        if scope_envelope_option is not None:
+            scope_envelope = ScopeEnvelope(**scope_envelope_option)
+        elif scope_source_node_id is not None:
+            scope_envelope = load_permission_envelope()
+        else:
+            scope_envelope = None
 
         session.scope_source_node_id = scope_source_node_id
-        session.scope_radius = scope_radius
+        session.scope_envelope = scope_envelope
         session._scope_resolved = True
 
 

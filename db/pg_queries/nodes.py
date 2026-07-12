@@ -411,59 +411,59 @@ async def get_milestone_nodes(
     return [_node(r) for r in rows]
 
 
-# ── Hop distance ─────────────────────────────────────────────────────────────
+# ── Tree distance (bounded BFS, multi-root) ────────────────────────────────
+#
+# This is the SOLE distance query — consolidated from two prior
+# implementations: this module's now-deleted unbounded LCA-walk
+# get_node_hop_distance, and node_memory.get_node_tree_distance (bounded
+# single-root BFS, moved here and generalized to multi-root). The gate
+# (PermissionGate) always has a radius to bound the walk by, so LCA's
+# unbounded ancestor-chain cost is unnecessary; bounded BFS also lets the
+# caller cap query cost independent of tree depth.
 
 
-async def get_node_hop_distance(
+async def get_node_tree_distance(
     conn: asyncpg.Connection,
-    from_node_id: str,
-    to_node_id: str,
+    from_ids: list[str],
+    to_id: str,
+    max_N: int,
 ) -> int | None:
-    """Return the undirected tree distance (hop count) between two context nodes.
+    """Return the minimum tree distance (edges) from any of *from_ids* to *to_id*.
 
-    Uses an LCA (lowest common ancestor) approach: walk ancestor chains from
-    both nodes and find the shortest combined path via their common ancestor.
+    Multi-root seedable: all *from_ids* are seeded at distance 0 and the
+    minimum distance across all roots wins (DD §5.8's multi-root org-accounts
+    model). Single-root callers pass ``[id]``.
 
-    Returns:
-        int  — number of hops on the shortest tree path.
-        None — nodes are in separate trees (no common ancestor).
-
-    Performance note: for large trees this CTE scans O(depth) rows per node.
-    A materialized path column or a dedicated ancestor table would reduce this
-    to O(1) lookups at the cost of write overhead. Consider adding
-    ``ltree`` indexing or a closure table if this becomes a hot path.
+    Uses a recursive CTE that walks both parent and child edges, bounded by
+    max_N. Returns None if the true distance exceeds max_N (or no path
+    exists within the bound).
     """
-    result = await conn.fetchval(
+    if to_id in from_ids:
+        return 0
+
+    row = await conn.fetchrow(
         """
-        WITH RECURSIVE
-          from_ancestors(id, depth) AS (
-            SELECT id, 0 AS depth
-            FROM context_nodes
-            WHERE id = $1
-            UNION ALL
-            SELECT cn.parent_id, fa.depth + 1
-            FROM context_nodes cn
-            JOIN from_ancestors fa ON cn.id = fa.id
-            WHERE cn.parent_id IS NOT NULL
-          ),
-          to_ancestors(id, depth) AS (
-            SELECT id, 0 AS depth
-            FROM context_nodes
-            WHERE id = $2
-            UNION ALL
-            SELECT cn.parent_id, ta.depth + 1
-            FROM context_nodes cn
-            JOIN to_ancestors ta ON cn.id = ta.id
-            WHERE cn.parent_id IS NOT NULL
-          )
-        SELECT MIN(fa.depth + ta.depth)
-        FROM from_ancestors fa
-        JOIN to_ancestors ta ON fa.id = ta.id
+        WITH RECURSIVE reachable(node_id, dist) AS (
+            SELECT unnest($1::uuid[]), 0
+          UNION ALL
+            SELECT
+              CASE WHEN cn.parent_id = r.node_id THEN cn.id
+                   ELSE cn.parent_id
+              END,
+              r.dist + 1
+            FROM reachable r
+            JOIN context_nodes cn
+              ON (cn.id = r.node_id AND cn.parent_id IS NOT NULL)
+              OR (cn.parent_id = r.node_id)
+            WHERE r.dist < $3
+        )
+        SELECT MIN(dist) AS dist FROM reachable WHERE node_id = $2::uuid
         """,
-        _uuid.UUID(from_node_id),
-        _uuid.UUID(to_node_id),
+        [_uuid.UUID(fid) for fid in from_ids],
+        _uuid.UUID(to_id),
+        max_N,
     )
-    return int(result) if result is not None else None
+    return row["dist"] if row and row["dist"] is not None else None
 
 
 # ── Node-task linking ─────────────────────────────────────────────────────────

@@ -66,10 +66,27 @@ telegram:
 agent_layer:
   base_url: "http://127.0.0.1:5003"
   enabled: true
-  permission_timeout_seconds: 60
+  permission_timeout_seconds: 120
   auto_approve_user_actions: false
   trial_monthly_quota: 10
   leaky_providers:
     - openrouter
     - openai
   dev_mode_show_raw_tools: false
+
+# Two-envelope scope model (config-namespace-decision-2026-07-04.md).
+# permission: PermissionGate envelope — readable WITHOUT a permission card.
+# injection: session-start cascade envelope — auto-injected content.
+# Both share the geometry (radius, m_max, decay); injection must always be
+# a subset of permission (interactive_agent_layer/envelope.py validates this
+# at load time). Defaults below reproduce today's behavior exactly.
+scope:
+  permission:
+    radius: 3
+    m_max: 4
+    decay: 1
+  injection:
+    radius: 1
+    m_max: 2
+    decay: 0
+  scenarios: {}
